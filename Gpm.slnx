@@ -1,0 +1,11 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Gpm.Cli/Gpm.Cli.csproj" />
+    <Project Path="src/Gpm.Core/Gpm.Core.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Gpm.Browser.Tests/Gpm.Browser.Tests.csproj" />
+    <Project Path="tests/Gpm.Core.Tests/Gpm.Core.Tests.csproj" />
+    <Project Path="tests/Gpm.Integration.Tests/Gpm.Integration.Tests.csproj" />
+  </Folder>
+</Solution>

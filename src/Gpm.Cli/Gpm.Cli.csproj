@@ -1,0 +1,22 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="..\Gpm.Core\Gpm.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="System.CommandLine" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>gpm</AssemblyName>
+    <RootNamespace>Gpm.Cli</RootNamespace>
+    <PackAsTool>true</PackAsTool>
+    <ToolCommandName>gpm</ToolCommandName>
+    <PackageId>gpm</PackageId>
+    <Description>GitHub Projects V2 migration CLI (org-to-org, including Views and Workflows).</Description>
+    <RollForward>Major</RollForward>
+  </PropertyGroup>
+
+</Project>

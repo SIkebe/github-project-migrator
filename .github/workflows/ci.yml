@@ -1,0 +1,68 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  DOTNET_NOLOGO: true
+
+jobs:
+  build-test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - name: Build
+        run: dotnet build -c Release
+      - name: Test (real API when secrets are available)
+        env:
+          GPM_TEST_TOKEN: ${{ secrets.GPM_TEST_TOKEN }}
+          GPM_TEST_ORG: gpm-source
+          GPM_TARGET_ORG: gpm-target
+        run: dotnet test -c Release --no-build
+
+  publish:
+    needs: build-test
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            rid: win-x64
+            smoke: true
+          - os: windows-latest
+            rid: win-arm64
+            smoke: false # cross-publish; cannot run on x64 runner
+          - os: ubuntu-latest
+            rid: linux-x64
+            smoke: true
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - name: Publish self-contained (${{ matrix.rid }})
+        run: dotnet publish src/Gpm.Cli -c Release --self-contained true -r ${{ matrix.rid }} -o artifacts/sc-${{ matrix.rid }}
+      - name: Publish framework-dependent (portable)
+        run: dotnet publish src/Gpm.Cli -c Release --self-contained false -o artifacts/fdd
+      - name: Smoke test (self-contained)
+        if: ${{ matrix.smoke }}
+        shell: pwsh
+        run: |
+          $exe = Join-Path 'artifacts' "sc-${{ matrix.rid }}" ($IsWindows ? 'gpm.exe' : 'gpm')
+          & $exe --version
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+      - name: Smoke test (framework-dependent)
+        shell: pwsh
+        run: |
+          dotnet artifacts/fdd/gpm.dll --version
+          if ($LASTEXITCODE -ne 0) { exit 1 }
