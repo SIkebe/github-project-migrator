@@ -10,9 +10,9 @@ namespace Gpm.Core.Verify;
 /// read back through <see cref="ProjectExporter"/> and compared with the snapshot:
 /// project metadata (title excluded — it may be changed on import), fields (options,
 /// iterations), views/workflows (name-based, warnings only until the browser module
-/// migrates them in M6/M7; their UI-only <c>Ui</c> settings are not compared) and items
-/// (counts, per-type counts, field values, order, archived state). Draft bodies are
-/// compared with the import attribution note stripped.
+/// migrates workflows in M7; view UI-only <c>Ui</c> settings are compared when both
+/// sides carry them) and items (counts, per-type counts, field values, order, archived
+/// state). Draft bodies are compared with the import attribution note stripped.
 /// </summary>
 public sealed class ProjectVerifier
 {
@@ -248,8 +248,57 @@ public sealed class ProjectVerifier
                 Add(differences, VerifySeverity.Warning, ViewCategory,
                     $"view '{name}': layout mismatch (source {string.Join(", ", s.Select(v => v.Layout))}, target {string.Join(", ", t.Select(v => v.Layout))})");
             }
+            else if (s.Count == 1 && t.Count == 1 && s[0].Ui is { } sourceUi && t[0].Ui is { } targetUi)
+            {
+                // Both sides carry browser-scraped UI settings (M6): compare them too.
+                // Still warnings until views are promoted to errors after M7.
+                CompareViewUi(name, sourceUi, targetUi, differences);
+            }
         }
     }
+
+    private static void CompareViewUi(string name, ViewUiSnapshot source, ViewUiSnapshot target, List<VerifyDifference> differences)
+    {
+        CompareUiValue(differences, name, "group by", source.GroupBy, target.GroupBy);
+        CompareUiValue(differences, name, "sort by", source.SortBy, target.SortBy);
+        CompareUiValue(differences, name, "slice by", source.SliceBy, target.SliceBy);
+        if (!UiListEquals(source.FieldSum, target.FieldSum))
+        {
+            Add(differences, VerifySeverity.Warning, ViewCategory,
+                $"view '{name}': field sum mismatch (source [{JoinUi(source.FieldSum)}], target [{JoinUi(target.FieldSum)}])");
+        }
+
+        if ((source.Roadmap is null) != (target.Roadmap is null))
+        {
+            Add(differences, VerifySeverity.Warning, ViewCategory,
+                $"view '{name}': roadmap settings are present on only one side");
+        }
+        else if (source.Roadmap is { } sourceRoadmap && target.Roadmap is { } targetRoadmap)
+        {
+            CompareUiValue(differences, name, "roadmap start date", sourceRoadmap.StartField, targetRoadmap.StartField);
+            CompareUiValue(differences, name, "roadmap target date", sourceRoadmap.TargetField, targetRoadmap.TargetField);
+            CompareUiValue(differences, name, "zoom level", sourceRoadmap.Zoom, targetRoadmap.Zoom);
+            if (!UiListEquals(sourceRoadmap.Markers, targetRoadmap.Markers))
+            {
+                Add(differences, VerifySeverity.Warning, ViewCategory,
+                    $"view '{name}': markers mismatch (source [{JoinUi(sourceRoadmap.Markers)}], target [{JoinUi(targetRoadmap.Markers)}])");
+            }
+        }
+    }
+
+    private static void CompareUiValue(List<VerifyDifference> differences, string viewName, string setting, string? source, string? target)
+    {
+        if (!string.Equals(source, target, StringComparison.Ordinal))
+        {
+            Add(differences, VerifySeverity.Warning, ViewCategory,
+                $"view '{viewName}': {setting} mismatch (source '{source ?? "none"}', target '{target ?? "none"}')");
+        }
+    }
+
+    private static bool UiListEquals(IReadOnlyList<string>? source, IReadOnlyList<string>? target)
+        => (source ?? []).SequenceEqual(target ?? [], StringComparer.Ordinal);
+
+    private static string JoinUi(IReadOnlyList<string>? values) => string.Join(", ", values ?? []);
 
     private static void CompareWorkflows(IReadOnlyList<WorkflowSnapshot> source, IReadOnlyList<WorkflowSnapshot> target, List<VerifyDifference> differences)
     {

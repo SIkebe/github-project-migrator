@@ -1,10 +1,12 @@
 ﻿using System.CommandLine;
 using System.Globalization;
+using Gpm.Core.Browser;
 using Gpm.Core.Export;
 using Gpm.Core.GitHub;
 using Gpm.Core.Import;
 using Gpm.Core.Snapshot;
 using Gpm.Core.Verify;
+using Microsoft.Playwright;
 
 var rootCommand = new RootCommand("gpm — GitHub Projects V2 migration tool (org-to-org, including Views and Workflows).");
 
@@ -28,6 +30,10 @@ var tokenOption = new Option<string?>("--token")
 {
     Description = "GitHub token. Defaults to the GITHUB_TOKEN, then GPM_TOKEN environment variable.",
 };
+var enableBrowserOption = new Option<bool>("--enable-browser-automation")
+{
+    Description = "Also migrate UI-only view settings with browser automation (requires 'gpm setup --browsers' and 'gpm login').",
+};
 
 var exportCommand = new Command("export", "Export a project from the source organization to a JSON snapshot.")
 {
@@ -35,6 +41,7 @@ var exportCommand = new Command("export", "Export a project from the source orga
     projectOption,
     outOption,
     tokenOption,
+    enableBrowserOption,
 };
 
 exportCommand.SetAction(async (parseResult, cancellationToken) =>
@@ -42,6 +49,7 @@ exportCommand.SetAction(async (parseResult, cancellationToken) =>
     var org = parseResult.GetValue(orgOption)!;
     var projectNumber = parseResult.GetValue(projectOption);
     var outDirectory = parseResult.GetValue(outOption)!;
+    var enableBrowserAutomation = parseResult.GetValue(enableBrowserOption);
     var token = parseResult.GetValue(tokenOption)
         ?? Environment.GetEnvironmentVariable("GITHUB_TOKEN")
         ?? Environment.GetEnvironmentVariable("GPM_TOKEN");
@@ -56,17 +64,41 @@ exportCommand.SetAction(async (parseResult, cancellationToken) =>
     client.OnRetry = Console.Error.WriteLine;
     var exporter = new ProjectExporter(client) { OnProgress = Console.Error.WriteLine };
 
+    BrowserSession? session = null;
     try
     {
+        ViewUiExporter? uiExporter = null;
+        if (enableBrowserAutomation)
+        {
+            session = new BrowserSession();
+            uiExporter = new ViewUiExporter(session) { OnProgress = Console.Error.WriteLine };
+            exporter.PostExportAsync = (snapshot, ct) => uiExporter.EnrichAsync(snapshot, org, projectNumber, ct);
+        }
+
         var snapshot = await exporter.ExportAsync(org, projectNumber, cancellationToken);
+        if (uiExporter is not null)
+        {
+            foreach (var warning in uiExporter.Warnings)
+            {
+                Console.Error.WriteLine($"warning: {warning}");
+            }
+        }
+
         var path = await SnapshotFile.SaveAsync(snapshot, outDirectory, cancellationToken);
         Console.Error.WriteLine($"Snapshot written to {path}");
         return 0;
     }
-    catch (GitHubGraphQLException exception)
+    catch (Exception exception) when (exception is GitHubGraphQLException or InvalidOperationException or PlaywrightException)
     {
         Console.Error.WriteLine($"error: {exception.Message}");
         return 1;
+    }
+    finally
+    {
+        if (session is not null)
+        {
+            await session.DisposeAsync();
+        }
     }
 });
 
@@ -112,12 +144,14 @@ var importCommand = new Command("import", "Import a JSON snapshot into the targe
     repoMappingOption,
     userMappingOption,
     tokenOption,
+    enableBrowserOption,
 };
 
 importCommand.SetAction(async (parseResult, cancellationToken) =>
 {
     var org = parseResult.GetValue(importOrgOption)!;
     var inDirectory = parseResult.GetValue(inOption)!;
+    var enableBrowserAutomation = parseResult.GetValue(enableBrowserOption);
     if (!ConflictActions.TryParse(parseResult.GetValue(onConflictOption), out var onConflict))
     {
         Console.Error.WriteLine("error: --on-conflict must be one of: skip, update, fail.");
@@ -160,12 +194,32 @@ importCommand.SetAction(async (parseResult, cancellationToken) =>
         };
         var itemResult = await itemImporter.ImportAsync(snapshot, result, inDirectory, cancellationToken);
 
+        var viewWarnings = 0;
+        if (enableBrowserAutomation)
+        {
+            await using var session = new BrowserSession();
+            var viewImporter = new ViewUiImporter(session) { OnProgress = Console.Error.WriteLine };
+            await viewImporter.ImportAsync(snapshot, org, result.ProjectNumber, cancellationToken);
+            foreach (var warning in viewImporter.Warnings)
+            {
+                Console.Error.WriteLine($"warning: {warning}");
+            }
+
+            viewWarnings = viewImporter.Warnings.Count;
+        }
+
         Console.WriteLine(result.Url);
         Console.WriteLine(string.Create(CultureInfo.InvariantCulture,
             $"items: created={itemResult.Created} skipped={itemResult.Skipped} warnings={itemResult.Warnings.Count}"));
+        if (enableBrowserAutomation)
+        {
+            Console.WriteLine(string.Create(CultureInfo.InvariantCulture,
+                $"views: imported={snapshot.Views.Count} warnings={viewWarnings}"));
+        }
+
         return 0;
     }
-    catch (Exception exception) when (exception is GitHubGraphQLException or InvalidOperationException or IOException or FormatException)
+    catch (Exception exception) when (exception is GitHubGraphQLException or InvalidOperationException or IOException or FormatException or PlaywrightException)
     {
         Console.Error.WriteLine($"error: {exception.Message}");
         return 1;
@@ -229,19 +283,79 @@ verifyCommand.SetAction(async (parseResult, cancellationToken) =>
 
 rootCommand.Subcommands.Add(verifyCommand);
 
-// Not implemented yet.
-var loginCommand = new Command("login", "Sign in interactively and store browser state for UI automation.");
-var setupCommand = new Command("setup", "Install prerequisites such as Playwright browsers.");
-
-foreach (var command in new[] { loginCommand, setupCommand })
+// login: interactive browser sign-in, storage state saved for later automation (M6).
+var baseUrlOption = new Option<string>("--base-url")
 {
-    command.SetAction(_ =>
+    Description = "GitHub web base URL (e.g. https://TENANT.ghe.com for GHEC with data residency).",
+    DefaultValueFactory = _ => "https://github.com",
+};
+var statePathOption = new Option<string?>("--state-path")
+{
+    Description = "File to store the browser sign-in state. Defaults to GPM_BROWSER_STATE, then %APPDATA%/gpm/browser-state.json.",
+};
+
+var loginCommand = new Command("login", "Sign in interactively and store browser state for UI automation.")
+{
+    baseUrlOption,
+    statePathOption,
+};
+
+loginCommand.SetAction(async (parseResult, cancellationToken) =>
+{
+    var baseUrl = parseResult.GetValue(baseUrlOption)!;
+    var statePath = parseResult.GetValue(statePathOption);
+
+    await using var session = new BrowserSession(new BrowserSessionOptions
     {
-        Console.Error.WriteLine($"'{command.Name}' is not implemented yet. See PLAN.md for the roadmap.");
-        return 1;
+        Headless = false,
+        BaseUrl = baseUrl,
+        StatePath = statePath,
     });
-    rootCommand.Subcommands.Add(command);
-}
+
+    try
+    {
+        Console.Error.WriteLine("Opening a browser window. Complete the GitHub sign-in there (2FA/SSO/passkey included)...");
+        var login = await session.LoginAsync(TimeSpan.FromMinutes(5), cancellationToken);
+        Console.Error.WriteLine($"Signed in as '{login}'. Browser state saved to {session.StatePath}");
+        return 0;
+    }
+    catch (Exception exception) when (exception is PlaywrightException or InvalidOperationException or System.TimeoutException)
+    {
+        Console.Error.WriteLine($"error: {exception.Message}");
+        return 1;
+    }
+});
+
+rootCommand.Subcommands.Add(loginCommand);
+
+// setup: install prerequisites (Playwright Chromium).
+var browsersOption = new Option<bool>("--browsers")
+{
+    Description = "Install the Playwright Chromium browser used for UI automation.",
+};
+
+var setupCommand = new Command("setup", "Install prerequisites such as Playwright browsers.")
+{
+    browsersOption,
+};
+
+setupCommand.SetAction(parseResult =>
+{
+    if (!parseResult.GetValue(browsersOption))
+    {
+        Console.Error.WriteLine("Nothing to install. Use 'gpm setup --browsers' to install the Playwright Chromium browser.");
+        return 1;
+    }
+
+    Console.Error.WriteLine("Installing the Playwright Chromium browser...");
+    var exitCode = Microsoft.Playwright.Program.Main(["install", "chromium"]);
+    Console.Error.WriteLine(exitCode == 0
+        ? "Chromium installed."
+        : string.Create(CultureInfo.InvariantCulture, $"Playwright install failed with exit code {exitCode}."));
+    return exitCode;
+});
+
+rootCommand.Subcommands.Add(setupCommand);
 
 return await rootCommand.Parse(args).InvokeAsync();
 

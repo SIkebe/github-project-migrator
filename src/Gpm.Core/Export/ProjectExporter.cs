@@ -28,6 +28,13 @@ public sealed class ProjectExporter
     /// <summary>Invoked with a human-readable progress message at each export stage.</summary>
     public Action<string>? OnProgress { get; set; }
 
+    /// <summary>
+    /// Optional post-processing hook invoked with the GraphQL snapshot; returns the final
+    /// snapshot. Used by the browser module (M6) to fill UI-only view settings without
+    /// coupling the GraphQL export path to Playwright.
+    /// </summary>
+    public Func<ProjectSnapshot, CancellationToken, Task<ProjectSnapshot>>? PostExportAsync { get; set; }
+
     /// <summary>Exports the project identified by organization login and project number.</summary>
     public async Task<ProjectSnapshot> ExportAsync(string orgLogin, int projectNumber, CancellationToken cancellationToken = default)
     {
@@ -53,7 +60,7 @@ public sealed class ProjectExporter
         var items = await FetchItemsAsync(orgLogin, projectNumber, cancellationToken).ConfigureAwait(false);
         OnProgress?.Invoke(string.Create(CultureInfo.InvariantCulture, $"Fetched {items.Count} items."));
 
-        return new ProjectSnapshot
+        var snapshot = new ProjectSnapshot
         {
             SchemaVersion = ProjectSnapshot.CurrentSchemaVersion,
             Project = projectInfo,
@@ -62,6 +69,13 @@ public sealed class ProjectExporter
             Workflows = workflows,
             Items = items,
         };
+
+        if (PostExportAsync is not null)
+        {
+            snapshot = await PostExportAsync(snapshot, cancellationToken).ConfigureAwait(false);
+        }
+
+        return snapshot;
     }
 
     private async Task<List<ItemSnapshot>> FetchItemsAsync(string orgLogin, int projectNumber, CancellationToken cancellationToken)
