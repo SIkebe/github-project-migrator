@@ -15,14 +15,41 @@ var rootCommand = new RootCommand("gpm — GitHub Projects V2 migration tool (or
 // export
 var orgOption = new Option<string>("--org")
 {
-    Description = "Source organization login.",
+    Description = "Source organization login (or user login with --owner-type user).",
     Required = true,
 };
-var projectOption = new Option<int>("--project")
+var projectOption = new Option<int?>("--project")
 {
-    Description = "Project number in the source organization.",
-    Required = true,
+    Description = "Project number in the source organization. When omitted, all projects of the owner are exported to <out>/<number>/ (closed projects excluded unless --include-closed).",
 };
+var ownerTypeOption = new Option<string>("--owner-type")
+{
+    Description = "Owner type of the project(s): organization or user.",
+    DefaultValueFactory = _ => "organization",
+};
+ownerTypeOption.Validators.Add(result =>
+{
+    var value = result.GetValueOrDefault<string>();
+    if (!string.Equals(value, "organization", StringComparison.OrdinalIgnoreCase)
+        && !string.Equals(value, "user", StringComparison.OrdinalIgnoreCase))
+    {
+        result.AddError("--owner-type must be one of: organization, user.");
+    }
+});
+var includeClosedOption = new Option<bool>("--include-closed")
+{
+    Description = "Also export closed projects when --project is omitted.",
+};
+var apiBaseUrlOption = new Option<string?>("--base-url")
+{
+    Description = "GraphQL API base URL of the source, e.g. https://api.TENANT.ghe.com or https://api.TENANT.ghe.com/graphql (GHEC with data residency; untested). Defaults to https://api.github.com/graphql.",
+};
+apiBaseUrlOption.Validators.Add(ValidateBaseUrl);
+var targetBaseUrlOption = new Option<string?>("--target-base-url")
+{
+    Description = "GraphQL API base URL of the target, e.g. https://api.TENANT.ghe.com or https://api.TENANT.ghe.com/graphql (GHEC with data residency; untested). Defaults to https://api.github.com/graphql.",
+};
+targetBaseUrlOption.Validators.Add(ValidateBaseUrl);
 var outOption = new Option<string>("--out")
 {
     Description = "Output directory for the snapshot.",
@@ -45,12 +72,15 @@ var noUpdateCheckOption = new Option<bool>("--no-update-check")
     Description = "Skip the update check against GitHub Releases (also disabled by the GPM_NO_UPDATE_CHECK environment variable).",
 };
 
-var exportCommand = new Command("export", "Export a project from the source organization to a JSON snapshot.")
+var exportCommand = new Command("export", "Export one project (or all projects of an owner) from the source to JSON snapshots.")
 {
     orgOption,
     projectOption,
+    ownerTypeOption,
+    includeClosedOption,
     outOption,
     tokenOption,
+    apiBaseUrlOption,
     enableBrowserOption,
     browserProfileOption,
     noUpdateCheckOption,
@@ -60,7 +90,10 @@ exportCommand.SetAction(async (parseResult, cancellationToken) =>
 {
     var org = parseResult.GetValue(orgOption)!;
     var projectNumber = parseResult.GetValue(projectOption);
+    var ownerType = ParseOwnerType(parseResult.GetValue(ownerTypeOption)!);
+    var includeClosed = parseResult.GetValue(includeClosedOption);
     var outDirectory = parseResult.GetValue(outOption)!;
+    var baseUrl = parseResult.GetValue(apiBaseUrlOption);
     var updateCheck = StartUpdateCheck(parseResult.GetValue(noUpdateCheckOption));
     var enableBrowserAutomation = parseResult.GetValue(enableBrowserOption);
     var token = parseResult.GetValue(tokenOption)
@@ -73,9 +106,9 @@ exportCommand.SetAction(async (parseResult, cancellationToken) =>
         return 1;
     }
 
-    using var client = new GitHubGraphQLClient(token);
+    using var client = new GitHubGraphQLClient(token, baseUrl is null ? null : GitHubGraphQLClient.NormalizeBaseUrl(baseUrl));
     client.OnRetry = Console.Error.WriteLine;
-    var exporter = new ProjectExporter(client) { OnProgress = Console.Error.WriteLine };
+    var exporter = new ProjectExporter(client) { OnProgress = Console.Error.WriteLine, OwnerType = ownerType };
 
     BrowserSession? session = null;
     try
@@ -90,25 +123,66 @@ exportCommand.SetAction(async (parseResult, cancellationToken) =>
             });
             uiExporter = new ViewUiExporter(session) { OnProgress = Console.Error.WriteLine };
             workflowExporter = new WorkflowUiExporter(session) { OnProgress = Console.Error.WriteLine };
+        }
+
+        // Installs the browser enrichment hook for one project number.
+        void SetBrowserHook(int number)
+        {
+            if (uiExporter is null || workflowExporter is null)
+            {
+                return;
+            }
+
             exporter.PostExportAsync = async (snapshot, ct) =>
             {
-                snapshot = await uiExporter.EnrichAsync(snapshot, org, projectNumber, ct);
-                return await workflowExporter.EnrichAsync(snapshot, org, projectNumber, ct);
+                snapshot = await uiExporter.EnrichAsync(snapshot, org, number, ct);
+                return await workflowExporter.EnrichAsync(snapshot, org, number, ct);
             };
         }
 
-        var snapshot = await exporter.ExportAsync(org, projectNumber, cancellationToken);
+        var snapshots = new List<ProjectSnapshot>();
+        if (projectNumber is { } singleNumber)
+        {
+            SetBrowserHook(singleNumber);
+            var snapshot = await exporter.ExportAsync(org, singleNumber, cancellationToken);
+            var path = await SnapshotFile.SaveAsync(snapshot, outDirectory, cancellationToken);
+            Console.Error.WriteLine($"Snapshot written to {path}");
+            snapshots.Add(snapshot);
+        }
+        else
+        {
+            var entries = await exporter.ListProjectsAsync(org, includeClosed, cancellationToken);
+            if (entries.Count == 0)
+            {
+                Console.Error.WriteLine($"No projects found for {parseResult.GetValue(ownerTypeOption)} '{org}'.");
+                await NotifyUpdateAsync(updateCheck);
+                return 0;
+            }
+
+            for (var i = 0; i < entries.Count; i++)
+            {
+                var entry = entries[i];
+                Console.Error.WriteLine(string.Create(CultureInfo.InvariantCulture,
+                    $"({i + 1}/{entries.Count}) Exporting project #{entry.Number} '{entry.Title}'..."));
+                SetBrowserHook(entry.Number);
+                var snapshot = await exporter.ExportAsync(org, entry.Number, cancellationToken);
+                var directory = Path.Combine(outDirectory, entry.Number.ToString(CultureInfo.InvariantCulture));
+                var path = await SnapshotFile.SaveAsync(snapshot, directory, cancellationToken);
+                Console.Error.WriteLine($"Snapshot written to {path}");
+                snapshots.Add(snapshot);
+            }
+        }
+
         foreach (var warning in (uiExporter?.Warnings ?? []).Concat(workflowExporter?.Warnings ?? []))
         {
             Console.Error.WriteLine($"warning: {warning}");
         }
 
-        var path = await SnapshotFile.SaveAsync(snapshot, outDirectory, cancellationToken);
-        Console.Error.WriteLine($"Snapshot written to {path}");
+        await MappingTemplates.WriteAsync(snapshots, outDirectory, Console.Error.WriteLine, cancellationToken);
         await NotifyUpdateAsync(updateCheck);
         return 0;
     }
-    catch (Exception exception) when (exception is GitHubGraphQLException or InvalidOperationException or PlaywrightException)
+    catch (Exception exception) when (exception is GitHubGraphQLException or InvalidOperationException or IOException or PlaywrightException)
     {
         Console.Error.WriteLine($"error: {exception.Message}");
         return 1;
@@ -127,13 +201,21 @@ rootCommand.Subcommands.Add(exportCommand);
 // import
 var importOrgOption = new Option<string>("--org")
 {
-    Description = "Target organization login.",
+    Description = "Target organization login (or user login with --owner-type user).",
     Required = true,
 };
 var inOption = new Option<string>("--in")
 {
     Description = "Directory containing the snapshot.",
     DefaultValueFactory = _ => "./gpm-export",
+};
+var projectNumberOption = new Option<int?>("--project-number")
+{
+    Description = "Import into this existing project number instead of searching by title or creating a new project (mutually exclusive with --on-conflict and --project-title).",
+};
+var projectTitleOption = new Option<string?>("--project-title")
+{
+    Description = "Override the snapshot's project title (mutually exclusive with --project-number).",
 };
 var onConflictOption = new Option<string>("--on-conflict")
 {
@@ -156,23 +238,49 @@ var userMappingOption = new Option<string?>("--user-mapping")
     Description = "CSV file mapping source user logins to target logins (header: source,target).",
 };
 
-var importCommand = new Command("import", "Import a JSON snapshot into the target organization.")
+var importCommand = new Command("import", "Import a JSON snapshot into the target organization or user.")
 {
     importOrgOption,
+    ownerTypeOption,
     inOption,
+    projectNumberOption,
+    projectTitleOption,
     onConflictOption,
     repoMappingOption,
     userMappingOption,
     tokenOption,
+    targetBaseUrlOption,
     enableBrowserOption,
     browserProfileOption,
     noUpdateCheckOption,
 };
 
+importCommand.Validators.Add(result =>
+{
+    if (result.GetResult(projectNumberOption) is null)
+    {
+        return;
+    }
+
+    if (result.GetResult(onConflictOption) is { Implicit: false })
+    {
+        result.AddError("--project-number cannot be combined with --on-conflict (the existing project is always updated).");
+    }
+
+    if (result.GetResult(projectTitleOption) is not null)
+    {
+        result.AddError("--project-number cannot be combined with --project-title (the existing project keeps its title).");
+    }
+});
+
 importCommand.SetAction(async (parseResult, cancellationToken) =>
 {
     var org = parseResult.GetValue(importOrgOption)!;
+    var ownerType = ParseOwnerType(parseResult.GetValue(ownerTypeOption)!);
     var inDirectory = parseResult.GetValue(inOption)!;
+    var projectNumber = parseResult.GetValue(projectNumberOption);
+    var projectTitle = parseResult.GetValue(projectTitleOption);
+    var baseUrl = parseResult.GetValue(targetBaseUrlOption);
     var updateCheck = StartUpdateCheck(parseResult.GetValue(noUpdateCheckOption));
     var enableBrowserAutomation = parseResult.GetValue(enableBrowserOption);
     if (!ConflictActions.TryParse(parseResult.GetValue(onConflictOption), out var onConflict))
@@ -191,9 +299,9 @@ importCommand.SetAction(async (parseResult, cancellationToken) =>
         return 1;
     }
 
-    using var client = new GitHubGraphQLClient(token);
+    using var client = new GitHubGraphQLClient(token, baseUrl is null ? null : GitHubGraphQLClient.NormalizeBaseUrl(baseUrl));
     client.OnRetry = Console.Error.WriteLine;
-    var importer = new ProjectImporter(client) { OnConflict = onConflict, OnProgress = Console.Error.WriteLine };
+    var importer = new ProjectImporter(client) { OnConflict = onConflict, OwnerType = ownerType, OnProgress = Console.Error.WriteLine };
 
     try
     {
@@ -207,7 +315,14 @@ importCommand.SetAction(async (parseResult, cancellationToken) =>
             : CsvMapping.Load(userMappingPath);
 
         var snapshot = await SnapshotFile.LoadAsync(inDirectory, cancellationToken);
-        var result = await importer.ImportAsync(snapshot, org, cancellationToken);
+        if (projectTitle is not null)
+        {
+            snapshot = snapshot with { Project = snapshot.Project with { Title = projectTitle } };
+        }
+
+        var result = projectNumber is { } number
+            ? await importer.ImportIntoAsync(snapshot, org, number, cancellationToken)
+            : await importer.ImportAsync(snapshot, org, cancellationToken);
 
         var itemImporter = new ItemImporter(client)
         {
@@ -276,7 +391,7 @@ rootCommand.Subcommands.Add(importCommand);
 // verify
 var verifyOrgOption = new Option<string>("--org")
 {
-    Description = "Target organization login.",
+    Description = "Target organization login (or user login with --owner-type user).",
     Required = true,
 };
 var verifyProjectOption = new Option<int>("--project")
@@ -289,8 +404,10 @@ var verifyCommand = new Command("verify", "Verify a migrated project against the
 {
     verifyOrgOption,
     verifyProjectOption,
+    ownerTypeOption,
     inOption,
     tokenOption,
+    targetBaseUrlOption,
     noUpdateCheckOption,
 };
 
@@ -298,7 +415,9 @@ verifyCommand.SetAction(async (parseResult, cancellationToken) =>
 {
     var org = parseResult.GetValue(verifyOrgOption)!;
     var projectNumber = parseResult.GetValue(verifyProjectOption);
+    var ownerType = ParseOwnerType(parseResult.GetValue(ownerTypeOption)!);
     var inDirectory = parseResult.GetValue(inOption)!;
+    var baseUrl = parseResult.GetValue(targetBaseUrlOption);
     var updateCheck = StartUpdateCheck(parseResult.GetValue(noUpdateCheckOption));
     var token = parseResult.GetValue(tokenOption)
         ?? Environment.GetEnvironmentVariable("GITHUB_TOKEN")
@@ -310,9 +429,9 @@ verifyCommand.SetAction(async (parseResult, cancellationToken) =>
         return 1;
     }
 
-    using var client = new GitHubGraphQLClient(token);
+    using var client = new GitHubGraphQLClient(token, baseUrl is null ? null : GitHubGraphQLClient.NormalizeBaseUrl(baseUrl));
     client.OnRetry = Console.Error.WriteLine;
-    var verifier = new ProjectVerifier(client) { OnProgress = Console.Error.WriteLine };
+    var verifier = new ProjectVerifier(client) { OnProgress = Console.Error.WriteLine, OwnerType = ownerType };
 
     try
     {
@@ -412,6 +531,29 @@ setupCommand.SetAction(parseResult =>
 rootCommand.Subcommands.Add(setupCommand);
 
 return await rootCommand.Parse(args).InvokeAsync();
+
+// Maps the validated --owner-type value to the core enum.
+static ProjectOwnerType ParseOwnerType(string value)
+    => string.Equals(value, "user", StringComparison.OrdinalIgnoreCase) ? ProjectOwnerType.User : ProjectOwnerType.Organization;
+
+// Rejects --base-url / --target-base-url values that cannot be normalized to a GraphQL endpoint.
+static void ValidateBaseUrl(System.CommandLine.Parsing.OptionResult result)
+{
+    var value = result.GetValueOrDefault<string?>();
+    if (value is null)
+    {
+        return;
+    }
+
+    try
+    {
+        GitHubGraphQLClient.NormalizeBaseUrl(value);
+    }
+    catch (Exception exception) when (exception is FormatException or ArgumentException)
+    {
+        result.AddError($"{result.IdentifierToken?.Value ?? "--base-url"}: {exception.Message}");
+    }
+}
 
 // Starts a fire-and-forget update check against GitHub Releases (opt-out via
 // --no-update-check or GPM_NO_UPDATE_CHECK). Never throws; sends no telemetry.

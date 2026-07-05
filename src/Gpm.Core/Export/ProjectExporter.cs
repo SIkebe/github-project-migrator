@@ -25,6 +25,9 @@ public sealed class ProjectExporter
         _client = client;
     }
 
+    /// <summary>Owner type of the source project(s): organization (default) or user.</summary>
+    public ProjectOwnerType OwnerType { get; init; } = ProjectOwnerType.Organization;
+
     /// <summary>Invoked with a human-readable progress message at each export stage.</summary>
     public Action<string>? OnProgress { get; set; }
 
@@ -35,18 +38,18 @@ public sealed class ProjectExporter
     /// </summary>
     public Func<ProjectSnapshot, CancellationToken, Task<ProjectSnapshot>>? PostExportAsync { get; set; }
 
-    /// <summary>Exports the project identified by organization login and project number.</summary>
-    public async Task<ProjectSnapshot> ExportAsync(string orgLogin, int projectNumber, CancellationToken cancellationToken = default)
+    /// <summary>Exports the project identified by owner login and project number.</summary>
+    public async Task<ProjectSnapshot> ExportAsync(string ownerLogin, int projectNumber, CancellationToken cancellationToken = default)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(orgLogin);
+        ArgumentException.ThrowIfNullOrWhiteSpace(ownerLogin);
 
-        OnProgress?.Invoke($"Fetching project {orgLogin}/#{projectNumber.ToString(CultureInfo.InvariantCulture)} metadata (fields, views, workflows)...");
-        var data = await _client.QueryAsync(MetadataQuery, new { login = orgLogin, number = projectNumber }, cancellationToken).ConfigureAwait(false);
+        OnProgress?.Invoke($"Fetching project {ownerLogin}/#{projectNumber.ToString(CultureInfo.InvariantCulture)} metadata (fields, views, workflows)...");
+        var data = await _client.QueryAsync(MetadataQuery, new { login = ownerLogin, number = projectNumber }, cancellationToken).ConfigureAwait(false);
 
-        var project = data.GetProperty("organization").GetProperty("projectV2");
+        var project = data.GetProperty(OwnerField).GetProperty("projectV2");
         if (project.ValueKind == JsonValueKind.Null)
         {
-            throw new GitHubGraphQLException($"Project #{projectNumber.ToString(CultureInfo.InvariantCulture)} was not found in organization '{orgLogin}'.");
+            throw new GitHubGraphQLException($"Project #{projectNumber.ToString(CultureInfo.InvariantCulture)} was not found in {OwnerDescription} '{ownerLogin}'.");
         }
 
         var projectInfo = ParseProjectInfo(project);
@@ -57,7 +60,7 @@ public sealed class ProjectExporter
             CultureInfo.InvariantCulture,
             $"Fetched {fields.Count} fields, {views.Count} views, {workflows.Count} workflows. Fetching items..."));
 
-        var items = await FetchItemsAsync(orgLogin, projectNumber, cancellationToken).ConfigureAwait(false);
+        var items = await FetchItemsAsync(ownerLogin, projectNumber, cancellationToken).ConfigureAwait(false);
         OnProgress?.Invoke(string.Create(CultureInfo.InvariantCulture, $"Fetched {items.Count} items."));
 
         var snapshot = new ProjectSnapshot
@@ -78,13 +81,44 @@ public sealed class ProjectExporter
         return snapshot;
     }
 
-    private async Task<List<ItemSnapshot>> FetchItemsAsync(string orgLogin, int projectNumber, CancellationToken cancellationToken)
+    /// <summary>Lists the owner's projects (number, title, closed state) for bulk export.</summary>
+    public async Task<IReadOnlyList<ProjectListEntry>> ListProjectsAsync(string ownerLogin, bool includeClosed = false, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(ownerLogin);
+
+        var entries = new List<ProjectListEntry>();
+        await foreach (var node in _client.QueryPaginatedAsync(
+            ListProjectsQuery,
+            new { login = ownerLogin, first = 50 },
+            OwnerField + ".projectsV2",
+            cancellationToken: cancellationToken).ConfigureAwait(false))
+        {
+            var closed = node.GetProperty("closed").GetBoolean();
+            if (closed && !includeClosed)
+            {
+                continue;
+            }
+
+            entries.Add(new ProjectListEntry(
+                node.GetProperty("number").GetInt32(),
+                node.GetProperty("title").GetString() ?? string.Empty,
+                closed));
+        }
+
+        return entries;
+    }
+
+    private string OwnerField => OwnerType == ProjectOwnerType.User ? "user" : "organization";
+
+    private string OwnerDescription => OwnerType == ProjectOwnerType.User ? "user" : "organization";
+
+    private async Task<List<ItemSnapshot>> FetchItemsAsync(string ownerLogin, int projectNumber, CancellationToken cancellationToken)
     {
         var items = new List<ItemSnapshot>();
         await foreach (var node in _client.QueryPaginatedAsync(
             ItemsQuery,
-            new { login = orgLogin, number = projectNumber, first = ItemsPageSize },
-            "organization.projectV2.items",
+            new { login = ownerLogin, number = projectNumber, first = ItemsPageSize },
+            OwnerField + ".projectV2.items",
             cancellationToken: cancellationToken).ConfigureAwait(false))
         {
             items.Add(ParseItem(node, position: items.Count));
@@ -357,10 +391,28 @@ public sealed class ProjectExporter
             ? value.GetString()
             : null;
 
-    private const string MetadataQuery =
+    private string MetadataQuery => MetadataQueryTemplate.Replace("__OWNER__", OwnerField, StringComparison.Ordinal);
+
+    private string ItemsQuery => ItemsQueryTemplate.Replace("__OWNER__", OwnerField, StringComparison.Ordinal);
+
+    private string ListProjectsQuery => ListProjectsQueryTemplate.Replace("__OWNER__", OwnerField, StringComparison.Ordinal);
+
+    private const string ListProjectsQueryTemplate =
+        """
+        query($login: String!, $first: Int!, $after: String) {
+          __OWNER__(login: $login) {
+            projectsV2(first: $first, after: $after) {
+              nodes { number title closed }
+              pageInfo { hasNextPage endCursor }
+            }
+          }
+        }
+        """;
+
+    private const string MetadataQueryTemplate =
         """
         query($login: String!, $number: Int!) {
-          organization(login: $login) {
+          __OWNER__(login: $login) {
             projectV2(number: $number) {
               title
               shortDescription
@@ -403,10 +455,10 @@ public sealed class ProjectExporter
         }
         """;
 
-    private const string ItemsQuery =
+    private const string ItemsQueryTemplate =
         """
         query($login: String!, $number: Int!, $first: Int!, $after: String) {
-          organization(login: $login) {
+          __OWNER__(login: $login) {
             projectV2(number: $number) {
               items(first: $first, after: $after, archivedStates: [ARCHIVED, NOT_ARCHIVED]) {
                 nodes {
@@ -435,3 +487,6 @@ public sealed class ProjectExporter
         }
         """;
 }
+
+/// <summary>A project listed by <see cref="ProjectExporter.ListProjectsAsync"/>.</summary>
+public sealed record ProjectListEntry(int Number, string Title, bool Closed);

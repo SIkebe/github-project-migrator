@@ -74,12 +74,27 @@ public class CsvMappingTests
         Assert.Throws<FormatException>(() => CsvMapping.Parse(["source,target", line]));
     }
 
-    [Theory]
-    [InlineData(",b")]
-    [InlineData("a,")]
-    public void Parse_throws_on_empty_source_or_target(string line)
+    [Fact]
+    public void Parse_throws_on_empty_source_with_target()
     {
-        Assert.Throws<FormatException>(() => CsvMapping.Parse(["source,target", line]));
+        Assert.Throws<FormatException>(() => CsvMapping.Parse(["source,target", ",b"]));
+    }
+
+    [Fact]
+    public void Parse_ignores_rows_with_empty_target()
+    {
+        // Rows with a blank target are unfilled template rows, not errors.
+        var map = CsvMapping.Parse(
+        [
+            "source,target",
+            "org-a/repo-1,",
+            "org-a/repo-2,org-b/repo-2",
+            ",",
+        ]);
+
+        var pair = Assert.Single(map);
+        Assert.Equal("org-a/repo-2", pair.Key);
+        Assert.Equal("org-b/repo-2", pair.Value);
     }
 
     [Fact]

@@ -34,6 +34,43 @@ public class ProjectExporterTests
     }
 
     [Fact]
+    public async Task Bulk_export_writes_one_snapshot_directory_per_project()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        using var client = new GitHubGraphQLClient(Token);
+        var exporter = new ProjectExporter(client);
+
+        var entries = await exporter.ListProjectsAsync(Org, includeClosed: false, cancellationToken);
+        Assert.Contains(entries, e => e.Number == FixtureProjectNumber && !e.Closed);
+
+        var outDirectory = Path.Combine(Path.GetTempPath(), "gpm-bulk-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            // Same loop the CLI runs when --project is omitted.
+            var snapshots = new List<ProjectSnapshot>();
+            foreach (var entry in entries)
+            {
+                var snapshot = await exporter.ExportAsync(Org, entry.Number, cancellationToken);
+                var directory = Path.Combine(outDirectory, entry.Number.ToString(System.Globalization.CultureInfo.InvariantCulture));
+                await SnapshotFile.SaveAsync(snapshot, directory, cancellationToken);
+                snapshots.Add(snapshot);
+            }
+
+            await MappingTemplates.WriteAsync(snapshots, outDirectory, cancellationToken: cancellationToken);
+
+            Assert.True(File.Exists(Path.Combine(outDirectory, "3", SnapshotFile.FileName)));
+            Assert.True(File.Exists(Path.Combine(outDirectory, MappingTemplates.RepositoryMappingFileName)));
+
+            var reloaded = await SnapshotFile.LoadAsync(Path.Combine(outDirectory, "3"), cancellationToken);
+            Assert.Equal(ProjectSnapshot.CurrentSchemaVersion, reloaded.SchemaVersion);
+        }
+        finally
+        {
+            Directory.Delete(outDirectory, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task Export_has_schema_version_and_project_metadata()
     {
         var snapshot = await ExportFixtureAsync();

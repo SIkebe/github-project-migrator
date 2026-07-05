@@ -41,6 +41,30 @@ public sealed class GitHubGraphQLClient : IDisposable
     /// <summary>Invoked with a human-readable message before every rate-limit/retry wait.</summary>
     public Action<string>? OnRetry { get; set; }
 
+    /// <summary>
+    /// Normalizes a GraphQL API base URL given on the command line: accepts both
+    /// "https://api.TENANT.ghe.com" and "https://api.TENANT.ghe.com/graphql" (with or
+    /// without a trailing slash) and returns the endpoint URI ending in "/graphql".
+    /// </summary>
+    public static Uri NormalizeBaseUrl(string baseUrl)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(baseUrl);
+
+        var trimmed = baseUrl.Trim().TrimEnd('/');
+        if (!Uri.TryCreate(trimmed, UriKind.Absolute, out var uri)
+            || (uri.Scheme != Uri.UriSchemeHttps && uri.Scheme != Uri.UriSchemeHttp))
+        {
+            throw new FormatException($"'{baseUrl}' is not an absolute http(s) URL.");
+        }
+
+        if (!trimmed.EndsWith("/graphql", StringComparison.OrdinalIgnoreCase))
+        {
+            trimmed += "/graphql";
+        }
+
+        return new Uri(trimmed);
+    }
+
     /// <summary>Executes a GraphQL query and returns the "data" element.</summary>
     public async Task<JsonElement> QueryAsync(string query, object? variables = null, CancellationToken cancellationToken = default)
     {

@@ -29,22 +29,25 @@ public sealed class ProjectImporter
         _client = client;
     }
 
-    /// <summary>Behavior when the target organization already has a project with the snapshot's title.</summary>
+    /// <summary>Behavior when the target owner already has a project with the snapshot's title.</summary>
     public ConflictAction OnConflict { get; init; } = ConflictAction.Fail;
+
+    /// <summary>Owner type of the target: organization (default) or user.</summary>
+    public ProjectOwnerType OwnerType { get; init; } = ProjectOwnerType.Organization;
 
     /// <summary>Invoked with a human-readable progress message at each import stage.</summary>
     public Action<string>? OnProgress { get; set; }
 
-    /// <summary>Imports the snapshot into <paramref name="orgLogin"/> and returns the target project identity and field mappings.</summary>
-    public async Task<ImportResult> ImportAsync(ProjectSnapshot snapshot, string orgLogin, CancellationToken cancellationToken = default)
+    /// <summary>Imports the snapshot into <paramref name="ownerLogin"/> and returns the target project identity and field mappings.</summary>
+    public async Task<ImportResult> ImportAsync(ProjectSnapshot snapshot, string ownerLogin, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(snapshot);
-        ArgumentException.ThrowIfNullOrWhiteSpace(orgLogin);
+        ArgumentException.ThrowIfNullOrWhiteSpace(ownerLogin);
 
         var title = snapshot.Project.Title;
-        OnProgress?.Invoke($"Checking organization '{orgLogin}' for an existing project titled '{title}'...");
-        var orgId = await GetOrganizationIdAsync(orgLogin, cancellationToken).ConfigureAwait(false);
-        var existing = await FindProjectByTitleAsync(orgLogin, title, cancellationToken).ConfigureAwait(false);
+        OnProgress?.Invoke($"Checking {OwnerDescription} '{ownerLogin}' for an existing project titled '{title}'...");
+        var ownerId = await GetOwnerIdAsync(ownerLogin, cancellationToken).ConfigureAwait(false);
+        var existing = await FindProjectByTitleAsync(ownerLogin, title, cancellationToken).ConfigureAwait(false);
 
         if (existing is not null)
         {
@@ -53,7 +56,7 @@ public sealed class ProjectImporter
                 case ConflictAction.Fail:
                     throw new InvalidOperationException(
                         string.Create(CultureInfo.InvariantCulture,
-                            $"A project titled '{title}' already exists in organization '{orgLogin}' (#{existing.Number}). Use --on-conflict skip or update to proceed."));
+                            $"A project titled '{title}' already exists in {OwnerDescription} '{ownerLogin}' (#{existing.Number}). Use --on-conflict skip or update to proceed."));
 
                 case ConflictAction.Skip:
                     OnProgress?.Invoke(string.Create(CultureInfo.InvariantCulture,
@@ -67,9 +70,30 @@ public sealed class ProjectImporter
             }
         }
 
-        OnProgress?.Invoke($"Creating project '{title}' in '{orgLogin}'...");
-        var project = await CreateProjectAsync(orgId, title, cancellationToken).ConfigureAwait(false);
+        OnProgress?.Invoke($"Creating project '{title}' in '{ownerLogin}'...");
+        var project = await CreateProjectAsync(ownerId, title, cancellationToken).ConfigureAwait(false);
         return await ApplySnapshotAsync(snapshot, project, created: true, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Imports the snapshot into an existing project identified by number: skips the
+    /// title lookup/creation and merges fields like the on-conflict=update path
+    /// (the existing project keeps its title).
+    /// </summary>
+    public async Task<ImportResult> ImportIntoAsync(ProjectSnapshot snapshot, string ownerLogin, int projectNumber, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(snapshot);
+        ArgumentException.ThrowIfNullOrWhiteSpace(ownerLogin);
+
+        OnProgress?.Invoke(string.Create(CultureInfo.InvariantCulture,
+            $"Looking up project #{projectNumber} in {OwnerDescription} '{ownerLogin}'..."));
+        var project = await FindProjectByNumberAsync(ownerLogin, projectNumber, cancellationToken).ConfigureAwait(false)
+            ?? throw new InvalidOperationException(string.Create(CultureInfo.InvariantCulture,
+                $"Project #{projectNumber} was not found in {OwnerDescription} '{ownerLogin}'."));
+
+        OnProgress?.Invoke(string.Create(CultureInfo.InvariantCulture,
+            $"Applying snapshot to existing project #{project.Number}..."));
+        return await ApplySnapshotAsync(snapshot, project, created: false, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>Applies metadata, custom fields and Status options to the target project and builds the result.</summary>
@@ -129,23 +153,28 @@ public sealed class ProjectImporter
         return maps.ToResult(project, created);
     }
 
-    private async Task<string> GetOrganizationIdAsync(string orgLogin, CancellationToken cancellationToken)
-    {
-        var data = await _client.QueryAsync(
-            "query($login: String!) { organization(login: $login) { id } }",
-            new { login = orgLogin },
-            cancellationToken).ConfigureAwait(false);
+    private string OwnerField => OwnerType == ProjectOwnerType.User ? "user" : "organization";
 
-        return data.GetProperty("organization").GetProperty("id").GetString()
-            ?? throw new GitHubGraphQLException($"Organization '{orgLogin}' was not found.");
+    private string OwnerDescription => OwnerType == ProjectOwnerType.User ? "user" : "organization";
+
+    private async Task<string> GetOwnerIdAsync(string ownerLogin, CancellationToken cancellationToken)
+    {
+        var query = OwnerType == ProjectOwnerType.User
+            ? "query($login: String!) { user(login: $login) { id } }"
+            : "query($login: String!) { organization(login: $login) { id } }";
+
+        var data = await _client.QueryAsync(query, new { login = ownerLogin }, cancellationToken).ConfigureAwait(false);
+
+        return data.GetProperty(OwnerField).GetProperty("id").GetString()
+            ?? throw new GitHubGraphQLException($"{(OwnerType == ProjectOwnerType.User ? "User" : "Organization")} '{ownerLogin}' was not found.");
     }
 
-    private async Task<ProjectRef?> FindProjectByTitleAsync(string orgLogin, string title, CancellationToken cancellationToken)
+    private async Task<ProjectRef?> FindProjectByTitleAsync(string ownerLogin, string title, CancellationToken cancellationToken)
     {
         await foreach (var node in _client.QueryPaginatedAsync(
-            FindProjectQuery,
-            new { login = orgLogin, first = 50 },
-            "organization.projectsV2",
+            FindProjectQueryTemplate.Replace("__OWNER__", OwnerField, StringComparison.Ordinal),
+            new { login = ownerLogin, first = 50 },
+            OwnerField + ".projectsV2",
             cancellationToken: cancellationToken).ConfigureAwait(false))
         {
             if (string.Equals(node.GetProperty("title").GetString(), title, StringComparison.Ordinal))
@@ -155,6 +184,24 @@ public sealed class ProjectImporter
         }
 
         return null;
+    }
+
+    private async Task<ProjectRef?> FindProjectByNumberAsync(string ownerLogin, int projectNumber, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var data = await _client.QueryAsync(
+                FindProjectByNumberQueryTemplate.Replace("__OWNER__", OwnerField, StringComparison.Ordinal),
+                new { login = ownerLogin, number = projectNumber },
+                cancellationToken).ConfigureAwait(false);
+
+            var project = data.GetProperty(OwnerField).GetProperty("projectV2");
+            return project.ValueKind == JsonValueKind.Object ? ParseProjectRef(project) : null;
+        }
+        catch (GitHubGraphQLException exception) when (exception.ErrorType == "NOT_FOUND")
+        {
+            return null;
+        }
     }
 
     private async Task<ProjectRef> CreateProjectAsync(string ownerId, string title, CancellationToken cancellationToken)
@@ -349,14 +396,23 @@ public sealed class ProjectImporter
         };
     }
 
-    private const string FindProjectQuery =
+    private const string FindProjectQueryTemplate =
         """
         query($login: String!, $first: Int!, $after: String) {
-          organization(login: $login) {
+          __OWNER__(login: $login) {
             projectsV2(first: $first, after: $after) {
               nodes { id number title url }
               pageInfo { hasNextPage endCursor }
             }
+          }
+        }
+        """;
+
+    private const string FindProjectByNumberQueryTemplate =
+        """
+        query($login: String!, $number: Int!) {
+          __OWNER__(login: $login) {
+            projectV2(number: $number) { id number title url }
           }
         }
         """;

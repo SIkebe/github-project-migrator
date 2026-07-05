@@ -33,13 +33,16 @@ public sealed class ProjectVerifier
     /// <summary>Invoked with a human-readable progress message while reading the target project.</summary>
     public Action<string>? OnProgress { get; set; }
 
+    /// <summary>Owner type of the target project: organization (default) or user.</summary>
+    public ProjectOwnerType OwnerType { get; init; } = ProjectOwnerType.Organization;
+
     /// <summary>Exports the target project and compares it against <paramref name="source"/>.</summary>
     public async Task<VerifyReport> VerifyAsync(ProjectSnapshot source, string targetOrgLogin, int targetProjectNumber, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(source);
         ArgumentException.ThrowIfNullOrWhiteSpace(targetOrgLogin);
 
-        var exporter = new ProjectExporter(_client) { OnProgress = OnProgress };
+        var exporter = new ProjectExporter(_client) { OnProgress = OnProgress, OwnerType = OwnerType };
         var target = await exporter.ExportAsync(targetOrgLogin, targetProjectNumber, cancellationToken).ConfigureAwait(false);
         return Compare(source, target);
     }

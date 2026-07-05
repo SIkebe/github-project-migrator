@@ -85,12 +85,19 @@ GitHub Projects V2 を組織間/製品間で移行する CLI ツール。
 - コマンド体系:
 
 ```
-gpm export   --org <src> [--project <num>] [--out <dir>]        # ソースから JSON へ
-             [--token <t>] [--enable-browser-automation] [--browser-profile source]
+gpm export   --org <src> [--project <num>] [--out <dir>]        # ソースから JSON へ(--project 省略で全プロジェクト一括 → <out>/<number>/)
+             [--owner-type organization|user] [--include-closed]
+             [--token <t>] [--base-url https://api.{tenant}.ghe.com]  # GHEC with data residency 向け(未検証)
+             [--enable-browser-automation] [--browser-profile source]
+             # 完了時に repository-mappings.csv / user-mappings.csv テンプレートを <out> に生成(既存ファイルは上書きしない)
 gpm import   --org <dst> [--in <dir>] [--enable-browser-automation]  # ターゲットへ適用
+             [--owner-type organization|user]
+             [--project-number <n>]                              # 既存プロジェクトへマージ(--on-conflict / --project-title と排他)
+             [--project-title <title>]                           # スナップショットのタイトルを上書きして新規作成
              [--token <t>] [--browser-profile target]
-             [--target-base-url https://api.{tenant}.ghe.com]    # GHEC with data residency 向け
-gpm verify   --org <dst> [--in <dir>] [--token <t>]              # 移行結果の検証・差分レポート
+             [--target-base-url https://api.{tenant}.ghe.com]    # GHEC with data residency 向け(未検証)
+gpm verify   --org <dst> [--project <num>] [--in <dir>] [--token <t>]  # 移行結果の検証・差分レポート
+             [--owner-type organization|user] [--target-base-url ...]
 gpm login    [--profile <name>] [--base-url https://{tenant}.ghe.com]  # Playwright 用 storageState 取得(プロファイル別)
 gpm setup    --browsers                                          # Playwright ブラウザーのインストール(初回のみ)
 ```
@@ -248,7 +255,7 @@ v1 で扱わないものと将来対応は §8 のロードマップを参照。
 | 項目 | v1 で除外する理由 | 将来の対応方法 |
 |---|---|---|
 | Status updates(進捗報告の履歴) | コア移行の優先度を下げないため | `statusUpdates` query + `createProjectV2StatusUpdate` で移行可能と確認済み(§1.2)。作成者・日時は実行者・実行時になるため本文冒頭に元情報を注記(Draft issue と同方式) |
-| ユーザープロジェクト(user-owned) | v1 は org → org に集中 | `createProjectV2` の `ownerId` は User も可(`OrganizationOrUser` union 確認済み)。CLI に `--owner-type user` を追加し URL 生成を `/users/{user}/projects/{n}` に切替えるだけ |
+| ユーザープロジェクト(user-owned) | v1 は org → org に集中 | **→ 対応済み(2026-07-05)**: `export`/`import`/`verify` に `--owner-type organization\|user` を追加。GraphQL の `organization(login:)` を `user(login:)` に切替え、`createProjectV2` の `ownerId` に User ID を渡す(URL は API が返す `/users/{user}/projects/{n}` 形式をそのまま表示) |
 | プロジェクトテンプレート属性 | ニッチ用途 | `markProjectV2AsTemplate` を import 後に 1 回呼ぶだけ(org プロジェクト限定) |
 | View タブの並び順再現 | UI の D&D のみで壊れやすい | v1 は view number 昇順作成 + 警告。v1.x で `Locator.DragToAsync` によるタブ D&D を B-タスクとして追加(D0 で取得済みの aria 情報を活用) |
 | 複数プロジェクトの並列移行 | レート制御とセッション管理が複雑化 | v1 は直列のみ。v1.x で API 部分のみ並列化(ブラウザー操作は常に直列を維持) |

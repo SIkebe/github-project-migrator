@@ -163,6 +163,108 @@ public class ProjectImporterTests
         }
     }
 
+    [Fact]
+    public async Task Import_into_existing_project_by_number_merges_fields_and_items()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        using var client = new GitHubGraphQLClient(Token);
+
+        // Create an empty target project directly through the API.
+        var title = NewTestTitle();
+        var orgData = await client.QueryAsync(
+            "query($login: String!) { organization(login: $login) { id } }",
+            new { login = TargetOrg },
+            cancellationToken);
+        var created = await client.QueryAsync(
+            """
+            mutation($ownerId: ID!, $title: String!) {
+              createProjectV2(input: { ownerId: $ownerId, title: $title }) {
+                projectV2 { id number }
+              }
+            }
+            """,
+            new { ownerId = orgData.GetProperty("organization").GetProperty("id").GetString(), title },
+            cancellationToken);
+        var emptyProject = created.GetProperty("createProjectV2").GetProperty("projectV2");
+        var emptyProjectId = emptyProject.GetProperty("id").GetString()!;
+        var emptyProjectNumber = emptyProject.GetProperty("number").GetInt32();
+
+        var logDirectory = Path.Combine(Path.GetTempPath(), "gpm-into-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(logDirectory);
+        try
+        {
+            // Export the fixture and apply it to the existing project by number.
+            var exporter = new ProjectExporter(client);
+            var snapshot = await exporter.ExportAsync(SourceOrg, FixtureProjectNumber, cancellationToken);
+
+            var importer = new ProjectImporter(client);
+            var result = await importer.ImportIntoAsync(snapshot, TargetOrg, emptyProjectNumber, cancellationToken);
+
+            Assert.False(result.Created);
+            Assert.Equal(emptyProjectId, result.ProjectId);
+            Assert.Equal(emptyProjectNumber, result.ProjectNumber);
+
+            // Items go in through the normal item import path (identity repo mapping).
+            var repositories = snapshot.Items.Where(i => i.Repository is not null).Select(i => i.Repository!).Distinct(StringComparer.OrdinalIgnoreCase);
+            var itemImporter = new ItemImporter(client)
+            {
+                RepositoryMapping = repositories.ToDictionary(r => r, r => r, StringComparer.OrdinalIgnoreCase),
+            };
+            var itemResult = await itemImporter.ImportAsync(snapshot, result, logDirectory, cancellationToken);
+            Assert.Equal(snapshot.Items.Count, itemResult.Created);
+
+            // The existing project keeps its own title but gains the snapshot's custom fields.
+            var readBack = await exporter.ExportAsync(TargetOrg, emptyProjectNumber, cancellationToken);
+            Assert.Equal(title, readBack.Project.Title);
+            string[] creatable = ["TEXT", "NUMBER", "DATE", "SINGLE_SELECT", "ITERATION"];
+            foreach (var field in snapshot.Fields.Where(f => creatable.Contains(f.DataType)))
+            {
+                Assert.Contains(readBack.Fields, f => f.Name == field.Name && f.DataType == field.DataType);
+            }
+        }
+        finally
+        {
+            await DeleteProjectAsync(client, emptyProjectId);
+            Directory.Delete(logDirectory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Import_into_missing_project_number_throws()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        using var client = new GitHubGraphQLClient(Token);
+
+        var importer = new ProjectImporter(client);
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => importer.ImportIntoAsync(MinimalSnapshot(NewTestTitle()), TargetOrg, 999_999, cancellationToken));
+        Assert.Contains("999999", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Import_with_overridden_title_creates_project_with_new_title()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        using var client = new GitHubGraphQLClient(Token);
+
+        // Same rewrite the CLI applies for --project-title.
+        var overriddenTitle = NewTestTitle();
+        var snapshot = MinimalSnapshot("gpm-original-title");
+        snapshot = snapshot with { Project = snapshot.Project with { Title = overriddenTitle } };
+
+        var result = await new ProjectImporter(client).ImportAsync(snapshot, TargetOrg, cancellationToken);
+        try
+        {
+            Assert.True(result.Created);
+            var readBack = await new ProjectExporter(client).ExportAsync(TargetOrg, result.ProjectNumber, cancellationToken);
+            Assert.Equal(overriddenTitle, readBack.Project.Title);
+        }
+        finally
+        {
+            await DeleteProjectAsync(client, result.ProjectId);
+        }
+    }
+
     private static ProjectSnapshot MinimalSnapshot(string title) => new()
     {
         SchemaVersion = ProjectSnapshot.CurrentSchemaVersion,

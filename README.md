@@ -59,7 +59,34 @@ gpm verify --org target-org --project 12 --in ./snapshot --token $TARGET_TOKEN
 
 Tokens are resolved from `--token`, then the `GITHUB_TOKEN` / `GPM_TOKEN` environment variables. Classic PATs need the `project` and `repo` scopes (plus SSO authorization for SAML-protected organizations).
 
-`--repo-mapping` / `--user-mapping` are CSV files (`source,target` header) that map repositories (`org/repo,org/repo`) and user logins across organizations — effectively required for cross-organization moves and EMU targets (`user_shortcode` logins).
+`--repo-mapping` / `--user-mapping` are CSV files (`source,target` header) that map repositories (`org/repo,org/repo`) and user logins across organizations — effectively required for cross-organization moves and EMU targets (`user_shortcode` logins). `gpm export` generates ready-to-fill templates next to the snapshot: `repository-mappings.csv` (all distinct source repositories) and `user-mappings.csv` (draft-issue assignees, only when present). Fill in the `target` column and pass the files to `gpm import` — rows with a blank target are ignored, and existing files are never overwritten by later exports.
+
+### More import/export options
+
+```bash
+# Export ALL projects of the org at once (one snapshot per project under <out>/<number>/)
+gpm export --org source-org --out ./snapshots            # add --include-closed to include closed projects
+gpm import --org target-org --in ./snapshots/7           # then import each snapshot individually
+
+# Import into an EXISTING project (fields/items are merged; the project keeps its title)
+gpm import --org target-org --in ./snapshot --project-number 42 \
+  --repo-mapping ./snapshot/repository-mappings.csv
+
+# Create the project under a different title
+gpm import --org target-org --in ./snapshot --project-title "Roadmap (migrated)"
+```
+
+`--project-number` is mutually exclusive with `--on-conflict` and `--project-title`.
+
+### User-owned projects
+
+`export` / `import` / `verify` accept `--owner-type user` to migrate projects owned by a user account instead of an organization (URLs use the `/users/<login>/projects/<n>` form):
+
+```bash
+gpm export --org monalisa   --owner-type user --project 4 --out ./snapshot
+gpm import --org octocat    --owner-type user --in ./snapshot
+gpm verify --org octocat    --owner-type user --project 2 --in ./snapshot
+```
 
 ### Migrating Views & Workflows (opt-in browser automation)
 
@@ -90,7 +117,11 @@ gpm import --org target-org --in ./snapshot \
   --token $TARGET_TOKEN --enable-browser-automation --browser-profile target
 ```
 
-For GHEC with data residency targets, sign in with `gpm login --profile target --base-url https://TENANT.ghe.com`.
+For GHEC with data residency targets, sign in with `gpm login --profile target --base-url https://TENANT.ghe.com`. For the GraphQL side, point `gpm export --base-url` (source) or `gpm import`/`gpm verify` `--target-base-url` (target) at the tenant API endpoint, e.g. `https://api.TENANT.ghe.com` (a trailing `/graphql` is added automatically; GHEC with data residency is designed to work but **untested**).
+
+### Proxies
+
+`gpm` uses the standard .NET `HttpClient`, which honors the `HTTPS_PROXY` / `HTTP_PROXY` (and `NO_PROXY`) environment variables by default — no extra configuration is needed behind a corporate proxy.
 
 ## Supported environments
 
@@ -102,7 +133,7 @@ For GHEC with data residency targets, sign in with `gpm login --profile target -
 | GitHub.com | GHEC with data residency (`*.ghe.com`) | ⚠️ Designed to work, **not yet verified** |
 | GitHub Enterprise Server (GHES) | any | ❌ Not supported |
 
-Organization projects only (user-owned projects are on the roadmap).
+Organization projects and user-owned projects (`--owner-type user`) are both supported.
 
 ## Update check
 

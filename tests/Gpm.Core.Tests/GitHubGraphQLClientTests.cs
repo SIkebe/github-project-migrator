@@ -32,6 +32,34 @@ public class GitHubGraphQLClientTests
             () => client.QueryAsync("", cancellationToken: TestContext.Current.CancellationToken));
     }
 
+    [Theory]
+    [InlineData("https://api.tenant.ghe.com", "https://api.tenant.ghe.com/graphql")]
+    [InlineData("https://api.tenant.ghe.com/", "https://api.tenant.ghe.com/graphql")]
+    [InlineData("https://api.tenant.ghe.com/graphql", "https://api.tenant.ghe.com/graphql")]
+    [InlineData("https://api.tenant.ghe.com/graphql/", "https://api.tenant.ghe.com/graphql")]
+    [InlineData(" https://api.github.com/graphql ", "https://api.github.com/graphql")]
+    public void NormalizeBaseUrl_appends_graphql_when_missing(string input, string expected)
+    {
+        Assert.Equal(new Uri(expected), GitHubGraphQLClient.NormalizeBaseUrl(input));
+    }
+
+    [Theory]
+    [InlineData("api.tenant.ghe.com")]
+    [InlineData("ftp://api.tenant.ghe.com")]
+    [InlineData("not a url")]
+    public void NormalizeBaseUrl_rejects_non_http_urls(string input)
+    {
+        Assert.Throws<FormatException>(() => GitHubGraphQLClient.NormalizeBaseUrl(input));
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData(" ")]
+    public void NormalizeBaseUrl_rejects_empty_input(string input)
+    {
+        Assert.Throws<ArgumentException>(() => GitHubGraphQLClient.NormalizeBaseUrl(input));
+    }
+
     [Fact]
     public async Task Forbidden_with_RetryAfter_waits_and_retries()
     {
