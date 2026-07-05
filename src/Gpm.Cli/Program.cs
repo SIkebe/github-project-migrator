@@ -1,5 +1,7 @@
 ﻿using System.CommandLine;
 using System.Globalization;
+using System.Reflection;
+using Gpm.Core;
 using Gpm.Core.Browser;
 using Gpm.Core.Export;
 using Gpm.Core.GitHub;
@@ -38,6 +40,10 @@ var browserProfileOption = new Option<string?>("--browser-profile")
 {
     Description = "Named browser profile from 'gpm login --profile <name>'. Use different profiles for source and target when they use different accounts (e.g. non-EMU source, EMU target).",
 };
+var noUpdateCheckOption = new Option<bool>("--no-update-check")
+{
+    Description = "Skip the update check against GitHub Releases (also disabled by the GPM_NO_UPDATE_CHECK environment variable).",
+};
 
 var exportCommand = new Command("export", "Export a project from the source organization to a JSON snapshot.")
 {
@@ -47,6 +53,7 @@ var exportCommand = new Command("export", "Export a project from the source orga
     tokenOption,
     enableBrowserOption,
     browserProfileOption,
+    noUpdateCheckOption,
 };
 
 exportCommand.SetAction(async (parseResult, cancellationToken) =>
@@ -54,6 +61,7 @@ exportCommand.SetAction(async (parseResult, cancellationToken) =>
     var org = parseResult.GetValue(orgOption)!;
     var projectNumber = parseResult.GetValue(projectOption);
     var outDirectory = parseResult.GetValue(outOption)!;
+    var updateCheck = StartUpdateCheck(parseResult.GetValue(noUpdateCheckOption));
     var enableBrowserAutomation = parseResult.GetValue(enableBrowserOption);
     var token = parseResult.GetValue(tokenOption)
         ?? Environment.GetEnvironmentVariable("GITHUB_TOKEN")
@@ -97,6 +105,7 @@ exportCommand.SetAction(async (parseResult, cancellationToken) =>
 
         var path = await SnapshotFile.SaveAsync(snapshot, outDirectory, cancellationToken);
         Console.Error.WriteLine($"Snapshot written to {path}");
+        await NotifyUpdateAsync(updateCheck);
         return 0;
     }
     catch (Exception exception) when (exception is GitHubGraphQLException or InvalidOperationException or PlaywrightException)
@@ -157,12 +166,14 @@ var importCommand = new Command("import", "Import a JSON snapshot into the targe
     tokenOption,
     enableBrowserOption,
     browserProfileOption,
+    noUpdateCheckOption,
 };
 
 importCommand.SetAction(async (parseResult, cancellationToken) =>
 {
     var org = parseResult.GetValue(importOrgOption)!;
     var inDirectory = parseResult.GetValue(inOption)!;
+    var updateCheck = StartUpdateCheck(parseResult.GetValue(noUpdateCheckOption));
     var enableBrowserAutomation = parseResult.GetValue(enableBrowserOption);
     if (!ConflictActions.TryParse(parseResult.GetValue(onConflictOption), out var onConflict))
     {
@@ -250,6 +261,7 @@ importCommand.SetAction(async (parseResult, cancellationToken) =>
                 $"workflows: imported={workflowsImported} warnings={workflowWarnings}"));
         }
 
+        await NotifyUpdateAsync(updateCheck);
         return 0;
     }
     catch (Exception exception) when (exception is GitHubGraphQLException or InvalidOperationException or IOException or FormatException or PlaywrightException)
@@ -279,6 +291,7 @@ var verifyCommand = new Command("verify", "Verify a migrated project against the
     verifyProjectOption,
     inOption,
     tokenOption,
+    noUpdateCheckOption,
 };
 
 verifyCommand.SetAction(async (parseResult, cancellationToken) =>
@@ -286,6 +299,7 @@ verifyCommand.SetAction(async (parseResult, cancellationToken) =>
     var org = parseResult.GetValue(verifyOrgOption)!;
     var projectNumber = parseResult.GetValue(verifyProjectOption);
     var inDirectory = parseResult.GetValue(inOption)!;
+    var updateCheck = StartUpdateCheck(parseResult.GetValue(noUpdateCheckOption));
     var token = parseResult.GetValue(tokenOption)
         ?? Environment.GetEnvironmentVariable("GITHUB_TOKEN")
         ?? Environment.GetEnvironmentVariable("GPM_TOKEN");
@@ -305,6 +319,7 @@ verifyCommand.SetAction(async (parseResult, cancellationToken) =>
         var snapshot = await SnapshotFile.LoadAsync(inDirectory, cancellationToken);
         var report = await verifier.VerifyAsync(snapshot, org, projectNumber, cancellationToken);
         WriteVerifyReport(report);
+        await NotifyUpdateAsync(updateCheck);
         return report.IsMatch ? 0 : 1;
     }
     catch (Exception exception) when (exception is GitHubGraphQLException or InvalidOperationException or IOException or FormatException)
@@ -397,6 +412,29 @@ setupCommand.SetAction(parseResult =>
 rootCommand.Subcommands.Add(setupCommand);
 
 return await rootCommand.Parse(args).InvokeAsync();
+
+// Starts a fire-and-forget update check against GitHub Releases (opt-out via
+// --no-update-check or GPM_NO_UPDATE_CHECK). Never throws; sends no telemetry.
+static Task<string?> StartUpdateCheck(bool disabled)
+{
+    if (disabled || !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("GPM_NO_UPDATE_CHECK")))
+    {
+        return Task.FromResult<string?>(null);
+    }
+
+    var current = Assembly.GetEntryAssembly()?.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion ?? "0.0.0";
+    return UpdateChecker.CheckForNewerVersionAsync(current);
+}
+
+// Prints a one-line notice to stderr when the update check found a newer version.
+static async Task NotifyUpdateAsync(Task<string?> updateCheck)
+{
+    var latest = await updateCheck;
+    if (latest is not null)
+    {
+        Console.Error.WriteLine($"note: gpm {latest} is available: https://github.com/SIkebe/github-project-migrator/releases/latest (disable this check with --no-update-check or GPM_NO_UPDATE_CHECK=1)");
+    }
+}
 
 // Writes the verify report to stdout as a human-readable table plus a summary line.
 static void WriteVerifyReport(VerifyReport report)

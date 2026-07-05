@@ -16,7 +16,15 @@
     <ToolCommandName>gpm</ToolCommandName>
     <PackageId>gpm</PackageId>
     <Description>GitHub Projects V2 migration CLI (org-to-org, including Views and Workflows).</Description>
+    <PackageTags>github;projects;migration;cli;dotnet-tool</PackageTags>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <!-- NU5110/NU5111: Playwright ships .ps1 helper scripts inside the tool payload; harmless for dotnet tools. -->
+    <NoWarn>$(NoWarn);NU5110;NU5111</NoWarn>
     <RollForward>Major</RollForward>
   </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="..\..\README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
 
 </Project>

@@ -1,0 +1,144 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+env:
+  DOTNET_NOLOGO: true
+
+jobs:
+  publish-self-contained:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            rid: win-x64
+            smoke: true
+          - os: windows-latest
+            rid: win-arm64
+            smoke: false # cross-publish; cannot run on an x64 runner
+          - os: ubuntu-latest
+            rid: linux-x64
+            smoke: true
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - name: Publish self-contained (${{ matrix.rid }})
+        shell: pwsh
+        run: dotnet publish src/Gpm.Cli -c Release --self-contained true -r ${{ matrix.rid }} -o "stage/gpm-${{ github.ref_name }}-${{ matrix.rid }}"
+      - name: Smoke test
+        if: ${{ matrix.smoke }}
+        shell: pwsh
+        run: |
+          $exe = Join-Path 'stage' "gpm-${{ github.ref_name }}-${{ matrix.rid }}" ($IsWindows ? 'gpm.exe' : 'gpm')
+          & $exe --version
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          & $exe export --help
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+      - name: Archive (zip)
+        if: ${{ runner.os == 'Windows' }}
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path dist | Out-Null
+          Compress-Archive -Path "stage/gpm-${{ github.ref_name }}-${{ matrix.rid }}" -DestinationPath "dist/gpm-${{ github.ref_name }}-${{ matrix.rid }}.zip"
+      - name: Archive (tar.gz)
+        if: ${{ runner.os != 'Windows' }}
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path dist | Out-Null
+          tar -czf "dist/gpm-${{ github.ref_name }}-${{ matrix.rid }}.tar.gz" -C stage "gpm-${{ github.ref_name }}-${{ matrix.rid }}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sc-${{ matrix.rid }}
+          path: dist/*
+          if-no-files-found: error
+
+  publish-framework-dependent:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - name: Publish framework-dependent (portable)
+        shell: pwsh
+        run: dotnet publish src/Gpm.Cli -c Release --self-contained false -o "stage/gpm-${{ github.ref_name }}-portable"
+      - name: Smoke test
+        shell: pwsh
+        run: |
+          dotnet "stage/gpm-${{ github.ref_name }}-portable/gpm.dll" --version
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          dotnet "stage/gpm-${{ github.ref_name }}-portable/gpm.dll" export --help
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+      - name: Archive (zip)
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path dist | Out-Null
+          Push-Location stage
+          zip -r "../dist/gpm-${{ github.ref_name }}-portable.zip" "gpm-${{ github.ref_name }}-portable"
+          Pop-Location
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fdd-portable
+          path: dist/*
+          if-no-files-found: error
+
+  pack-tool:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - name: Pack NuGet global tool
+        run: dotnet pack src/Gpm.Cli -c Release -o dist
+      - name: Smoke test (install from local package)
+        shell: pwsh
+        run: |
+          dotnet tool install --global gpm --add-source dist
+          gpm --version
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          gpm export --help
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+      # NuGet.org publishing is prepared but disabled until the NUGET_API_KEY secret is configured.
+      - name: Push to NuGet.org (disabled)
+        if: ${{ false }}
+        run: dotnet nuget push dist/*.nupkg --api-key "$NUGET_API_KEY" --source https://api.nuget.org/v3/index.json --skip-duplicate
+        env:
+          NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nupkg
+          path: dist/*.nupkg
+          if-no-files-found: error
+
+  release:
+    needs: [publish-self-contained, publish-framework-dependent, pack-tool]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Generate SHA256SUMS.txt
+        shell: pwsh
+        run: |
+          Push-Location dist
+          Get-ChildItem -File | Sort-Object Name | ForEach-Object {
+            "{0}  {1}" -f (Get-FileHash $_ -Algorithm SHA256).Hash.ToLowerInvariant(), $_.Name
+          } | Set-Content -Path SHA256SUMS.txt
+          Get-Content SHA256SUMS.txt
+          Pop-Location
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true
