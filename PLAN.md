@@ -154,7 +154,7 @@ v1 で扱わないものと将来対応は §8 のロードマップを参照。
 
 ### M2: export(読み取り)
 - Project / Fields / Views / Workflows / Items / 値 / 並び順を JSON スナップショットへ
-- 旧ツール(junkofujiwara/github-projects)の output JSON → 新スナップショットへのコンバーター
+- 旧ツール(junkofujiwara/github-projects)の output JSON → 新スナップショットへのコンバーター(**M2 から分離し、v1 リリース前の独立タスクへ後送り** — 2026-07-05)
 - ✅ 検証: **フィクスチャープロジェクトの実 export** → スナップショット内容を期待値(フィールド数・View 数・item 数・値)と照合。コンバーターのみ旧ツールの実出力ファイルを fixture として使用(これはモックではなく実データ)
 
 ### M3: import — Project & Fields
