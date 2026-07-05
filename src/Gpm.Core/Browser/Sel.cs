@@ -19,9 +19,13 @@ internal static class Sel
     // Confirmation button of the delete dialog.
     private static readonly Regex DeleteButtonName = new("^Delete");
 
-    /// <summary>Filter-bar "View" button (exact) that opens the view configuration menu.</summary>
+    // Filter-bar "View" button. D0: once a setting is changed the accessible name
+    // becomes "Unsaved changes View", so an exact "View" match only works before edits.
+    private static readonly Regex ViewMenuButtonName = new("^(Unsaved changes )?View$");
+
+    /// <summary>Filter-bar "View" button that opens the view configuration menu.</summary>
     public static ILocator ViewMenuButton(IPage page)
-        => page.GetByRole(AriaRole.Button, new() { Name = "View", Exact = true }).First;
+        => page.GetByRole(AriaRole.Button, new() { NameRegex = ViewMenuButtonName }).First;
 
     /// <summary>The most recently opened menu.</summary>
     public static ILocator OpenMenu(IPage page) => page.GetByRole(AriaRole.Menu).Last;

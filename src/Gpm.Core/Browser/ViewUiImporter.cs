@@ -476,9 +476,18 @@ public sealed class ViewUiImporter
 
     private static async Task SaveViewAsync(IPage page, CancellationToken cancellationToken)
     {
+        // D0: the "Save view" button lives inside the View menu overlay, so the menu
+        // must be (re-)opened first. With no unsaved changes the button is absent.
         var save = Sel.SaveViewButton(page);
         if (await save.CountAsync().ConfigureAwait(false) == 0 || !await save.First.IsVisibleAsync().ConfigureAwait(false))
         {
+            await Sel.ViewMenuButton(page).ClickAsync().ConfigureAwait(false);
+            await PauseAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        if (await save.CountAsync().ConfigureAwait(false) == 0 || !await save.First.IsVisibleAsync().ConfigureAwait(false))
+        {
+            await CloseMenusAsync(page, cancellationToken).ConfigureAwait(false);
             return; // No unsaved changes.
         }
 
