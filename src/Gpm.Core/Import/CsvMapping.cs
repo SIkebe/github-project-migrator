@@ -1,0 +1,77 @@
+using System.Globalization;
+
+namespace Gpm.Core.Import;
+
+/// <summary>
+/// Minimal parser for the two-column mapping CSV files used by <see cref="ItemImporter"/>:
+/// repository mapping (source "org/repo" → target "org/repo") and user mapping
+/// (source login → target login). The first non-empty line must be the header
+/// <c>source,target</c>. Lookups are case-insensitive (GitHub logins and repository
+/// names are case-insensitive).
+/// </summary>
+public static class CsvMapping
+{
+    /// <summary>Loads and parses a mapping CSV file.</summary>
+    public static IReadOnlyDictionary<string, string> Load(string path)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+        return Parse(File.ReadLines(path));
+    }
+
+    /// <summary>Parses mapping CSV lines (header <c>source,target</c> followed by one mapping per line).</summary>
+    public static IReadOnlyDictionary<string, string> Parse(IEnumerable<string> lines)
+    {
+        ArgumentNullException.ThrowIfNull(lines);
+
+        var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var headerSeen = false;
+        var lineNumber = 0;
+
+        foreach (var rawLine in lines)
+        {
+            lineNumber++;
+            var line = rawLine.Trim();
+            if (line.Length == 0)
+            {
+                continue;
+            }
+
+            var parts = line.Split(',');
+            if (parts.Length != 2)
+            {
+                throw new FormatException(string.Create(CultureInfo.InvariantCulture,
+                    $"Mapping CSV line {lineNumber}: expected exactly two columns 'source,target' but got '{line}'."));
+            }
+
+            var source = parts[0].Trim();
+            var target = parts[1].Trim();
+
+            if (!headerSeen)
+            {
+                if (!string.Equals(source, "source", StringComparison.OrdinalIgnoreCase)
+                    || !string.Equals(target, "target", StringComparison.OrdinalIgnoreCase))
+                {
+                    throw new FormatException("Mapping CSV must start with the header line 'source,target'.");
+                }
+
+                headerSeen = true;
+                continue;
+            }
+
+            if (source.Length == 0 || target.Length == 0)
+            {
+                throw new FormatException(string.Create(CultureInfo.InvariantCulture,
+                    $"Mapping CSV line {lineNumber}: source and target must be non-empty."));
+            }
+
+            map[source] = target;
+        }
+
+        if (!headerSeen)
+        {
+            throw new FormatException("Mapping CSV must start with the header line 'source,target'.");
+        }
+
+        return map;
+    }
+}

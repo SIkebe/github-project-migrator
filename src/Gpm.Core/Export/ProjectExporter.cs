@@ -249,6 +249,10 @@ public sealed class ProjectExporter
                 {
                     Title = draftTitle.GetString() ?? string.Empty,
                     Body = GetOptionalString(content, "body"),
+                    Creator = content.TryGetProperty("creator", out var creator) && creator.ValueKind == JsonValueKind.Object
+                        ? GetOptionalString(creator, "login")
+                        : null,
+                    CreatedAt = GetOptionalString(content, "createdAt"),
                     Assignees = ParseAssignees(content),
                 };
             }
@@ -397,7 +401,7 @@ public sealed class ProjectExporter
                   content {
                     ... on Issue { number repository { nameWithOwner } }
                     ... on PullRequest { number repository { nameWithOwner } }
-                    ... on DraftIssue { title body assignees(first: 20) { nodes { login } } }
+                    ... on DraftIssue { title body createdAt creator { login } assignees(first: 20) { nodes { login } } }
                   }
                   fieldValues(first: 50) {
                     nodes {

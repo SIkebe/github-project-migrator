@@ -1,0 +1,431 @@
+using System.Collections.ObjectModel;
+using System.Globalization;
+using System.Text.Json;
+using Gpm.Core.GitHub;
+using Gpm.Core.Snapshot;
+
+namespace Gpm.Core.Import;
+
+/// <summary>
+/// Imports a snapshot's items into a target project (M4): adds Issue/PR items through
+/// the repository mapping, recreates draft issues (with an attribution note and mapped
+/// assignees), applies field values via the option/iteration id maps of
+/// <see cref="ImportResult"/>, restores item order with <c>updateProjectV2ItemPosition</c>
+/// and re-archives archived items. Progress of created items is persisted to
+/// <see cref="ImportLog"/> (<c>import-log.json</c>) after every item so a re-run resumes
+/// without duplicating items.
+/// </summary>
+public sealed class ItemImporter
+{
+    /// <summary>The built-in Title field is set through item content, never via updateProjectV2ItemFieldValue.</summary>
+    private const string TitleFieldName = "Title";
+
+    private readonly GitHubGraphQLClient _client;
+    private readonly Dictionary<string, string?> _userIdCache = new(StringComparer.OrdinalIgnoreCase);
+
+    public ItemImporter(GitHubGraphQLClient client)
+    {
+        ArgumentNullException.ThrowIfNull(client);
+        _client = client;
+    }
+
+    /// <summary>Source "org/repo" → target "org/repo" mapping for Issue/PR items. Items whose repository is unmapped are skipped with a warning.</summary>
+    public IReadOnlyDictionary<string, string> RepositoryMapping { get; init; } = ReadOnlyDictionary<string, string>.Empty;
+
+    /// <summary>Source login → target login mapping for draft issue assignees. Unmapped assignees are dropped with a warning.</summary>
+    public IReadOnlyDictionary<string, string> UserMapping { get; init; } = ReadOnlyDictionary<string, string>.Empty;
+
+    /// <summary>Invoked with a human-readable progress message for each item and stage.</summary>
+    public Action<string>? OnProgress { get; set; }
+
+    /// <summary>
+    /// Imports all snapshot items into the project identified by <paramref name="target"/>.
+    /// The resume log is read from and written to <paramref name="logDirectory"/>.
+    /// </summary>
+    public async Task<ItemImportResult> ImportAsync(ProjectSnapshot snapshot, ImportResult target, string logDirectory, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(snapshot);
+        ArgumentNullException.ThrowIfNull(target);
+        ArgumentException.ThrowIfNullOrWhiteSpace(logDirectory);
+
+        var log = await ImportLog.LoadAsync(logDirectory, cancellationToken).ConfigureAwait(false);
+        if (log is not null && !string.Equals(log.ProjectId, target.ProjectId, StringComparison.Ordinal))
+        {
+            OnProgress?.Invoke($"warning: {ImportLog.FileName} in '{logDirectory}' belongs to a different project; starting a fresh log.");
+            log = null;
+        }
+
+        log ??= new ImportLog { ProjectId = target.ProjectId };
+
+        var warnings = new List<string>();
+        var items = snapshot.Items.OrderBy(i => i.Position).ToList();
+        var total = items.Count;
+        var created = 0;
+        var skipped = 0;
+
+        for (var index = 0; index < items.Count; index++)
+        {
+            var item = items[index];
+            var key = item.Position.ToString(CultureInfo.InvariantCulture);
+            var label = DescribeItem(item);
+            var prefix = string.Create(CultureInfo.InvariantCulture, $"[{index + 1}/{total}]");
+
+            if (log.Items.ContainsKey(key))
+            {
+                OnProgress?.Invoke($"{prefix} {label}: already imported on a previous run; skipping (resume).");
+                skipped++;
+                continue;
+            }
+
+            OnProgress?.Invoke($"{prefix} Importing {label}...");
+            var itemId = await CreateItemAsync(item, target.ProjectId, label, warnings, cancellationToken).ConfigureAwait(false);
+            if (itemId is null)
+            {
+                skipped++;
+                continue;
+            }
+
+            // Persist the mapping immediately so an interrupted run never duplicates this item.
+            log.Items[key] = itemId;
+            await log.SaveAsync(logDirectory, cancellationToken).ConfigureAwait(false);
+
+            await ApplyFieldValuesAsync(item, itemId, target, label, warnings, cancellationToken).ConfigureAwait(false);
+            created++;
+        }
+
+        await ApplyPositionsAsync(items, target.ProjectId, log, cancellationToken).ConfigureAwait(false);
+        await ArchiveItemsAsync(items, target.ProjectId, log, warnings, cancellationToken).ConfigureAwait(false);
+
+        OnProgress?.Invoke(string.Create(CultureInfo.InvariantCulture,
+            $"Item import finished: {created} created, {skipped} skipped, {warnings.Count} warnings."));
+
+        return new ItemImportResult { Created = created, Skipped = skipped, Warnings = warnings };
+    }
+
+    /// <summary>
+    /// Builds the draft issue body with an attribution note (original creator and creation time)
+    /// prepended, when the snapshot carries them. Returns the body unchanged otherwise.
+    /// </summary>
+    public static string? BuildDraftBody(DraftIssueSnapshot draft)
+    {
+        ArgumentNullException.ThrowIfNull(draft);
+
+        if (draft.Creator is null && draft.CreatedAt is null)
+        {
+            return draft.Body;
+        }
+
+        var note = (draft.Creator, draft.CreatedAt) switch
+        {
+            (not null, not null) => $"> _Originally created by @{draft.Creator} on {draft.CreatedAt}._",
+            (not null, null) => $"> _Originally created by @{draft.Creator}._",
+            _ => $"> _Originally created on {draft.CreatedAt}._",
+        };
+
+        return string.IsNullOrEmpty(draft.Body) ? note : note + "\n\n" + draft.Body;
+    }
+
+    private async Task<string?> CreateItemAsync(ItemSnapshot item, string projectId, string label, List<string> warnings, CancellationToken cancellationToken)
+    {
+        switch (item.Type)
+        {
+            case "ISSUE" or "PULL_REQUEST":
+                return await CreateContentItemAsync(item, projectId, label, warnings, cancellationToken).ConfigureAwait(false);
+
+            case "DRAFT_ISSUE" when item.Draft is not null:
+                return await CreateDraftItemAsync(item.Draft, projectId, warnings, cancellationToken).ConfigureAwait(false);
+
+            default:
+                Warn(warnings, $"{label}: unsupported or incomplete item (type '{item.Type}'); skipping.");
+                return null;
+        }
+    }
+
+    private async Task<string?> CreateContentItemAsync(ItemSnapshot item, string projectId, string label, List<string> warnings, CancellationToken cancellationToken)
+    {
+        if (item.Repository is null || item.Number is null)
+        {
+            Warn(warnings, $"{label}: snapshot is missing the repository or number; skipping.");
+            return null;
+        }
+
+        if (!RepositoryMapping.TryGetValue(item.Repository, out var targetRepository))
+        {
+            Warn(warnings, $"{label}: no repository mapping for '{item.Repository}'; skipping.");
+            return null;
+        }
+
+        var separator = targetRepository.IndexOf('/', StringComparison.Ordinal);
+        if (separator <= 0 || separator == targetRepository.Length - 1)
+        {
+            Warn(warnings, $"{label}: mapped repository '{targetRepository}' is not in 'owner/name' form; skipping.");
+            return null;
+        }
+
+        var owner = targetRepository[..separator];
+        var name = targetRepository[(separator + 1)..];
+        var contentId = await ResolveIssueOrPullRequestIdAsync(owner, name, item.Number.Value, cancellationToken).ConfigureAwait(false);
+        if (contentId is null)
+        {
+            Warn(warnings, string.Create(CultureInfo.InvariantCulture,
+                $"{label}: '{targetRepository}#{item.Number.Value}' was not found in the target; skipping."));
+            return null;
+        }
+
+        var data = await _client.QueryAsync(
+            """
+            mutation($projectId: ID!, $contentId: ID!) {
+              addProjectV2ItemById(input: { projectId: $projectId, contentId: $contentId }) {
+                item { id }
+              }
+            }
+            """,
+            new { projectId, contentId },
+            cancellationToken).ConfigureAwait(false);
+
+        return data.GetProperty("addProjectV2ItemById").GetProperty("item").GetProperty("id").GetString();
+    }
+
+    private async Task<string?> CreateDraftItemAsync(DraftIssueSnapshot draft, string projectId, List<string> warnings, CancellationToken cancellationToken)
+    {
+        var assigneeIds = await ResolveAssigneeIdsAsync(draft, warnings, cancellationToken).ConfigureAwait(false);
+
+        var data = await _client.QueryAsync(
+            """
+            mutation($projectId: ID!, $title: String!, $body: String, $assigneeIds: [ID!]) {
+              addProjectV2DraftIssue(input: { projectId: $projectId, title: $title, body: $body, assigneeIds: $assigneeIds }) {
+                projectItem { id }
+              }
+            }
+            """,
+            new { projectId, title = draft.Title, body = BuildDraftBody(draft), assigneeIds },
+            cancellationToken).ConfigureAwait(false);
+
+        return data.GetProperty("addProjectV2DraftIssue").GetProperty("projectItem").GetProperty("id").GetString();
+    }
+
+    private async Task<string[]> ResolveAssigneeIdsAsync(DraftIssueSnapshot draft, List<string> warnings, CancellationToken cancellationToken)
+    {
+        var ids = new List<string>();
+        foreach (var login in draft.Assignees)
+        {
+            if (!UserMapping.TryGetValue(login, out var targetLogin))
+            {
+                Warn(warnings, $"draft '{draft.Title}': no user mapping for assignee '{login}'; dropping.");
+                continue;
+            }
+
+            var userId = await GetUserIdAsync(targetLogin, cancellationToken).ConfigureAwait(false);
+            if (userId is null)
+            {
+                Warn(warnings, $"draft '{draft.Title}': mapped assignee '{targetLogin}' was not found; dropping.");
+                continue;
+            }
+
+            ids.Add(userId);
+        }
+
+        return [.. ids];
+    }
+
+    private async Task ApplyFieldValuesAsync(ItemSnapshot item, string itemId, ImportResult target, string label, List<string> warnings, CancellationToken cancellationToken)
+    {
+        foreach (var value in item.FieldValues)
+        {
+            if (string.Equals(value.FieldName, TitleFieldName, StringComparison.Ordinal))
+            {
+                continue; // Set through item content.
+            }
+
+            if (!target.FieldIds.TryGetValue(value.FieldName, out var fieldId))
+            {
+                Warn(warnings, $"{label}: field '{value.FieldName}' does not exist in the target project; skipping the value.");
+                continue;
+            }
+
+            object? valueInput;
+            if (value.Text is not null)
+            {
+                valueInput = new { text = value.Text };
+            }
+            else if (value.Number is { } number)
+            {
+                valueInput = new { number };
+            }
+            else if (value.Date is not null)
+            {
+                valueInput = new { date = value.Date };
+            }
+            else if (value.SingleSelectOptionName is not null)
+            {
+                if (!target.OptionIds.TryGetValue(value.FieldName, out var options)
+                    || !options.TryGetValue(value.SingleSelectOptionName, out var optionId))
+                {
+                    Warn(warnings, $"{label}: option '{value.SingleSelectOptionName}' of field '{value.FieldName}' has no target id; skipping the value.");
+                    continue;
+                }
+
+                valueInput = new { singleSelectOptionId = optionId };
+            }
+            else if (value.IterationTitle is not null)
+            {
+                if (!target.IterationIds.TryGetValue(value.FieldName, out var iterations)
+                    || !iterations.TryGetValue(value.IterationTitle, out var iterationId))
+                {
+                    Warn(warnings, $"{label}: iteration '{value.IterationTitle}' of field '{value.FieldName}' has no target id; skipping the value.");
+                    continue;
+                }
+
+                valueInput = new { iterationId };
+            }
+            else
+            {
+                continue; // Empty value: nothing to set.
+            }
+
+            await _client.QueryAsync(
+                """
+                mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $value: ProjectV2FieldValue!) {
+                  updateProjectV2ItemFieldValue(input: { projectId: $projectId, itemId: $itemId, fieldId: $fieldId, value: $value }) {
+                    projectV2Item { id }
+                  }
+                }
+                """,
+                new { projectId = target.ProjectId, itemId, fieldId, value = valueInput },
+                cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>Restores snapshot order by chaining updateProjectV2ItemPosition (afterId = previous item's new id). Archived items are excluded.</summary>
+    private async Task ApplyPositionsAsync(List<ItemSnapshot> items, string projectId, ImportLog log, CancellationToken cancellationToken)
+    {
+        OnProgress?.Invoke("Applying item positions...");
+        string? afterId = null;
+        foreach (var item in items)
+        {
+            var key = item.Position.ToString(CultureInfo.InvariantCulture);
+            if (item.IsArchived || !log.Items.TryGetValue(key, out var itemId))
+            {
+                continue;
+            }
+
+            await _client.QueryAsync(
+                """
+                mutation($projectId: ID!, $itemId: ID!, $afterId: ID) {
+                  updateProjectV2ItemPosition(input: { projectId: $projectId, itemId: $itemId, afterId: $afterId }) {
+                    clientMutationId
+                  }
+                }
+                """,
+                new { projectId, itemId, afterId },
+                cancellationToken).ConfigureAwait(false);
+
+            afterId = itemId;
+        }
+    }
+
+    private async Task ArchiveItemsAsync(List<ItemSnapshot> items, string projectId, ImportLog log, List<string> warnings, CancellationToken cancellationToken)
+    {
+        foreach (var item in items)
+        {
+            var key = item.Position.ToString(CultureInfo.InvariantCulture);
+            if (!item.IsArchived || !log.Items.TryGetValue(key, out var itemId))
+            {
+                continue;
+            }
+
+            try
+            {
+                await _client.QueryAsync(
+                    """
+                    mutation($projectId: ID!, $itemId: ID!) {
+                      archiveProjectV2Item(input: { projectId: $projectId, itemId: $itemId }) {
+                        item { id }
+                      }
+                    }
+                    """,
+                    new { projectId, itemId },
+                    cancellationToken).ConfigureAwait(false);
+            }
+            catch (GitHubGraphQLException exception)
+            {
+                // Already archived on a previous run, or otherwise not archivable.
+                Warn(warnings, $"{DescribeItem(item)}: could not archive: {exception.Message}");
+            }
+        }
+    }
+
+    private async Task<string?> ResolveIssueOrPullRequestIdAsync(string owner, string name, int number, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var data = await _client.QueryAsync(
+                """
+                query($owner: String!, $name: String!, $number: Int!) {
+                  repository(owner: $owner, name: $name) {
+                    issueOrPullRequest(number: $number) {
+                      ... on Issue { id }
+                      ... on PullRequest { id }
+                    }
+                  }
+                }
+                """,
+                new { owner, name, number },
+                cancellationToken).ConfigureAwait(false);
+
+            var repository = data.GetProperty("repository");
+            if (repository.ValueKind != JsonValueKind.Object)
+            {
+                return null;
+            }
+
+            var content = repository.GetProperty("issueOrPullRequest");
+            return content.ValueKind == JsonValueKind.Object ? content.GetProperty("id").GetString() : null;
+        }
+        catch (GitHubGraphQLException exception) when (exception.ErrorType == "NOT_FOUND")
+        {
+            return null;
+        }
+    }
+
+    private async Task<string?> GetUserIdAsync(string login, CancellationToken cancellationToken)
+    {
+        if (_userIdCache.TryGetValue(login, out var cached))
+        {
+            return cached;
+        }
+
+        string? id;
+        try
+        {
+            var data = await _client.QueryAsync(
+                "query($login: String!) { user(login: $login) { id } }",
+                new { login },
+                cancellationToken).ConfigureAwait(false);
+
+            var user = data.GetProperty("user");
+            id = user.ValueKind == JsonValueKind.Object ? user.GetProperty("id").GetString() : null;
+        }
+        catch (GitHubGraphQLException exception) when (exception.ErrorType == "NOT_FOUND")
+        {
+            id = null;
+        }
+
+        _userIdCache[login] = id;
+        return id;
+    }
+
+    private void Warn(List<string> warnings, string message)
+    {
+        warnings.Add(message);
+        OnProgress?.Invoke("warning: " + message);
+    }
+
+    private static string DescribeItem(ItemSnapshot item) => item.Type switch
+    {
+        "DRAFT_ISSUE" => $"draft '{item.Draft?.Title}'",
+        _ when item.Repository is not null && item.Number is not null
+            => string.Create(CultureInfo.InvariantCulture, $"{item.Type} {item.Repository}#{item.Number.Value}"),
+        _ => string.Create(CultureInfo.InvariantCulture, $"item at position {item.Position}"),
+    };
+}

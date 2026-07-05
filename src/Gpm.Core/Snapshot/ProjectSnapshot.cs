@@ -219,6 +219,12 @@ public sealed record DraftIssueSnapshot
 
     public string? Body { get; init; }
 
+    /// <summary>Login of the original author (used for the attribution note on import).</summary>
+    public string? Creator { get; init; }
+
+    /// <summary>ISO 8601 creation timestamp (used for the attribution note on import).</summary>
+    public string? CreatedAt { get; init; }
+
     public required IReadOnlyList<string> Assignees { get; init; }
 }
 

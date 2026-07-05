@@ -1,4 +1,5 @@
 ﻿using System.CommandLine;
+using System.Globalization;
 using Gpm.Core.Export;
 using Gpm.Core.GitHub;
 using Gpm.Core.Import;
@@ -93,12 +94,22 @@ onConflictOption.Validators.Add(result =>
         result.AddError("--on-conflict must be one of: skip, update, fail.");
     }
 });
+var repoMappingOption = new Option<string?>("--repo-mapping")
+{
+    Description = "CSV file mapping source repositories to target repositories (header: source,target; rows: org/repo,org/repo).",
+};
+var userMappingOption = new Option<string?>("--user-mapping")
+{
+    Description = "CSV file mapping source user logins to target logins (header: source,target).",
+};
 
 var importCommand = new Command("import", "Import a JSON snapshot into the target organization.")
 {
     importOrgOption,
     inOption,
     onConflictOption,
+    repoMappingOption,
+    userMappingOption,
     tokenOption,
 };
 
@@ -128,12 +139,32 @@ importCommand.SetAction(async (parseResult, cancellationToken) =>
 
     try
     {
+        var repoMappingPath = parseResult.GetValue(repoMappingOption);
+        var userMappingPath = parseResult.GetValue(userMappingOption);
+        var repoMapping = repoMappingPath is null
+            ? System.Collections.ObjectModel.ReadOnlyDictionary<string, string>.Empty
+            : CsvMapping.Load(repoMappingPath);
+        var userMapping = userMappingPath is null
+            ? System.Collections.ObjectModel.ReadOnlyDictionary<string, string>.Empty
+            : CsvMapping.Load(userMappingPath);
+
         var snapshot = await SnapshotFile.LoadAsync(inDirectory, cancellationToken);
         var result = await importer.ImportAsync(snapshot, org, cancellationToken);
+
+        var itemImporter = new ItemImporter(client)
+        {
+            RepositoryMapping = repoMapping,
+            UserMapping = userMapping,
+            OnProgress = Console.Error.WriteLine,
+        };
+        var itemResult = await itemImporter.ImportAsync(snapshot, result, inDirectory, cancellationToken);
+
         Console.WriteLine(result.Url);
+        Console.WriteLine(string.Create(CultureInfo.InvariantCulture,
+            $"items: created={itemResult.Created} skipped={itemResult.Skipped} warnings={itemResult.Warnings.Count}"));
         return 0;
     }
-    catch (Exception exception) when (exception is GitHubGraphQLException or InvalidOperationException or IOException)
+    catch (Exception exception) when (exception is GitHubGraphQLException or InvalidOperationException or IOException or FormatException)
     {
         Console.Error.WriteLine($"error: {exception.Message}");
         return 1;
