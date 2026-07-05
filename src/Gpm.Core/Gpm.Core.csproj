@@ -4,4 +4,8 @@
     <PackageReference Include="Microsoft.Playwright" />
   </ItemGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="Gpm.Core.Tests" />
+  </ItemGroup>
+
 </Project>

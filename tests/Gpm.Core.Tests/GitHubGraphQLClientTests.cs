@@ -1,9 +1,14 @@
+using System.Net;
+using System.Text;
+using System.Text.Json;
 using Gpm.Core.GitHub;
 
 namespace Gpm.Core.Tests;
 
 public class GitHubGraphQLClientTests
 {
+    private const string ViewerData = """{"data":{"viewer":{"login":"octocat"}}}""";
+
     [Theory]
     [InlineData("")]
     [InlineData(" ")]
@@ -25,5 +30,183 @@ public class GitHubGraphQLClientTests
 
         await Assert.ThrowsAsync<ArgumentException>(
             () => client.QueryAsync("", cancellationToken: TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
+    public async Task Forbidden_with_RetryAfter_waits_and_retries()
+    {
+        var forbidden = new HttpResponseMessage(HttpStatusCode.Forbidden)
+        {
+            Content = new StringContent("""{"message":"rate limited"}""", Encoding.UTF8, "application/json"),
+        };
+        forbidden.Headers.Add("Retry-After", "7");
+
+        using var handler = new StubHandler(forbidden, JsonResponse(HttpStatusCode.OK, ViewerData));
+        var delays = new List<TimeSpan>();
+        using var client = CreateClient(handler, delays);
+
+        var login = await client.GetViewerLoginAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal("octocat", login);
+        Assert.Equal(2, handler.RequestBodies.Count);
+        Assert.Equal([TimeSpan.FromSeconds(7)], delays);
+    }
+
+    [Fact]
+    public async Task Secondary_rate_limit_uses_exponential_backoff()
+    {
+        var secondary = """{"message":"You have exceeded a secondary rate limit. Please wait a few minutes before you try again."}""";
+        using var handler = new StubHandler(
+            JsonResponse(HttpStatusCode.Forbidden, secondary),
+            JsonResponse(HttpStatusCode.Forbidden, secondary),
+            JsonResponse(HttpStatusCode.Forbidden, secondary),
+            JsonResponse(HttpStatusCode.OK, ViewerData));
+        var delays = new List<TimeSpan>();
+        var retryMessages = new List<string>();
+        using var client = CreateClient(handler, delays);
+        client.OnRetry = retryMessages.Add;
+
+        var login = await client.GetViewerLoginAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal("octocat", login);
+        Assert.Equal(4, handler.RequestBodies.Count);
+        Assert.Equal([TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(4)], delays);
+        Assert.Equal(3, retryMessages.Count);
+        Assert.All(retryMessages, m => Assert.Contains("Secondary rate limit", m, StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task Server_errors_retry_three_times_then_throw_with_status()
+    {
+        using var handler = new StubHandler(
+            JsonResponse(HttpStatusCode.BadGateway, "bad gateway"),
+            JsonResponse(HttpStatusCode.BadGateway, "bad gateway"),
+            JsonResponse(HttpStatusCode.BadGateway, "bad gateway"),
+            JsonResponse(HttpStatusCode.BadGateway, "bad gateway"));
+        var delays = new List<TimeSpan>();
+        using var client = CreateClient(handler, delays);
+
+        var exception = await Assert.ThrowsAsync<GitHubGraphQLException>(
+            () => client.GetViewerLoginAsync(TestContext.Current.CancellationToken));
+
+        Assert.Equal(HttpStatusCode.BadGateway, exception.StatusCode);
+        Assert.Equal(4, handler.RequestBodies.Count);
+        Assert.Equal([TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(4)], delays);
+    }
+
+    [Fact]
+    public async Task GraphQL_errors_are_surfaced_with_errors_json_and_type()
+    {
+        var body = """{"data":null,"errors":[{"type":"NOT_FOUND","message":"Could not resolve to an Organization."}]}""";
+        using var handler = new StubHandler(JsonResponse(HttpStatusCode.OK, body));
+        using var client = CreateClient(handler, []);
+
+        var exception = await Assert.ThrowsAsync<GitHubGraphQLException>(
+            () => client.QueryAsync("query { nothing }", cancellationToken: TestContext.Current.CancellationToken));
+
+        Assert.Equal("NOT_FOUND", exception.ErrorType);
+        Assert.NotNull(exception.ErrorsJson);
+        Assert.Contains("Could not resolve to an Organization.", exception.ErrorsJson, StringComparison.Ordinal);
+        Assert.Null(exception.StatusCode);
+    }
+
+    [Fact]
+    public async Task QueryPaginatedAsync_enumerates_all_nodes_across_pages()
+    {
+        var page1 = """
+            {"data":{"organization":{"projectsV2":{
+              "nodes":[{"title":"P1"},{"title":"P2"}],
+              "pageInfo":{"hasNextPage":true,"endCursor":"CURSOR-1"}}}}}
+            """;
+        var page2 = """
+            {"data":{"organization":{"projectsV2":{
+              "nodes":[{"title":"P3"}],
+              "pageInfo":{"hasNextPage":false,"endCursor":null}}}}}
+            """;
+        using var handler = new StubHandler(
+            JsonResponse(HttpStatusCode.OK, page1),
+            JsonResponse(HttpStatusCode.OK, page2));
+        using var client = CreateClient(handler, []);
+
+        var titles = new List<string?>();
+        await foreach (var node in client.QueryPaginatedAsync(
+            "query($login: String!, $after: String) { organization(login: $login) { projectsV2(first: 2, after: $after) { nodes { title } pageInfo { hasNextPage endCursor } } } }",
+            new { login = "gpm-source" },
+            "organization.projectsV2",
+            cancellationToken: TestContext.Current.CancellationToken))
+        {
+            titles.Add(node.GetProperty("title").GetString());
+        }
+
+        Assert.Equal(["P1", "P2", "P3"], titles);
+        Assert.Equal(2, handler.RequestBodies.Count);
+
+        // First request sends a null cursor; second one carries the endCursor of page 1.
+        using var first = JsonDocument.Parse(handler.RequestBodies[0]);
+        Assert.Equal(JsonValueKind.Null, first.RootElement.GetProperty("variables").GetProperty("after").ValueKind);
+        Assert.Equal("gpm-source", first.RootElement.GetProperty("variables").GetProperty("login").GetString());
+
+        using var second = JsonDocument.Parse(handler.RequestBodies[1]);
+        Assert.Equal("CURSOR-1", second.RootElement.GetProperty("variables").GetProperty("after").GetString());
+    }
+
+    [Fact]
+    public async Task Primary_rate_limit_exhaustion_waits_until_reset()
+    {
+        var reset = DateTimeOffset.UtcNow.AddSeconds(30).ToUnixTimeSeconds();
+        var response = JsonResponse(HttpStatusCode.OK, ViewerData);
+        response.Headers.Add("X-RateLimit-Remaining", "0");
+        response.Headers.Add("X-RateLimit-Reset", reset.ToString(System.Globalization.CultureInfo.InvariantCulture));
+
+        using var handler = new StubHandler(response);
+        var delays = new List<TimeSpan>();
+        using var client = CreateClient(handler, delays);
+
+        var login = await client.GetViewerLoginAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal("octocat", login);
+        var delay = Assert.Single(delays);
+        Assert.InRange(delay, TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(30));
+    }
+
+    private static GitHubGraphQLClient CreateClient(StubHandler handler, List<TimeSpan> delays)
+        => new("dummy-token", baseUrl: null, handler, (delay, _) =>
+        {
+            delays.Add(delay);
+            return Task.CompletedTask;
+        });
+
+    private static HttpResponseMessage JsonResponse(HttpStatusCode statusCode, string body)
+        => new(statusCode) { Content = new StringContent(body, Encoding.UTF8, "application/json") };
+
+    private sealed class StubHandler : HttpMessageHandler
+    {
+        private readonly Queue<HttpResponseMessage> _responses;
+
+        public StubHandler(params HttpResponseMessage[] responses)
+        {
+            _responses = new Queue<HttpResponseMessage>(responses);
+        }
+
+        public List<string> RequestBodies { get; } = [];
+
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            RequestBodies.Add(await request.Content!.ReadAsStringAsync(cancellationToken));
+            return _responses.Dequeue();
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+            {
+                while (_responses.Count > 0)
+                {
+                    _responses.Dequeue().Dispose();
+                }
+            }
+
+            base.Dispose(disposing);
+        }
     }
 }
