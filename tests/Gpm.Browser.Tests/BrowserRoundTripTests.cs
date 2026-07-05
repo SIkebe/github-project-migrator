@@ -90,4 +90,83 @@ public class BrowserRoundTripTests
                 CancellationToken.None);
         }
     }
+
+    /// <summary>
+    /// M7 E2E: exports the fixture workflows (GraphQL + UI scrape), imports them into a
+    /// fresh target project (workflows via browser automation, Auto-add repository
+    /// resolved through the repo mapping), re-exports the target and asserts the
+    /// enabled state / content types / status values / filter / repository round-trip.
+    /// Kept independent of the views E2E so each run stays focused (and faster).
+    /// </summary>
+    [Fact]
+    public async Task Workflows_round_trip_through_browser_automation()
+    {
+        var statePath = Environment.GetEnvironmentVariable("GPM_BROWSER_STATE");
+        Assert.SkipWhen(
+            string.IsNullOrWhiteSpace(statePath) || !File.Exists(statePath),
+            "GPM_BROWSER_STATE is not set or the file does not exist; skipping browser E2E test.");
+        var token = Environment.GetEnvironmentVariable("GPM_TEST_TOKEN");
+        Assert.SkipWhen(string.IsNullOrWhiteSpace(token), "GPM_TEST_TOKEN is not set; skipping browser E2E test.");
+
+        var cancellationToken = TestContext.Current.CancellationToken;
+        using var client = new GitHubGraphQLClient(token!);
+        await using var session = new BrowserSession(new BrowserSessionOptions { StatePath = statePath });
+
+        // Export the fixture with workflow UI settings and retarget it under a unique title.
+        var exporter = new ProjectExporter(client);
+        var workflowExporter = new WorkflowUiExporter(session);
+        var source = await exporter.ExportAsync(SourceOrg, FixtureProjectNumber, cancellationToken);
+        source = await workflowExporter.EnrichAsync(source, SourceOrg, FixtureProjectNumber, cancellationToken);
+        Assert.Empty(workflowExporter.Warnings);
+        Assert.All(source.Workflows, w => Assert.NotNull(w.Ui));
+        Assert.Contains(source.Workflows, w => w.Ui!.Repository is not null); // fixture Auto-add
+
+        var title = "gpm-browser-wf-test-" + Guid.NewGuid().ToString("N");
+        var snapshot = source with { Project = source.Project with { Title = title } };
+
+        var importer = new ProjectImporter(client);
+        var result = await importer.ImportAsync(snapshot, TargetOrg, cancellationToken);
+        try
+        {
+            var workflowImporter = new WorkflowUiImporter(session)
+            {
+                RepositoryMapping = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+                {
+                    [$"{SourceOrg}/fixture-repo"] = $"{TargetOrg}/fixture-repo",
+                },
+            };
+            await workflowImporter.ImportAsync(snapshot, TargetOrg, result.ProjectNumber, cancellationToken);
+            Assert.Empty(workflowImporter.Warnings);
+            Assert.Equal(snapshot.Workflows.Count, workflowImporter.ImportedCount);
+
+            // Re-export the target (GraphQL + UI scrape) and diff the workflows by name.
+            var reExported = await exporter.ExportAsync(TargetOrg, result.ProjectNumber, cancellationToken);
+            var reExportUi = new WorkflowUiExporter(session);
+            reExported = await reExportUi.EnrichAsync(reExported, TargetOrg, result.ProjectNumber, cancellationToken);
+            Assert.Empty(reExportUi.Warnings);
+
+            Assert.Equal(
+                snapshot.Workflows.Select(w => w.Name).Order(StringComparer.Ordinal),
+                reExported.Workflows.Select(w => w.Name).Order(StringComparer.Ordinal));
+            foreach (var expected in snapshot.Workflows)
+            {
+                var actual = Assert.Single(reExported.Workflows, w => string.Equals(w.Name, expected.Name, StringComparison.Ordinal));
+                Assert.Equal(expected.Enabled, actual.Enabled);
+
+                Assert.NotNull(expected.Ui);
+                Assert.NotNull(actual.Ui);
+                Assert.Equal(expected.Ui!.ContentTypes ?? [], actual.Ui!.ContentTypes ?? []);
+                Assert.Equal(expected.Ui.StatusValue, actual.Ui.StatusValue);
+                Assert.Equal(expected.Ui.Filter, actual.Ui.Filter);
+                Assert.Equal(expected.Ui.Repository, actual.Ui.Repository); // short names ("fixture-repo" on both sides)
+            }
+        }
+        finally
+        {
+            await client.QueryAsync(
+                "mutation($projectId: ID!) { deleteProjectV2(input: { projectId: $projectId }) { projectV2 { id } } }",
+                new { projectId = result.ProjectId },
+                CancellationToken.None);
+        }
+    }
 }

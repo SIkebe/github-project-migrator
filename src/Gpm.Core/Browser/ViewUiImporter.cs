@@ -130,8 +130,7 @@ public sealed class ViewUiImporter
         var page = await _session.GetPageAsync(cancellationToken).ConfigureAwait(false);
         var url = string.Create(CultureInfo.InvariantCulture,
             $"{_session.BaseUrl}/orgs/{orgLogin}/projects/{projectNumber}");
-        await page.GotoAsync(url).ConfigureAwait(false);
-        BrowserSession.EnsureSignedIn(page);
+        await _session.GotoAsync(url, cancellationToken).ConfigureAwait(false);
         await Sel.ViewTab(page, DefaultViewName).First.WaitForAsync().ConfigureAwait(false);
 
         var reuseDefault = ShouldReuseDefaultView(views);
@@ -192,9 +191,23 @@ public sealed class ViewUiImporter
 
     private static async Task RenameSelectedTabAsync(IPage page, string name, CancellationToken cancellationToken)
     {
-        await Sel.SelectedViewTab(page).First.DblClickAsync().ConfigureAwait(false);
+        // The double-click occasionally lands while the freshly created tab is still
+        // settling and no rename textbox appears — retry a few times.
         var textbox = Sel.ViewNameTextbox(page);
-        await textbox.WaitForAsync().ConfigureAwait(false);
+        for (var attempt = 1; ; attempt++)
+        {
+            await Sel.SelectedViewTab(page).First.DblClickAsync().ConfigureAwait(false);
+            try
+            {
+                await textbox.WaitForAsync(new() { Timeout = 5_000 }).ConfigureAwait(false);
+                break;
+            }
+            catch (PlaywrightException) when (attempt < 3)
+            {
+                await PauseAsync(cancellationToken).ConfigureAwait(false);
+            }
+        }
+
         await textbox.FillAsync(name).ConfigureAwait(false);
         await textbox.PressAsync("Enter").ConfigureAwait(false);
         await PauseAsync(cancellationToken).ConfigureAwait(false);

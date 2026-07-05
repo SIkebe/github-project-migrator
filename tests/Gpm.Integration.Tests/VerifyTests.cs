@@ -9,11 +9,12 @@ namespace Gpm.Integration.Tests;
 
 /// <summary>
 /// M5 integration tests: exports the fixture project, imports it into gpm-target and
-/// verifies that <see cref="ProjectVerifier"/> reports a match (views/workflows produce
-/// warnings only until M6/M7). Then drifts the target on purpose — deletes one custom
-/// field via <c>deleteProjectV2Field</c> and changes an item's Status value — and asserts
-/// both differences are detected as errors. The target project is deleted in a finally
-/// block. Requires the GPM_TEST_TOKEN environment variable (SSO-authorized).
+/// verifies that <see cref="ProjectVerifier"/> reports no differences beyond the
+/// views/workflows that only the browser module migrates (errors since M6/M7; this
+/// test imports via the API only). Then drifts the target on purpose — deletes one
+/// custom field via <c>deleteProjectV2Field</c> and changes an item's Status value —
+/// and asserts both differences are detected as errors. The target project is deleted
+/// in a finally block. Requires the GPM_TEST_TOKEN environment variable (SSO-authorized).
 /// </summary>
 public class VerifyTests
 {
@@ -55,14 +56,13 @@ public class VerifyTests
 
             var verifier = new ProjectVerifier(client);
 
-            // 1) Right after a full import the target matches the snapshot (items are
-            //    eventually consistent, so poll until the report has no errors).
-            var matchReport = await VerifyUntilAsync(verifier, snapshot, result.ProjectNumber, r => r.IsMatch, cancellationToken);
-            Assert.True(matchReport.IsMatch, Describe(matchReport));
-            Assert.DoesNotContain(matchReport.Differences, d => d.Severity == VerifySeverity.Error);
-
-            // Views/workflows are not migrated until M6/M7 — warnings only.
-            Assert.Contains(matchReport.Differences, d => d.Severity == VerifySeverity.Warning && d.Category == "View");
+            // 1) Right after a full API import the target matches the snapshot except for
+            //    views/workflows, which only the browser module migrates (errors since M7).
+            //    Items are eventually consistent, so poll until no other error remains.
+            var matchReport = await VerifyUntilAsync(verifier, snapshot, result.ProjectNumber, r => !HasNonBrowserError(r), cancellationToken);
+            Assert.DoesNotContain(matchReport.Differences, d => d.Severity == VerifySeverity.Error && !IsBrowserCategory(d));
+            Assert.Contains(matchReport.Differences, d => d.Severity == VerifySeverity.Error && d.Category == "View");
+            Assert.Contains(matchReport.Differences, d => d.Severity == VerifySeverity.Error && d.Category == "Workflow");
 
             // 2) Drift the target: delete one custom TEXT field...
             var fieldName = snapshot.Fields.First(f => f.DataType == "TEXT").Name;
@@ -141,6 +141,13 @@ public class VerifyTests
 
     private static string Describe(VerifyReport report)
         => string.Join(Environment.NewLine, report.Differences.Select(d => $"{d.Severity} {d.Category}: {d.Message}"));
+
+    /// <summary>Views/workflows are migrated only by the browser module, not by an API-only import.</summary>
+    private static bool IsBrowserCategory(VerifyDifference difference)
+        => difference.Category is "View" or "Workflow";
+
+    private static bool HasNonBrowserError(VerifyReport report)
+        => report.Differences.Any(d => d.Severity == VerifySeverity.Error && !IsBrowserCategory(d));
 
     private static async Task DeleteProjectAsync(GitHubGraphQLClient client, string projectId)
     {

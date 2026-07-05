@@ -61,8 +61,7 @@ public sealed class ViewUiExporter
     {
         var url = string.Create(CultureInfo.InvariantCulture,
             $"{_session.BaseUrl}/orgs/{orgLogin}/projects/{projectNumber}/views/{view.Number}");
-        await page.GotoAsync(url).ConfigureAwait(false);
-        BrowserSession.EnsureSignedIn(page);
+        await _session.GotoAsync(url, cancellationToken).ConfigureAwait(false);
 
         await Sel.ViewMenuButton(page).ClickAsync().ConfigureAwait(false);
         var menu = Sel.OpenMenu(page);

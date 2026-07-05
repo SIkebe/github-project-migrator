@@ -9,10 +9,10 @@ namespace Gpm.Core.Verify;
 /// Verifies a migrated project against its source snapshot (M5). The target project is
 /// read back through <see cref="ProjectExporter"/> and compared with the snapshot:
 /// project metadata (title excluded — it may be changed on import), fields (options,
-/// iterations), views/workflows (name-based, warnings only until the browser module
-/// migrates workflows in M7; view UI-only <c>Ui</c> settings are compared when both
-/// sides carry them) and items (counts, per-type counts, field values, order, archived
-/// state). Draft bodies are compared with the import attribution note stripped.
+/// iterations), views/workflows (name-based; name/layout/enabled differences are errors
+/// since M6/M7 migrate them, browser-scraped <c>Ui</c> details are compared as warnings
+/// when both sides carry them) and items (counts, per-type counts, field values, order,
+/// archived state). Draft bodies are compared with the import attribution note stripped.
 /// </summary>
 public sealed class ProjectVerifier
 {
@@ -220,7 +220,7 @@ public sealed class ProjectVerifier
         return merged;
     }
 
-    // ----- views / workflows (warnings until M6/M7 migrate them) -----
+    // ----- views / workflows (errors since M6/M7 migrate them; UI details stay warnings) -----
 
     private static void CompareViews(IReadOnlyList<ViewSnapshot> source, IReadOnlyList<ViewSnapshot> target, List<VerifyDifference> differences)
     {
@@ -231,27 +231,27 @@ public sealed class ProjectVerifier
 
             if (s.Count == 0)
             {
-                Add(differences, VerifySeverity.Warning, ViewCategory, $"view '{name}' exists only in the target");
+                AddError(differences, ViewCategory, $"view '{name}' exists only in the target");
             }
             else if (t.Count == 0)
             {
-                Add(differences, VerifySeverity.Warning, ViewCategory, $"view '{name}' is missing in the target (views are migrated by the browser module, M6)");
+                AddError(differences, ViewCategory, $"view '{name}' is missing in the target");
             }
             else if (s.Count != t.Count)
             {
-                Add(differences, VerifySeverity.Warning, ViewCategory, string.Create(CultureInfo.InvariantCulture,
+                AddError(differences, ViewCategory, string.Create(CultureInfo.InvariantCulture,
                     $"view '{name}': count mismatch (source {s.Count}, target {t.Count})"));
             }
             else if (!s.Select(v => v.Layout).Order(StringComparer.Ordinal)
                 .SequenceEqual(t.Select(v => v.Layout).Order(StringComparer.Ordinal), StringComparer.Ordinal))
             {
-                Add(differences, VerifySeverity.Warning, ViewCategory,
+                AddError(differences, ViewCategory,
                     $"view '{name}': layout mismatch (source {string.Join(", ", s.Select(v => v.Layout))}, target {string.Join(", ", t.Select(v => v.Layout))})");
             }
             else if (s.Count == 1 && t.Count == 1 && s[0].Ui is { } sourceUi && t[0].Ui is { } targetUi)
             {
                 // Both sides carry browser-scraped UI settings (M6): compare them too.
-                // Still warnings until views are promoted to errors after M7.
+                // UI details remain warnings (scrape granularity can differ between runs).
                 CompareViewUi(name, sourceUi, targetUi, differences);
             }
         }
@@ -309,22 +309,49 @@ public sealed class ProjectVerifier
 
             if (s.Count == 0)
             {
-                Add(differences, VerifySeverity.Warning, WorkflowCategory, $"workflow '{name}' exists only in the target");
+                AddError(differences, WorkflowCategory, $"workflow '{name}' exists only in the target");
             }
             else if (t.Count == 0)
             {
-                Add(differences, VerifySeverity.Warning, WorkflowCategory, $"workflow '{name}' is missing in the target (workflows are migrated by the browser module, M7)");
+                AddError(differences, WorkflowCategory, $"workflow '{name}' is missing in the target");
             }
             else if (s.Count != t.Count)
             {
-                Add(differences, VerifySeverity.Warning, WorkflowCategory, string.Create(CultureInfo.InvariantCulture,
+                AddError(differences, WorkflowCategory, string.Create(CultureInfo.InvariantCulture,
                     $"workflow '{name}': count mismatch (source {s.Count}, target {t.Count})"));
             }
             else if (!s.Select(w => w.Enabled).Order().SequenceEqual(t.Select(w => w.Enabled).Order()))
             {
-                Add(differences, VerifySeverity.Warning, WorkflowCategory,
+                AddError(differences, WorkflowCategory,
                     $"workflow '{name}': enabled state mismatch (source {string.Join(", ", s.Select(w => w.Enabled))}, target {string.Join(", ", t.Select(w => w.Enabled))})");
             }
+            else if (s.Count == 1 && t.Count == 1 && s[0].Ui is { } sourceUi && t[0].Ui is { } targetUi)
+            {
+                // Both sides carry browser-scraped UI settings (M7): compare them too.
+                CompareWorkflowUi(name, sourceUi, targetUi, differences);
+            }
+        }
+    }
+
+    private static void CompareWorkflowUi(string name, WorkflowUiSnapshot source, WorkflowUiSnapshot target, List<VerifyDifference> differences)
+    {
+        if (!UiListEquals(source.ContentTypes, target.ContentTypes))
+        {
+            Add(differences, VerifySeverity.Warning, WorkflowCategory,
+                $"workflow '{name}': content types mismatch (source [{JoinUi(source.ContentTypes)}], target [{JoinUi(target.ContentTypes)}])");
+        }
+
+        CompareWorkflowUiValue(differences, name, "status value", source.StatusValue, target.StatusValue);
+        CompareWorkflowUiValue(differences, name, "filter", source.Filter, target.Filter);
+        CompareWorkflowUiValue(differences, name, "repository", source.Repository, target.Repository);
+    }
+
+    private static void CompareWorkflowUiValue(List<VerifyDifference> differences, string workflowName, string setting, string? source, string? target)
+    {
+        if (!string.Equals(source, target, StringComparison.Ordinal))
+        {
+            Add(differences, VerifySeverity.Warning, WorkflowCategory,
+                $"workflow '{workflowName}': {setting} mismatch (source '{source ?? "none"}', target '{target ?? "none"}')");
         }
     }
 

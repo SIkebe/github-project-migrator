@@ -73,6 +73,7 @@ exportCommand.SetAction(async (parseResult, cancellationToken) =>
     try
     {
         ViewUiExporter? uiExporter = null;
+        WorkflowUiExporter? workflowExporter = null;
         if (enableBrowserAutomation)
         {
             session = new BrowserSession(new BrowserSessionOptions
@@ -80,16 +81,18 @@ exportCommand.SetAction(async (parseResult, cancellationToken) =>
                 Profile = parseResult.GetValue(browserProfileOption),
             });
             uiExporter = new ViewUiExporter(session) { OnProgress = Console.Error.WriteLine };
-            exporter.PostExportAsync = (snapshot, ct) => uiExporter.EnrichAsync(snapshot, org, projectNumber, ct);
+            workflowExporter = new WorkflowUiExporter(session) { OnProgress = Console.Error.WriteLine };
+            exporter.PostExportAsync = async (snapshot, ct) =>
+            {
+                snapshot = await uiExporter.EnrichAsync(snapshot, org, projectNumber, ct);
+                return await workflowExporter.EnrichAsync(snapshot, org, projectNumber, ct);
+            };
         }
 
         var snapshot = await exporter.ExportAsync(org, projectNumber, cancellationToken);
-        if (uiExporter is not null)
+        foreach (var warning in (uiExporter?.Warnings ?? []).Concat(workflowExporter?.Warnings ?? []))
         {
-            foreach (var warning in uiExporter.Warnings)
-            {
-                Console.Error.WriteLine($"warning: {warning}");
-            }
+            Console.Error.WriteLine($"warning: {warning}");
         }
 
         var path = await SnapshotFile.SaveAsync(snapshot, outDirectory, cancellationToken);
@@ -204,6 +207,8 @@ importCommand.SetAction(async (parseResult, cancellationToken) =>
         var itemResult = await itemImporter.ImportAsync(snapshot, result, inDirectory, cancellationToken);
 
         var viewWarnings = 0;
+        var workflowWarnings = 0;
+        var workflowsImported = 0;
         if (enableBrowserAutomation)
         {
             await using var session = new BrowserSession(new BrowserSessionOptions
@@ -218,6 +223,20 @@ importCommand.SetAction(async (parseResult, cancellationToken) =>
             }
 
             viewWarnings = viewImporter.Warnings.Count;
+
+            var workflowImporter = new WorkflowUiImporter(session)
+            {
+                RepositoryMapping = repoMapping,
+                OnProgress = Console.Error.WriteLine,
+            };
+            await workflowImporter.ImportAsync(snapshot, org, result.ProjectNumber, cancellationToken);
+            foreach (var warning in workflowImporter.Warnings)
+            {
+                Console.Error.WriteLine($"warning: {warning}");
+            }
+
+            workflowWarnings = workflowImporter.Warnings.Count;
+            workflowsImported = workflowImporter.ImportedCount;
         }
 
         Console.WriteLine(result.Url);
@@ -227,6 +246,8 @@ importCommand.SetAction(async (parseResult, cancellationToken) =>
         {
             Console.WriteLine(string.Create(CultureInfo.InvariantCulture,
                 $"views: imported={snapshot.Views.Count} warnings={viewWarnings}"));
+            Console.WriteLine(string.Create(CultureInfo.InvariantCulture,
+                $"workflows: imported={workflowsImported} warnings={workflowWarnings}"));
         }
 
         return 0;

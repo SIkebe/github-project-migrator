@@ -250,7 +250,7 @@ public class ProjectVerifierTests
     // ----- views / workflows -----
 
     [Fact]
-    public void View_and_workflow_differences_are_warnings_until_the_browser_module_lands()
+    public void View_and_workflow_differences_are_errors_since_the_browser_module_migrates_them()
     {
         var source = BuildSnapshot();
         var target = source with
@@ -261,11 +261,68 @@ public class ProjectVerifierTests
 
         var report = ProjectVerifier.Compare(source, target);
 
+        Assert.False(report.IsMatch);
+        Assert.Contains(report.Differences, d => d.Severity == VerifySeverity.Error && d.Category == "View" && d.Message.Contains("'Table'", StringComparison.Ordinal) && d.Message.Contains("missing", StringComparison.Ordinal));
+        Assert.Contains(report.Differences, d => d.Severity == VerifySeverity.Error && d.Category == "View" && d.Message.Contains("'View 1'", StringComparison.Ordinal) && d.Message.Contains("only in the target", StringComparison.Ordinal));
+        Assert.Contains(report.Differences, d => d.Severity == VerifySeverity.Error && d.Category == "Workflow" && d.Message.Contains("enabled state mismatch", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void View_layout_mismatch_is_an_error()
+    {
+        var source = BuildSnapshot();
+        var target = source with { Views = [source.Views[0] with { Layout = "BOARD_LAYOUT" }] };
+
+        var report = ProjectVerifier.Compare(source, target);
+
+        Assert.Contains(report.Differences, d =>
+            d.Severity == VerifySeverity.Error && d.Category == "View" && d.Message.Contains("layout mismatch", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Workflow_ui_differences_are_warnings_when_both_sides_carry_ui()
+    {
+        var ui = new WorkflowUiSnapshot
+        {
+            ContentTypes = ["ISSUE", "PULL_REQUEST"],
+            StatusValue = "Done",
+            Filter = "is:issue is:open",
+            Repository = "fixture-repo",
+        };
+        var source = BuildSnapshot();
+        source = source with { Workflows = [source.Workflows[0] with { Ui = ui }] };
+        var target = source with
+        {
+            Workflows =
+            [
+                source.Workflows[0] with
+                {
+                    Ui = ui with { StatusValue = "Todo", Repository = "other-repo" },
+                },
+            ],
+        };
+
+        var report = ProjectVerifier.Compare(source, target);
+
         Assert.True(report.IsMatch);
-        Assert.Contains(report.Differences, d => d.Severity == VerifySeverity.Warning && d.Category == "View" && d.Message.Contains("'Table'", StringComparison.Ordinal));
-        Assert.Contains(report.Differences, d => d.Severity == VerifySeverity.Warning && d.Category == "View" && d.Message.Contains("'View 1'", StringComparison.Ordinal));
-        Assert.Contains(report.Differences, d => d.Severity == VerifySeverity.Warning && d.Category == "Workflow" && d.Message.Contains("enabled state mismatch", StringComparison.Ordinal));
-        Assert.DoesNotContain(report.Differences, d => d.Severity == VerifySeverity.Error);
+        Assert.Contains(report.Differences, d =>
+            d.Severity == VerifySeverity.Warning && d.Category == "Workflow" && d.Message.Contains("status value mismatch", StringComparison.Ordinal));
+        Assert.Contains(report.Differences, d =>
+            d.Severity == VerifySeverity.Warning && d.Category == "Workflow" && d.Message.Contains("repository mismatch", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Workflow_ui_comparison_is_skipped_when_one_side_has_no_ui()
+    {
+        var source = BuildSnapshot();
+        source = source with
+        {
+            Workflows = [source.Workflows[0] with { Ui = new WorkflowUiSnapshot { StatusValue = "Done" } }],
+        };
+
+        var report = ProjectVerifier.Compare(source, BuildSnapshot());
+
+        Assert.DoesNotContain(report.Differences, d => d.Category == "Workflow");
     }
 
     // ----- items -----

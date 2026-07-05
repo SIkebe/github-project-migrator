@@ -30,4 +30,14 @@
 
 - Views: 1=View 1 (TABLE), 2=Fixture Board (BOARD), 3=Fixture Roadmap (ROADMAP, Dates: Fixture Date → Fixture Sprint end)
 - Workflows: 7 enabled(既定 6 + Auto-add to project #7: repo=fixture-repo, filter=`is:issue is:open`)
-- fixture-repo: private, Issue #1/#2(open)
+- fixture-repo: private, Issue #1/#2(gpm-target 側にも同名 repo あり — workflow E2E 用)
+
+## M7 E2E 実走で確定した追加知見(2026-07-05)
+
+1. **Status options を API で上書きすると、既定 workflow の値バインディングが外れる**。外れた状態の "Set value" ボタンの accessible name は **"Set valueundefined"**(GitHub UI の quirk)+ "A value is required" 表示。→ import では全 workflow の Set value 再設定が必須(実装済み)
+2. **セレクター regex はプレフィックス一致のみにする**。accessible name は改行を含むことがあり `$` アンカーは不一致を起こす("Set value : "・"When ... : " の値サフィックスはバインディング消失時に消えるため必須にしない)
+3. **編集モードで実効差分が無いと Save ボタンは disabled のまま** → クリック待ちでハング。disabled なら Discard で抜ける(SaveWorkflowAsync 実装済み)
+4. **リポジトリ picker は入力後に非同期で再フィルター**(デバウンス+fetch)→ option は CountAsync 即時判定でなく WaitForAsync(10s) で待つ
+5. View タブの**リネーム用ダブルクリックは新規タブ作成直後に不発になることがある** → textbox 出現を 5s 待ち×3 リトライ
+6. **EMU/SAML のセッションは短命**(数時間で失効)。失効時は `/login` リダイレクトではなく **enterprise SSO インタースティシャル**("Single sign-on to <Enterprise>" + Continue)が出る。BrowserSession.GotoAsync は Continue 自動クリックで IdP セッションが生きていれば透過再認証、死んでいれば失敗 → `gpm login` 再実行が必要
+7. 並列テスト実行時(browser E2E + integration 同時)は SPA ハイドレーションが遅くなる → Playwright 既定タイムアウトは 30s に設定

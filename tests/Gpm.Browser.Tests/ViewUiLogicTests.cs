@@ -138,7 +138,7 @@ public class ViewUiLogicTests
         var difference = Assert.Single(report.Differences, d => d.Category == "View");
         Assert.Equal(VerifySeverity.Warning, difference.Severity);
         Assert.Contains("slice by mismatch", difference.Message, StringComparison.Ordinal);
-        Assert.True(report.IsMatch, "Ui differences stay warnings until views are promoted after M7.");
+        Assert.True(report.IsMatch, "Browser-scraped Ui details stay warnings (scrape granularity can differ between runs).");
     }
 
     [Fact]

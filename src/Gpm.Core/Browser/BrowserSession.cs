@@ -94,9 +94,34 @@ public sealed class BrowserSession : IAsyncDisposable
             // A narrow viewport collapses the column menus (BROWSER_AUTOMATION_PLAN §1.4).
             ViewportSize = new() { Width = 1600, Height = 1000 },
         }).ConfigureAwait(false);
-        _context.SetDefaultTimeout(15_000);
+        // 30s: generous enough to absorb slow SPA hydration under CPU contention
+        // (e.g. browser E2E running in parallel with the integration test suite).
+        _context.SetDefaultTimeout(30_000);
         _page = await _context.NewPageAsync().ConfigureAwait(false);
         return _page;
+    }
+
+    /// <summary>
+    /// Navigates the session page to <paramref name="url"/>, fails fast on a login
+    /// redirect and transparently completes the enterprise SSO "Single sign-on to ..."
+    /// interstitial (M7 discovery: clicking "Continue" re-authenticates through the
+    /// stored IdP session without interaction and returns to the original URL).
+    /// </summary>
+    public async Task<IPage> GotoAsync(string url, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(url);
+        var page = await GetPageAsync(cancellationToken).ConfigureAwait(false);
+        await page.GotoAsync(url).ConfigureAwait(false);
+        EnsureSignedIn(page);
+
+        if (await Sel.SsoHeading(page).CountAsync().ConfigureAwait(false) > 0)
+        {
+            await Sel.SsoContinueButton(page).First.ClickAsync().ConfigureAwait(false);
+            await page.WaitForURLAsync(url, new() { Timeout = 30_000 }).ConfigureAwait(false);
+            EnsureSignedIn(page);
+        }
+
+        return page;
     }
 
     /// <summary>Saves the current context's storage state to <see cref="StatePath"/>.</summary>

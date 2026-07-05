@@ -90,4 +90,78 @@ public class ViewUiSnapshotSerializationTests
             Directory.Delete(directory, recursive: true);
         }
     }
+
+    [Fact]
+    public async Task Workflow_ui_settings_round_trip_through_snapshot_file()
+    {
+        var scrapedAt = new DateTimeOffset(2026, 7, 5, 4, 5, 6, TimeSpan.Zero);
+        var snapshot = new ProjectSnapshot
+        {
+            SchemaVersion = ProjectSnapshot.CurrentSchemaVersion,
+            Project = new ProjectInfoSnapshot { Title = "t", Public = false, Closed = false },
+            Fields = [],
+            Views = [],
+            Workflows =
+            [
+                new WorkflowSnapshot
+                {
+                    Number = 6,
+                    Name = "Item added to project",
+                    Enabled = true,
+                    Ui = new WorkflowUiSnapshot
+                    {
+                        ContentTypes = ["ISSUE", "PULL_REQUEST"],
+                        StatusValue = "Todo",
+                        ScrapedAt = scrapedAt,
+                    },
+                },
+                new WorkflowSnapshot
+                {
+                    Number = 7,
+                    Name = "Auto-add to project",
+                    Enabled = true,
+                    Ui = new WorkflowUiSnapshot
+                    {
+                        Filter = "is:issue is:open",
+                        Repository = "fixture-repo",
+                        ScrapedAt = scrapedAt,
+                    },
+                },
+                new WorkflowSnapshot { Number = 1, Name = "Item closed", Enabled = false },
+            ],
+            Items = [],
+        };
+
+        var directory = Path.Combine(Path.GetTempPath(), "gpm-browser-tests-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var cancellationToken = TestContext.Current.CancellationToken;
+            await SnapshotFile.SaveAsync(snapshot, directory, cancellationToken);
+            var loaded = await SnapshotFile.LoadAsync(directory, cancellationToken);
+
+            Assert.Equal(3, loaded.Workflows.Count);
+
+            var itemAdded = loaded.Workflows[0];
+            Assert.NotNull(itemAdded.Ui);
+            Assert.Equal(["ISSUE", "PULL_REQUEST"], itemAdded.Ui!.ContentTypes);
+            Assert.Equal("Todo", itemAdded.Ui.StatusValue);
+            Assert.Null(itemAdded.Ui.Filter);
+            Assert.Null(itemAdded.Ui.Repository);
+            Assert.Equal(scrapedAt, itemAdded.Ui.ScrapedAt);
+
+            var autoAdd = loaded.Workflows[1];
+            Assert.NotNull(autoAdd.Ui);
+            Assert.Equal("is:issue is:open", autoAdd.Ui!.Filter);
+            Assert.Equal("fixture-repo", autoAdd.Ui.Repository);
+            Assert.Null(autoAdd.Ui.ContentTypes);
+            Assert.Null(autoAdd.Ui.StatusValue);
+
+            Assert.Null(loaded.Workflows[2].Ui);
+            Assert.False(loaded.Workflows[2].Enabled);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
 }

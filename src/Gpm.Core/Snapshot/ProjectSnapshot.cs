@@ -191,7 +191,10 @@ public sealed record WorkflowUiSnapshot
 
     public string? Filter { get; init; }
 
+    /// <summary>Auto-add target repository (short name; the picker is scoped to the org).</summary>
     public string? Repository { get; init; }
+
+    public DateTimeOffset? ScrapedAt { get; init; }
 }
 
 /// <summary>
