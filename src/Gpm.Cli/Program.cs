@@ -34,6 +34,10 @@ var enableBrowserOption = new Option<bool>("--enable-browser-automation")
 {
     Description = "Also migrate UI-only view settings with browser automation (requires 'gpm setup --browsers' and 'gpm login').",
 };
+var browserProfileOption = new Option<string?>("--browser-profile")
+{
+    Description = "Named browser profile from 'gpm login --profile <name>'. Use different profiles for source and target when they use different accounts (e.g. non-EMU source, EMU target).",
+};
 
 var exportCommand = new Command("export", "Export a project from the source organization to a JSON snapshot.")
 {
@@ -42,6 +46,7 @@ var exportCommand = new Command("export", "Export a project from the source orga
     outOption,
     tokenOption,
     enableBrowserOption,
+    browserProfileOption,
 };
 
 exportCommand.SetAction(async (parseResult, cancellationToken) =>
@@ -70,7 +75,10 @@ exportCommand.SetAction(async (parseResult, cancellationToken) =>
         ViewUiExporter? uiExporter = null;
         if (enableBrowserAutomation)
         {
-            session = new BrowserSession();
+            session = new BrowserSession(new BrowserSessionOptions
+            {
+                Profile = parseResult.GetValue(browserProfileOption),
+            });
             uiExporter = new ViewUiExporter(session) { OnProgress = Console.Error.WriteLine };
             exporter.PostExportAsync = (snapshot, ct) => uiExporter.EnrichAsync(snapshot, org, projectNumber, ct);
         }
@@ -145,6 +153,7 @@ var importCommand = new Command("import", "Import a JSON snapshot into the targe
     userMappingOption,
     tokenOption,
     enableBrowserOption,
+    browserProfileOption,
 };
 
 importCommand.SetAction(async (parseResult, cancellationToken) =>
@@ -197,7 +206,10 @@ importCommand.SetAction(async (parseResult, cancellationToken) =>
         var viewWarnings = 0;
         if (enableBrowserAutomation)
         {
-            await using var session = new BrowserSession();
+            await using var session = new BrowserSession(new BrowserSessionOptions
+            {
+                Profile = parseResult.GetValue(browserProfileOption),
+            });
             var viewImporter = new ViewUiImporter(session) { OnProgress = Console.Error.WriteLine };
             await viewImporter.ImportAsync(snapshot, org, result.ProjectNumber, cancellationToken);
             foreach (var warning in viewImporter.Warnings)
@@ -293,11 +305,16 @@ var statePathOption = new Option<string?>("--state-path")
 {
     Description = "File to store the browser sign-in state. Defaults to GPM_BROWSER_STATE, then %APPDATA%/gpm/browser-state.json.",
 };
+var profileOption = new Option<string?>("--profile")
+{
+    Description = "Named profile for the sign-in state (e.g. 'source', 'target'). Stored as %APPDATA%/gpm/browser-state.<profile>.json. Use with cross-account migrations.",
+};
 
 var loginCommand = new Command("login", "Sign in interactively and store browser state for UI automation.")
 {
     baseUrlOption,
     statePathOption,
+    profileOption,
 };
 
 loginCommand.SetAction(async (parseResult, cancellationToken) =>
@@ -310,6 +327,7 @@ loginCommand.SetAction(async (parseResult, cancellationToken) =>
         Headless = false,
         BaseUrl = baseUrl,
         StatePath = statePath,
+        Profile = parseResult.GetValue(profileOption),
     });
 
     try

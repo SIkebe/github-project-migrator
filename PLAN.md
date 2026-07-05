@@ -86,14 +86,31 @@ GitHub Projects V2 を組織間/製品間で移行する CLI ツール。
 
 ```
 gpm export   --org <src> [--project <num>] [--out <dir>]        # ソースから JSON へ
+             [--token <t>] [--enable-browser-automation] [--browser-profile source]
 gpm import   --org <dst> [--in <dir>] [--enable-browser-automation]  # ターゲットへ適用
+             [--token <t>] [--browser-profile target]
              [--target-base-url https://api.{tenant}.ghe.com]    # GHEC with data residency 向け
-gpm verify   --org <dst> [--in <dir>]                            # 移行結果の検証・差分レポート
-gpm login    --browser [--base-url https://{tenant}.ghe.com]     # Playwright 用 storageState 取得(ホスト別)
+gpm verify   --org <dst> [--in <dir>] [--token <t>]              # 移行結果の検証・差分レポート
+gpm login    [--profile <name>] [--base-url https://{tenant}.ghe.com]  # Playwright 用 storageState 取得(プロファイル別)
 gpm setup    --browsers                                          # Playwright ブラウザーのインストール(初回のみ)
 ```
 
-対応環境: 移行元 = GitHub.com、移行先 = GitHub.com または GitHub Enterprise Cloud with data residency(`{tenant}.ghe.com`)。**GitHub Enterprise Server はサポートしない。**
+### 2.1 アカウントモデル(クロスアカウント移行)
+
+移行元と移行先は**別アカウント・別認証**でよい(例: 移行元 = Non-EMU の個人アカウント、移行先 = EMU アカウント(with/without data residency))。
+
+| レイヤー | 分離方法 |
+|---|---|
+| GraphQL トークン | export(ソース側)と import/verify(ターゲット側)は別コマンドのため、それぞれ `--token`(または環境変数)で別トークンを指定するだけでよい |
+| ブラウザーセッション | storageState を**名前付きプロファイル**で管理(`gpm login --profile source` / `--profile target`、保存先 `%APPDATA%/gpm/browser-state.<profile>.json`)。EMU without DR はホストが github.com で同一のため、**ホスト別ではなくプロファイル別**の分離が必須 |
+
+クロスアカウント時の制約(README にも明記):
+- **Issue/PR item のリンクはターゲット側実行アカウントから見える repo に限る**。ソース org の repo がターゲットアカウントから不可視なら該当 item は warning + skip(リポジトリマッピング CSV でターゲット側に見える repo へ変換するのが基本方針)
+- **GHEC-DR テナントはテナント外(github.com)の repo をリンクできない** → DR 移行では repo-mapping が実質必須
+- EMU のユーザー名は `_shortcode` 付き → ユーザーマッピング CSV で変換(assignee 解決)
+
+対応環境: 移行元 = GitHub.com(Non-EMU / EMU)、移行先 = GitHub.com(Non-EMU / EMU)または GHEC with data residency(`{tenant}.ghe.com`)。移行元と移行先のアカウントは別々でよい。**GitHub Enterprise Server はサポートしない。**
+
 
 ## 3. アーキテクチャ
 
@@ -221,6 +238,7 @@ v1 で扱わないものと将来対応は §8 のロードマップを参照。
 2. Projects UI の View 設定 DOM の安定性(`data-testid` の有無)→ M6 着手時に Playwright codegen で調査
 3. Windows ARM64 での Playwright Chromium ネイティブ対応 → M6 で確認、不可ならブラウザー機能は win-x64/linux のみサポートと明記
 4. GHEC with data residency テナントでの動作確認(GraphQL エンドポイント `https://api.{tenant}.ghe.com/graphql`、Projects UI の DOM が GitHub.com と同一か、storageState のドメイン分離)→ DR テナントを利用できる段階で検証。それまでは「設計上対応・未検証」と README に明記
+4b. クロスアカウント移行(Non-EMU ソース → EMU ターゲット、without DR)の実地検証 → 現テスト環境(gpm-source/gpm-target は EMU 配下)+ Non-EMU アカウント(SIkebe)の組み合わせで検証可能。ブラウザープロファイル分離(§2.1)の E2E を含める
 5. Self-contained publish 時に Playwright ドライバー(.playwright フォルダー)が正しく成果物に含まれるか → M0 の publish 検証に含める
 
 ## 8. スコープとロードマップ(v1 対象外と将来対応)

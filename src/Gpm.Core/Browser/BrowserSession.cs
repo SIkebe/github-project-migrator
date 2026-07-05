@@ -27,24 +27,31 @@ public sealed class BrowserSession : IAsyncDisposable
     public string BaseUrl { get; }
 
     /// <summary>Resolved storage-state file path.</summary>
-    public string StatePath => _options.StatePath ?? DefaultStatePath();
+    public string StatePath => _options.StatePath ?? DefaultStatePath(_options.Profile);
 
     /// <summary>
-    /// Default storage-state path: the <c>GPM_BROWSER_STATE</c> environment variable,
-    /// then <c>%APPDATA%/gpm/browser-state.json</c>.
+    /// Default storage-state path. With a profile: <c>%APPDATA%/gpm/browser-state.&lt;profile&gt;.json</c>.
+    /// Without: the <c>GPM_BROWSER_STATE</c> environment variable, then <c>%APPDATA%/gpm/browser-state.json</c>.
     /// </summary>
-    public static string DefaultStatePath()
+    public static string DefaultStatePath(string? profile = null)
     {
-        var fromEnvironment = Environment.GetEnvironmentVariable("GPM_BROWSER_STATE");
-        if (!string.IsNullOrWhiteSpace(fromEnvironment))
+        if (string.IsNullOrWhiteSpace(profile))
         {
-            return fromEnvironment;
+            var fromEnvironment = Environment.GetEnvironmentVariable("GPM_BROWSER_STATE");
+            if (!string.IsNullOrWhiteSpace(fromEnvironment))
+            {
+                return fromEnvironment;
+            }
         }
+
+        var fileName = string.IsNullOrWhiteSpace(profile)
+            ? "browser-state.json"
+            : $"browser-state.{profile}.json";
 
         return Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
             "gpm",
-            "browser-state.json");
+            fileName);
     }
 
     /// <summary>
