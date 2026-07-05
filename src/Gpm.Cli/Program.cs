@@ -4,6 +4,7 @@ using Gpm.Core.Export;
 using Gpm.Core.GitHub;
 using Gpm.Core.Import;
 using Gpm.Core.Snapshot;
+using Gpm.Core.Verify;
 
 var rootCommand = new RootCommand("gpm — GitHub Projects V2 migration tool (org-to-org, including Views and Workflows).");
 
@@ -173,12 +174,66 @@ importCommand.SetAction(async (parseResult, cancellationToken) =>
 
 rootCommand.Subcommands.Add(importCommand);
 
+// verify
+var verifyOrgOption = new Option<string>("--org")
+{
+    Description = "Target organization login.",
+    Required = true,
+};
+var verifyProjectOption = new Option<int>("--project")
+{
+    Description = "Project number in the target organization.",
+    Required = true,
+};
+
+var verifyCommand = new Command("verify", "Verify a migrated project against the source snapshot and report differences.")
+{
+    verifyOrgOption,
+    verifyProjectOption,
+    inOption,
+    tokenOption,
+};
+
+verifyCommand.SetAction(async (parseResult, cancellationToken) =>
+{
+    var org = parseResult.GetValue(verifyOrgOption)!;
+    var projectNumber = parseResult.GetValue(verifyProjectOption);
+    var inDirectory = parseResult.GetValue(inOption)!;
+    var token = parseResult.GetValue(tokenOption)
+        ?? Environment.GetEnvironmentVariable("GITHUB_TOKEN")
+        ?? Environment.GetEnvironmentVariable("GPM_TOKEN");
+
+    if (string.IsNullOrWhiteSpace(token))
+    {
+        Console.Error.WriteLine("error: no token provided. Use --token or set GITHUB_TOKEN / GPM_TOKEN.");
+        return 1;
+    }
+
+    using var client = new GitHubGraphQLClient(token);
+    client.OnRetry = Console.Error.WriteLine;
+    var verifier = new ProjectVerifier(client) { OnProgress = Console.Error.WriteLine };
+
+    try
+    {
+        var snapshot = await SnapshotFile.LoadAsync(inDirectory, cancellationToken);
+        var report = await verifier.VerifyAsync(snapshot, org, projectNumber, cancellationToken);
+        WriteVerifyReport(report);
+        return report.IsMatch ? 0 : 1;
+    }
+    catch (Exception exception) when (exception is GitHubGraphQLException or InvalidOperationException or IOException or FormatException)
+    {
+        Console.Error.WriteLine($"error: {exception.Message}");
+        return 1;
+    }
+});
+
+rootCommand.Subcommands.Add(verifyCommand);
+
 // Not implemented yet.
-var verifyCommand = new Command("verify", "Verify a migrated project against the source snapshot.");
 var loginCommand = new Command("login", "Sign in interactively and store browser state for UI automation.");
 var setupCommand = new Command("setup", "Install prerequisites such as Playwright browsers.");
 
-foreach (var command in new[] { verifyCommand, loginCommand, setupCommand })
+foreach (var command in new[] { loginCommand, setupCommand })
 {
     command.SetAction(_ =>
     {
@@ -189,3 +244,31 @@ foreach (var command in new[] { verifyCommand, loginCommand, setupCommand })
 }
 
 return await rootCommand.Parse(args).InvokeAsync();
+
+// Writes the verify report to stdout as a human-readable table plus a summary line.
+static void WriteVerifyReport(VerifyReport report)
+{
+    if (report.Differences.Count == 0)
+    {
+        Console.WriteLine("OK: the target project matches the snapshot.");
+        return;
+    }
+
+    const string SeverityHeader = "SEVERITY";
+    const string CategoryHeader = "CATEGORY";
+    var severityWidth = Math.Max(SeverityHeader.Length, report.Differences.Max(d => d.Severity.ToString().Length));
+    var categoryWidth = Math.Max(CategoryHeader.Length, report.Differences.Max(d => d.Category.Length));
+
+    Console.WriteLine($"{SeverityHeader.PadRight(severityWidth)}  {CategoryHeader.PadRight(categoryWidth)}  MESSAGE");
+    foreach (var difference in report.Differences)
+    {
+        Console.WriteLine($"{difference.Severity.ToString().PadRight(severityWidth)}  {difference.Category.PadRight(categoryWidth)}  {difference.Message}");
+    }
+
+    var errors = report.Differences.Count(d => d.Severity == VerifySeverity.Error);
+    var warnings = report.Differences.Count(d => d.Severity == VerifySeverity.Warning);
+    var infos = report.Differences.Count(d => d.Severity == VerifySeverity.Info);
+    Console.WriteLine();
+    Console.WriteLine(string.Create(CultureInfo.InvariantCulture,
+        $"{errors} error(s), {warnings} warning(s), {infos} info(s). {(errors == 0 ? "Match." : "Mismatch.")}"));
+}
