@@ -135,6 +135,111 @@ For GHEC with data residency targets, sign in with `gpm login --profile target -
 
 Organization projects and user-owned projects (`--owner-type user`) are both supported.
 
+## What gpm can migrate today
+
+`gpm` is intended for migrating **Projects V2 configuration and project membership** after the underlying repositories, issues and pull requests have already been moved or made visible to the target account.
+
+### Project structure
+
+| Area | Supported? | Notes |
+|---|---:|---|
+| Organization-owned projects | ✅ | Default mode. |
+| User-owned projects | ✅ | Use `--owner-type user`. |
+| Existing target project | ✅ | Use `gpm import --project-number <n>` to merge into a project you created beforehand, for example from a template. |
+| Project title override | ✅ | Use `--project-title` when creating the target project. |
+| Project description / README / public / closed state | ✅ | Migrated through the GraphQL API. |
+| Linked repositories | ✅ | Exported and re-linked during import when the target repository can be resolved through `--repo-mapping`. |
+| Project collaborators | ⚠️ Import-only | GitHub exposes a write API but no read API for project collaborators. `gpm` cannot export them automatically; it can apply collaborators from a hand-authored snapshot. |
+| Project templates | ❌ | Template status is not part of v1. Use `--project-number` with a pre-created template project as a workaround. |
+
+### Fields and field values
+
+| Area | Supported? | Notes |
+|---|---:|---|
+| Text fields and values | ✅ | Includes Unicode, emoji and special characters. |
+| Number fields and values | ✅ | Includes decimals, negative values and zero. |
+| Date fields and values | ✅ | |
+| Single-select fields and values | ✅ | Option name, color and description are migrated. |
+| Iteration fields and values | ✅ | Active and completed iterations are migrated. Completed iterations are recreated by using past dates. |
+| Built-in fields such as Title / Assignees / Repository / Labels | ✅ / partial | Built-in fields are not recreated. Their item values are preserved where GitHub exposes a write path; Title is preserved through the item itself. |
+| Field value history | ❌ | GitHub has no API to write historical field changes. Only current values are migrated. |
+
+### Project items
+
+| Area | Supported? | Notes |
+|---|---:|---|
+| Draft issues | ✅ | Original author and timestamp are added as a note at the top of the body. |
+| Draft issue assignees | ✅ | Use `--user-mapping` when logins differ, especially for EMU targets. Unmapped users are dropped with a warning. |
+| Issues | ✅ | Re-linked through `--repo-mapping`. The target account must be able to see the target repository and item. |
+| Pull requests | ✅ | Same repository mapping and visibility requirements as issues. |
+| Item field values | ✅ | Text, number, date, single-select, iteration and Status values are restored. |
+| Item order | ✅ | Restored for non-archived items in the project-level order exposed by GitHub. |
+| Archived items | ✅ | Archived state is restored after values are applied. Archived item position is not restored because GitHub does not allow moving archived items. |
+| Redacted / inaccessible items | ❌ | If GitHub hides an item from the exporting user, `gpm` cannot migrate it. |
+
+### Views (with `--enable-browser-automation`)
+
+Views are migrated through the GitHub Projects web UI because GitHub has no public API to create or update views.
+
+| Area | Supported? | Notes |
+|---|---:|---|
+| Table views | ✅ | Name, filter, sorting, visible fields, Slice by and related display options are tested. |
+| Board views | ✅ | Column by, Swimlanes and Field sum are tested. |
+| Roadmap views | ✅ | Date fields, zoom level and markers are tested. |
+| View UI-only settings | ✅ | Exported/imported by browser automation where the UI exposes them. |
+| View tab order | ❌ | Views are recreated, but tab drag-and-drop ordering is not reproduced in v1. |
+| Insights charts | ❌ | Out of scope for v1. They require a separate UI automation design. |
+
+### Workflows (with `--enable-browser-automation`)
+
+Workflows are migrated through the GitHub Projects web UI because GitHub has no public API to create or update workflows.
+
+| Area | Supported? | Notes |
+|---|---:|---|
+| Built-in item-state workflows | ✅ | Examples: item closed, pull request merged, item added to project. Status bindings are reapplied after field migration. |
+| Auto-add workflows | ✅ | Repository and filter settings are migrated. Multiple Auto-add workflows are supported up to the target plan limit. |
+| Auto-archive workflows | ✅ / best effort | Supported where the current GitHub UI exposes the filter in a stable way. |
+| Duplicated Auto-add workflows | ✅ | Tested with two Auto-add workflows. |
+| Disabled workflows | ✅ | Saved disabled workflows are migrated by saving once and toggling off when needed. |
+| Unsaved default workflows that have never been configured | ⚠️ | GitHub shows some default workflows in the sidebar before they exist in GraphQL. `gpm` can configure or skip them, but they are not part of the GraphQL-only snapshot until saved. |
+
+### Verification and safety features
+
+| Area | Supported? | Notes |
+|---|---:|---|
+| `gpm verify` | ✅ | Compares target project against the snapshot and reports differences. |
+| Resume after interruption | ✅ | Item import writes `import-log.json` so reruns do not duplicate already-created items. |
+| Mapping CSV templates | ✅ | `export` writes repository and user mapping templates without overwriting existing files. |
+| Bulk export | ✅ | Omit `--project` to export every project owned by the organization/user into `<out>/<number>/`. |
+| Update check opt-out | ✅ | Use `--no-update-check` or `GPM_NO_UPDATE_CHECK`. No telemetry is sent. |
+
+## What you must prepare before migrating
+
+`gpm` is a Projects migrator, not a repository or issue migrator. A successful migration usually looks like this:
+
+1. **Move or create the target repositories first.** Use GitHub Enterprise Importer or another migration tool for repository contents, issues and pull requests.
+2. **Generate a snapshot** with `gpm export`.
+3. **Fill in `repository-mappings.csv`.** Every issue/PR project item needs a source repository mapped to a target repository visible to the target token.
+4. **Fill in `user-mappings.csv` if generated.** This is important for Enterprise Managed Users where target logins usually have a `_shortcode` suffix.
+5. **Use browser automation only when you need Views or Workflows.** Run `gpm setup --browsers` and `gpm login` first, then pass `--enable-browser-automation` to both export and import.
+
+If you do not enable browser automation, `gpm` still migrates projects, fields, items, values, ordering, archived state and linked repositories, but **Views and Workflows will not be fully recreated**.
+
+## What gpm intentionally does not support
+
+The following are out of scope for this project, either by design or because GitHub does not expose the required write APIs:
+
+| Area | Why not? | Workaround |
+|---|---|---|
+| GitHub Enterprise Server (GHES) | `gpm` is designed for GitHub.com and GHEC with data residency. | Use `gh-migrate-project` for GHES scenarios. |
+| Migrating repositories, issues or pull requests themselves | This is outside the Projects API. | Use GitHub Enterprise Importer first, then map the resulting repositories. |
+| Original author and creation timestamp for draft issues | GitHub always attributes newly-created draft issues to the importing user. | `gpm` prepends a note with the original metadata. |
+| Item history / field history | GitHub has no API to recreate historical field changes. | Only the current state is migrated. |
+| Exporting project collaborators | GitHub has a write mutation but no read field for current collaborators. | Add collaborators manually to the snapshot or after import. |
+| View tab drag-and-drop order | UI-only and fragile; not part of v1. | Reorder tabs manually if the order matters. |
+| Insights charts | No public API; UI is more complex than Views/Workflows. | Future v2 candidate. |
+| Redacted items | The exporting account cannot see them. | Export with an account that has access to all project content. |
+
 ## Update check
 
 `export` / `import` / `verify` asynchronously check GitHub Releases for a newer version (2-second timeout; failures are silently ignored; **no telemetry is ever sent**). Opt out with `--no-update-check` or by setting the `GPM_NO_UPDATE_CHECK` environment variable.
