@@ -46,7 +46,7 @@ public sealed class ViewUiExporter
             {
                 ui = await ReadViewUiAsync(page, orgLogin, projectNumber, view, cancellationToken).ConfigureAwait(false);
             }
-            catch (PlaywrightException exception)
+            catch (Exception exception) when (exception is PlaywrightException or TimeoutException)
             {
                 _warnings.Add($"view '{view.Name}': UI settings could not be read — {exception.Message}");
             }
@@ -71,6 +71,10 @@ public sealed class ViewUiExporter
         var groupBy = ParseMenuValue(await ReadMenuItemTextAsync(menu, "Group by").ConfigureAwait(false));
         var sortBy = ParseMenuValue(await ReadMenuItemTextAsync(menu, "Sort by").ConfigureAwait(false));
         var sliceBy = ParseMenuValue(await ReadMenuItemTextAsync(menu, "Slice by").ConfigureAwait(false));
+        // Boards use "Swimlanes" (not "Group by") and expose a "Field sum" checkbox overlay;
+        // both menu items combine label and value, so plain reads suffice (E2E discovery, 2026-07-06).
+        var swimlanes = ParseMenuValue(await ReadMenuItemTextAsync(menu, "Swimlanes").ConfigureAwait(false));
+        var fieldSum = ParseListValue(await ReadMenuItemTextAsync(menu, "Field sum").ConfigureAwait(false));
 
         RoadmapSettingsSnapshot? roadmap = null;
         if (string.Equals(view.Layout, "ROADMAP_LAYOUT", StringComparison.Ordinal))
@@ -94,6 +98,8 @@ public sealed class ViewUiExporter
             GroupBy = groupBy,
             SortBy = sortBy,
             SliceBy = sliceBy,
+            Swimlanes = swimlanes,
+            FieldSum = fieldSum,
             Roadmap = roadmap,
             ScrapedAt = DateTimeOffset.UtcNow,
         };
@@ -175,7 +181,11 @@ public sealed class ViewUiExporter
         return normalized;
     }
 
-    /// <summary>Parses a comma-separated menu value ("Markers: A, B") into a list, or null when none.</summary>
+    /// <summary>
+    /// Parses a list menu value into its entries, or null when none. The UI renders
+    /// lists in prose form — "A and B" / "A, B, and C" (E2E discovery, 2026-07-06) —
+    /// so both the comma and the " and " conjunction are treated as separators.
+    /// </summary>
     public static IReadOnlyList<string>? ParseListValue(string? menuItemText)
     {
         var value = ParseMenuValue(menuItemText);
@@ -184,8 +194,13 @@ public sealed class ViewUiExporter
             return null;
         }
 
-        var parts = value.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
-        return parts.Length == 0 ? null : parts;
+        var parts = value
+            .Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)
+            .SelectMany(part => part.Split(" and ", StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries))
+            .Select(part => part.StartsWith("and ", StringComparison.Ordinal) ? part["and ".Length..] : part)
+            .Where(part => part.Length > 0)
+            .ToList();
+        return parts.Count == 0 ? null : parts;
     }
 
     /// <summary>Collapses all whitespace runs (including newlines) to single spaces; null when empty.</summary>

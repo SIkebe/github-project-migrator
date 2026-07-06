@@ -204,6 +204,72 @@ public class GitHubGraphQLClientTests
             return Task.CompletedTask;
         });
 
+    [Fact]
+    public async Task Temporary_conflict_errors_are_retried()
+    {
+        const string conflict = """{"data":null,"errors":[{"type":"UNPROCESSABLE","message":"Your attempt to move this item created a temporary conflict. Please try again."}]}""";
+        using var handler = new StubHandler(
+            JsonResponse(HttpStatusCode.OK, conflict),
+            JsonResponse(HttpStatusCode.OK, ViewerData));
+        var delays = new List<TimeSpan>();
+        using var client = CreateClient(handler, delays);
+
+        var login = await client.GetViewerLoginAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal("octocat", login);
+        Assert.Equal([TimeSpan.FromSeconds(1)], delays);
+    }
+
+    [Fact]
+    public async Task Transient_network_errors_are_retried_with_backoff()
+    {
+        using var handler = new FlakyHandler(
+            failuresBeforeSuccess: 2,
+            () => JsonResponse(HttpStatusCode.OK, ViewerData));
+        var delays = new List<TimeSpan>();
+        using var client = new GitHubGraphQLClient("dummy-token", baseUrl: null, handler, (delay, _) =>
+        {
+            delays.Add(delay);
+            return Task.CompletedTask;
+        });
+
+        var login = await client.GetViewerLoginAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal("octocat", login);
+        Assert.Equal([TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(2)], delays);
+    }
+
+    [Fact]
+    public async Task Persistent_network_errors_throw_after_retry_budget()
+    {
+        using var handler = new FlakyHandler(
+            failuresBeforeSuccess: int.MaxValue,
+            () => JsonResponse(HttpStatusCode.OK, ViewerData));
+        var delays = new List<TimeSpan>();
+        using var client = new GitHubGraphQLClient("dummy-token", baseUrl: null, handler, (delay, _) =>
+        {
+            delays.Add(delay);
+            return Task.CompletedTask;
+        });
+
+        await Assert.ThrowsAsync<GitHubGraphQLException>(
+            () => client.GetViewerLoginAsync(TestContext.Current.CancellationToken));
+        Assert.Equal(3, delays.Count);
+    }
+
+    private sealed class FlakyHandler(int failuresBeforeSuccess, Func<HttpResponseMessage> onSuccess) : HttpMessageHandler
+    {
+        private int _attempts;
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            _attempts++;
+            return _attempts <= failuresBeforeSuccess
+                ? Task.FromException<HttpResponseMessage>(new HttpRequestException("The response ended prematurely."))
+                : Task.FromResult(onSuccess());
+        }
+    }
+
     private static HttpResponseMessage JsonResponse(HttpStatusCode statusCode, string body)
         => new(statusCode) { Content = new StringContent(body, Encoding.UTF8, "application/json") };
 

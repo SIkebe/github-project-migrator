@@ -173,6 +173,10 @@ public sealed record ViewUiSnapshot
 
     public string? SliceBy { get; init; }
 
+    /// <summary>Board "Swimlanes" field (null when none; boards use Swimlanes, not Group by).</summary>
+    public string? Swimlanes { get; init; }
+
+    /// <summary>Board "Field sum" entries (e.g. "Count", number field names).</summary>
     public IReadOnlyList<string>? FieldSum { get; init; }
 
     public RoadmapSettingsSnapshot? Roadmap { get; init; }

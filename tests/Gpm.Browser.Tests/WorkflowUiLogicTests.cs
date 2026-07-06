@@ -43,6 +43,16 @@ public class WorkflowUiLogicTests
     public void ContentTypeOptionName_round_trips_to_the_ui_option_name(string contentType, string expected)
         => Assert.Equal(expected, WorkflowUiExporter.ContentTypeOptionName(contentType));
 
+    [Theory]
+    [InlineData("https://github.com/orgs/o/projects/3/workflows/104097621", true)]
+    [InlineData("https://github.com/orgs/o/projects/3/workflows/104097621?pane=x", true)]
+    [InlineData("https://github.com/orgs/o/projects/3/workflows/a66897b0-6706-4c0b-be5f-c0bbf362fe26", false)]
+    [InlineData("https://github.com/orgs/o/projects/3/workflows", false)]
+    [InlineData("", false)]
+    [InlineData(null, false)]
+    public void IsSavedWorkflowUrl_detects_numeric_workflow_ids(string? url, bool expected)
+        => Assert.Equal(expected, WorkflowUiExporter.IsSavedWorkflowUrl(url));
+
     // ----- WorkflowUiImporter classification / mapping -----
 
     [Fact]

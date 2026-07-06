@@ -35,6 +35,7 @@ public class ViewUiSnapshotSerializationTests
                         GroupBy = "Status",
                         SortBy = "Title",
                         SliceBy = "Assignees",
+                        Swimlanes = "Status",
                         FieldSum = ["Fixture Number"],
                         Roadmap = new RoadmapSettingsSnapshot
                         {
@@ -75,6 +76,7 @@ public class ViewUiSnapshotSerializationTests
             Assert.Equal("Status", roadmap.Ui!.GroupBy);
             Assert.Equal("Title", roadmap.Ui.SortBy);
             Assert.Equal("Assignees", roadmap.Ui.SliceBy);
+            Assert.Equal("Status", roadmap.Ui.Swimlanes);
             Assert.Equal(["Fixture Number"], roadmap.Ui.FieldSum);
             Assert.Equal(scrapedAt, roadmap.Ui.ScrapedAt);
             Assert.NotNull(roadmap.Ui.Roadmap);

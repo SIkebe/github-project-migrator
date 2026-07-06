@@ -28,8 +28,11 @@
 
 ## フィクスチャー最終状態(gpm-source/projects/3)
 
-- Views: 1=View 1 (TABLE), 2=Fixture Board (BOARD), 3=Fixture Roadmap (ROADMAP, Dates: Fixture Date → Fixture Sprint end)
-- Workflows: 7 enabled(既定 6 + Auto-add to project #7: repo=fixture-repo, filter=`is:issue is:open`)
+- Views:
+  - 1=View 1 (TABLE): filter=`status:Todo`, Sort by=Fixture Number (asc), Slice by=Fixture Select, visibleFields=既定 5 + Fixture Text + Fixture Date(Fixture Number はソート由来の仮想列のため visibleFields に入らない — 下記 E2E 知見 8)
+  - 2=Fixture Board (BOARD): Column by=Fixture Select, Swimlanes=Status(GraphQL groupByFields に反映), Field sum=[Fixture Number](Count は uncheck 済み)
+  - 3=Fixture Roadmap (ROADMAP): Dates=Fixture Date → Fixture Sprint end, Zoom=Quarter, Markers=[Fixture Date]
+- Workflows 9(GraphQL 可視分): 既定 6 enabled + Auto-add to project (#7: repo=fixture-repo, filter=`is:issue is:open`) + **Auto-add secondary**(repo=fixture-repo, filter=`is:issue label:bug`, enabled)+ **Code changes requested**(保存済み disabled, Set value=In Progress)
 - fixture-repo: private, Issue #1/#2(gpm-target 側にも同名 repo あり — workflow E2E 用)
 
 ## M7 E2E 実走で確定した追加知見(2026-07-05)
@@ -39,5 +42,18 @@
 3. **編集モードで実効差分が無いと Save ボタンは disabled のまま** → クリック待ちでハング。disabled なら Discard で抜ける(SaveWorkflowAsync 実装済み)
 4. **リポジトリ picker は入力後に非同期で再フィルター**(デバウンス+fetch)→ option は CountAsync 即時判定でなく WaitForAsync(10s) で待つ
 5. View タブの**リネーム用ダブルクリックは新規タブ作成直後に不発になることがある** → textbox 出現を 5s 待ち×3 リトライ
-6. **EMU/SAML のセッションは短命**(数時間で失効)。失効時は `/login` リダイレクトではなく **enterprise SSO インタースティシャル**("Single sign-on to <Enterprise>" + Continue)が出る。BrowserSession.GotoAsync は Continue 自動クリックで IdP セッションが生きていれば透過再認証、死んでいれば失敗 → `gpm login` 再実行が必要
+6. **EMU/SAML のセッションは短命**(数時間で失効)。失効時は `/login` リダイレクトではなく **enterprise SSO インタースティシャル**("Single sign-on to <Enterprise>" + Continue)が出る。BrowserSession.GotoAsync は Continue 自動クリックで IdP セッションが生きていれば透過再認証、死んでいれば失敗 → `gpm login` 再実行が必要(IdP セッションまで失効すると素の `/login` リダイレクトになる)
 7. 並列テスト実行時(browser E2E + integration 同時)は SPA ハイドレーションが遅くなる → Playwright 既定タイムアウトは 30s に設定
+
+## E2E カバレッジ強化で確定した追加知見(2026-07-06)
+
+1. **Board の横グルーピングは「Group by」ではなく「Swimlanes」メニュー項目**(`menuitem "Swimlanes: <value>"`)。Board のメニューは `Fields / Column by / Swimlanes / Sort by / Field sum / Slice by` の 6 項目で "Group by" は存在しない。GraphQL の `groupByFields` は board では Swimlanes を反映する → import は board のとき Swimlanes メニューで適用する(ViewUiExporter/Importer 対応済み、ViewUiSnapshot.Swimlanes 追加)
+2. **Field sum はチェックボックスオーバーレイ**(`menuitemcheckbox`: "Count" + 数値フィールド名)。menuitem の accessible name は "Field sum: Count and Fixture Number" のようにラベル結合されるため値はメニューを開かず読める。Count は uncheck 可能
+3. **UI のリスト値は散文形式**: "A and B" / "A, B, and C"(カンマ区切りとは限らない)→ ParseListValue は `,` と `" and "` の両方で分割する
+4. **Fields オーバーレイのエントリーは `option` ロール + aria-checked**(Field sum / Markers の `menuitemcheckbox` とは異なる)→ チェックボックス走査は両ロール対応が必要(ToggleCheckboxesAsync 対応済み)
+5. **Markers オーバーレイには表示オプションが混在**: Truncate titles / Show date fields(表示設定)+ Milestone / date・iteration フィールド名(マーカー)。menuitem テキスト "Markers: <値>" にはマーカーだけが出る
+6. **未保存 workflow のページには enable トグルボタンが存在しない**(URL は GUID)。保存済み workflow の URL は数値 ID → `WorkflowUiExporter.IsSavedWorkflowUrl` で判定し、未保存ページでトグルを待たない
+7. **未保存 disabled workflow は Edit → "Save and turn on workflow"(設定変更なしでも押せる)→ トグル off で「保存済み disabled」にできる**。保存済み disabled workflow は GraphQL の `workflows` に enabled=false で現れ、閲覧モードで設定値も読める(export 可能)。import は未保存の場合にこの save-once 経路を通す(WorkflowUiImporter.ApplyDisabledAsync)
+8. **ソートキーのフィールドは仮想列として表示される**: Fields オーバーレイで aria-checked=true になるが GraphQL `visibleFields` には永続化されない(uncheck→再 check でも変わらない)。import 側は desired 集合にソート列を含めて誤 uncheck を防止する
+9. **Duplicate 直後の workflow は編集モードで開く**("Edit" ボタンが無い)→ import は Save ボタンの有無で編集モードを判定してから Edit をクリックする
+10. **Playwright 1.61 の wait タイムアウトは `System.TimeoutException`**(`Microsoft.Playwright.TimeoutException` は存在せず、`PlaywrightException` の派生でもない)→ ブラウザーモジュールの catch は `exception is PlaywrightException or TimeoutException` で両方受ける(リトライ・warning 化がタイムアウトでも機能するように修正済み)

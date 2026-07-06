@@ -34,6 +34,14 @@ public class ViewUiLogicTests
         => Assert.Equal(["Milestone", "Fixture Sprint"], ViewUiExporter.ParseListValue("Markers: Milestone, Fixture Sprint"));
 
     [Fact]
+    public void ParseListValue_splits_prose_conjunctions()
+    {
+        // The UI renders lists in prose form (E2E discovery, 2026-07-06).
+        Assert.Equal(["Count", "Fixture Number"], ViewUiExporter.ParseListValue("Field sum: Count and Fixture Number"));
+        Assert.Equal(["A", "B", "C"], ViewUiExporter.ParseListValue("Fields: A, B, and C"));
+    }
+
+    [Fact]
     public void ParseListValue_returns_null_for_none()
         => Assert.Null(ViewUiExporter.ParseListValue("Markers: none"));
 
@@ -114,6 +122,28 @@ public class ViewUiLogicTests
         // "Status end" resolves to the iteration-style suffix of the existing "Status" field.
         Assert.DoesNotContain(warnings, w => w.Contains("'Status end'", StringComparison.Ordinal));
         Assert.Equal(5, warnings.Count);
+    }
+
+    [Fact]
+    public void CollectPreflightWarnings_reports_missing_swimlanes_and_field_sum_fields()
+    {
+        var snapshot = Snapshot(
+            fields: ["Status"],
+            View("Board", "BOARD_LAYOUT") with
+            {
+                Ui = new ViewUiSnapshot
+                {
+                    Swimlanes = "Missing swimlane",
+                    FieldSum = ["Count", "Missing number"],
+                },
+            });
+
+        var warnings = ViewUiImporter.CollectPreflightWarnings(snapshot);
+
+        Assert.Contains(warnings, w => w.Contains("swimlanes field 'Missing swimlane'", StringComparison.Ordinal));
+        // "Count" is a built-in Field sum entry, not a field.
+        Assert.Contains(warnings, w => w.Contains("field-sum field 'Missing number'", StringComparison.Ordinal));
+        Assert.Equal(2, warnings.Count);
     }
 
     // ----- verifier: Ui comparison (M6) -----

@@ -166,7 +166,7 @@ public sealed class WorkflowUiImporter
 
                 ImportedCount++;
             }
-            catch (PlaywrightException exception)
+            catch (Exception exception) when (exception is PlaywrightException or TimeoutException)
             {
                 _warnings.Add($"workflow '{workflow.Name}': import failed — {exception.Message}");
             }
@@ -189,12 +189,7 @@ public sealed class WorkflowUiImporter
 
         if (!workflow.Enabled)
         {
-            // v1 applies no settings to disabled workflows (PLAN §8.2); only the state is mirrored.
-            if (current.Enabled)
-            {
-                await ToggleAsync(page, workflow.Name, cancellationToken).ConfigureAwait(false);
-            }
-
+            await ApplyDisabledAsync(page, workflow, current, cancellationToken).ConfigureAwait(false);
             return;
         }
 
@@ -208,6 +203,46 @@ public sealed class WorkflowUiImporter
             await EditAndSaveAsync(page, workflow, current, cancellationToken).ConfigureAwait(false);
         }
         else if (!current.Enabled)
+        {
+            await ToggleAsync(page, workflow.Name, cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>
+    /// Mirrors a disabled snapshot workflow. A target workflow that was never saved is
+    /// invisible to GraphQL (M7 discovery), so it is saved once ("Save and turn on
+    /// workflow" is clickable even without setting changes) and then toggled off —
+    /// producing a saved-but-disabled workflow like the source. Saved workflows only
+    /// mirror the toggle state (v1 applies no setting edits to disabled workflows).
+    /// </summary>
+    private async Task ApplyDisabledAsync(IPage page, WorkflowSnapshot workflow, WorkflowUiState current, CancellationToken cancellationToken)
+    {
+        if (!current.IsSaved && workflow.Ui is not null)
+        {
+            await EditAndSaveAsync(page, workflow, current, cancellationToken).ConfigureAwait(false);
+
+            // The enable toggle only exists on saved workflows, so its appearance is
+            // the "save landed" signal (the SPA may keep the GUID URL after saving).
+            var toggle = Sel.WorkflowToggle(page, workflow.Name).First;
+            try
+            {
+                await toggle.WaitForAsync(new() { Timeout = 10_000 }).ConfigureAwait(false);
+            }
+            catch (Exception exception) when (exception is PlaywrightException or TimeoutException)
+            {
+                _warnings.Add($"workflow '{workflow.Name}': could not be saved as a disabled workflow on the target");
+                return;
+            }
+
+            if (string.Equals(await toggle.GetAttributeAsync("aria-pressed").ConfigureAwait(false), "true", StringComparison.Ordinal))
+            {
+                await ToggleAsync(page, workflow.Name, cancellationToken).ConfigureAwait(false);
+            }
+
+            return;
+        }
+
+        if (current.Enabled)
         {
             await ToggleAsync(page, workflow.Name, cancellationToken).ConfigureAwait(false);
         }
@@ -254,7 +289,13 @@ public sealed class WorkflowUiImporter
         }
 
         var ui = workflow.Ui!;
-        await Sel.EditWorkflowButton(page).First.ClickAsync().ConfigureAwait(false);
+        // A freshly duplicated workflow opens directly in edit mode (no "Edit" button,
+        // E2E discovery 2026-07-06); only click "Edit" when still in viewing mode.
+        if (await Sel.SaveWorkflowButton(page).CountAsync().ConfigureAwait(false) == 0)
+        {
+            await Sel.EditWorkflowButton(page).First.ClickAsync().ConfigureAwait(false);
+        }
+
         await Sel.SaveWorkflowButton(page).First.WaitForAsync().ConfigureAwait(false);
         await PauseAsync(cancellationToken).ConfigureAwait(false);
 
@@ -272,7 +313,7 @@ public sealed class WorkflowUiImporter
             // so the option must be awaited rather than counted immediately.
             await option.First.WaitForAsync(new() { Timeout = 10_000 }).ConfigureAwait(false);
         }
-        catch (PlaywrightException)
+        catch (Exception exception) when (exception is PlaywrightException or TimeoutException)
         {
             _warnings.Add($"workflow '{workflow.Name}': repository '{targetRepository}' was not found on the target; skipped");
             await page.Keyboard.PressAsync("Escape").ConfigureAwait(false);

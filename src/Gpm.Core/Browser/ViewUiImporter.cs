@@ -96,6 +96,20 @@ public sealed class ViewUiImporter
                 WarnIfMissing(warnings, fieldNames, view.Name, "slice-by", sliceBy);
             }
 
+            if (view.Ui?.Swimlanes is { } swimlanes)
+            {
+                WarnIfMissing(warnings, fieldNames, view.Name, "swimlanes", swimlanes);
+            }
+
+            // "Count" is a built-in Field sum entry, not a field.
+            foreach (var entry in view.Ui?.FieldSum ?? [])
+            {
+                if (!string.Equals(entry, "Count", StringComparison.Ordinal))
+                {
+                    WarnIfMissing(warnings, fieldNames, view.Name, "field-sum", entry);
+                }
+            }
+
             if (view.Ui?.Roadmap is { } roadmap)
             {
                 if (roadmap.StartField is { } startField && !RoadmapFieldExists(fieldNames, startField))
@@ -157,7 +171,7 @@ public sealed class ViewUiImporter
                 await ApplySettingsAsync(page, view, cancellationToken).ConfigureAwait(false);
                 await SaveViewAsync(page, cancellationToken).ConfigureAwait(false);
             }
-            catch (PlaywrightException exception)
+            catch (Exception exception) when (exception is PlaywrightException or TimeoutException or InvalidOperationException)
             {
                 _warnings.Add($"view '{view.Name}': import failed — {exception.Message}");
             }
@@ -169,7 +183,7 @@ public sealed class ViewUiImporter
             {
                 await DeleteDefaultViewAsync(page, cancellationToken).ConfigureAwait(false);
             }
-            catch (PlaywrightException exception)
+            catch (Exception exception) when (exception is PlaywrightException or TimeoutException)
             {
                 _warnings.Add($"default view '{DefaultViewName}' could not be deleted — {exception.Message}");
             }
@@ -180,13 +194,59 @@ public sealed class ViewUiImporter
 
     private static async Task CreateViewAsync(IPage page, ViewSnapshot view, CancellationToken cancellationToken)
     {
-        await Sel.NewViewTab(page).ClickAsync().ConfigureAwait(false);
-        var menu = Sel.OpenMenu(page);
-        await menu.WaitForAsync().ConfigureAwait(false);
-        await menu.GetByRole(AriaRole.Menuitem, new() { Name = LayoutMenuName(view.Layout), Exact = true })
-            .First.ClickAsync().ConfigureAwait(false);
+        // Under load the layout menuitem click can misfire (menu re-render race) and
+        // silently create nothing — verify a new tab actually appeared and retry.
+        var tabs = page.GetByRole(AriaRole.Tab);
+        for (var attempt = 1; ; attempt++)
+        {
+            var before = await tabs.CountAsync().ConfigureAwait(false);
+            await Sel.NewViewTab(page).ClickAsync().ConfigureAwait(false);
+            var menu = Sel.OpenMenu(page);
+            await menu.WaitForAsync().ConfigureAwait(false);
+            await menu.GetByRole(AriaRole.Menuitem, new() { Name = LayoutMenuName(view.Layout), Exact = true })
+                .First.ClickAsync().ConfigureAwait(false);
+
+            if (await WaitForTabCountAsync(tabs, before + 1, cancellationToken).ConfigureAwait(false))
+            {
+                break;
+            }
+
+            if (attempt >= 3)
+            {
+                throw new InvalidOperationException($"Creating view '{view.Name}' did not add a new tab after {attempt} attempts.");
+            }
+
+            await CloseMenusAsync(page, cancellationToken).ConfigureAwait(false);
+        }
+
         await PauseAsync(cancellationToken).ConfigureAwait(false);
         await RenameSelectedTabAsync(page, view.Name, cancellationToken).ConfigureAwait(false);
+    }
+
+    private static async Task<bool> WaitForTabCountAsync(ILocator tabs, int expected, CancellationToken cancellationToken)
+    {
+        var deadline = DateTimeOffset.UtcNow + TimeSpan.FromSeconds(10);
+        while (DateTimeOffset.UtcNow < deadline)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (await tabs.CountAsync().ConfigureAwait(false) >= expected)
+            {
+                return true;
+            }
+
+            await Task.Delay(250, cancellationToken).ConfigureAwait(false);
+        }
+
+        return false;
+    }
+
+    private static async Task EnsureLayoutAsync(IPage page, ViewSnapshot view, CancellationToken cancellationToken)
+    {
+        await OpenViewMenuAsync(page, cancellationToken).ConfigureAwait(false);
+        var layoutButton = Sel.ViewLayoutButton(page, LayoutMenuName(view.Layout));
+        await layoutButton.First.ClickAsync().ConfigureAwait(false);
+        await PauseAsync(cancellationToken).ConfigureAwait(false);
+        await CloseMenusAsync(page, cancellationToken).ConfigureAwait(false);
     }
 
     private static async Task RenameSelectedTabAsync(IPage page, string name, CancellationToken cancellationToken)
@@ -202,7 +262,7 @@ public sealed class ViewUiImporter
                 await textbox.WaitForAsync(new() { Timeout = 5_000 }).ConfigureAwait(false);
                 break;
             }
-            catch (PlaywrightException) when (attempt < 3)
+            catch (Exception exception) when (exception is PlaywrightException or TimeoutException && attempt < 3)
             {
                 await PauseAsync(cancellationToken).ConfigureAwait(false);
             }
@@ -211,16 +271,30 @@ public sealed class ViewUiImporter
         await textbox.FillAsync(name).ConfigureAwait(false);
         await textbox.PressAsync("Enter").ConfigureAwait(false);
         await PauseAsync(cancellationToken).ConfigureAwait(false);
+
+        // Verify the rename actually took (the Enter can race the SPA re-render).
+        if (await Sel.ViewTab(page, name).CountAsync().ConfigureAwait(false) == 0)
+        {
+            throw new InvalidOperationException($"Renaming the selected view tab to '{name}' did not take effect.");
+        }
     }
 
     // ----- settings -----
 
     private async Task ApplySettingsAsync(IPage page, ViewSnapshot view, CancellationToken cancellationToken)
     {
-        // GraphQL-derived settings.
+        // The layout menuitem click during creation occasionally misfires and leaves a
+        // Table view behind — enforce the layout via the View menu before any
+        // layout-specific settings (clicking the already-active layout is a no-op).
+        await EnsureLayoutAsync(page, view, cancellationToken).ConfigureAwait(false);
+
+        // GraphQL-derived settings. Boards expose their horizontal grouping as the
+        // "Swimlanes" menu item (E2E discovery, 2026-07-06) while tables/roadmaps use
+        // "Group by"; GraphQL reports both as groupByFields.
+        var isBoard = string.Equals(view.Layout, "BOARD_LAYOUT", StringComparison.Ordinal);
         if (view.GroupByFields.Count > 0)
         {
-            await TrySetSingleAsync(page, "Group by", view.GroupByFields[0], view.Name, cancellationToken).ConfigureAwait(false);
+            await TrySetSingleAsync(page, isBoard ? "Swimlanes" : "Group by", view.GroupByFields[0], view.Name, cancellationToken).ConfigureAwait(false);
         }
 
         // A new board defaults to "Column by: Status"; only deviations need a click.
@@ -241,6 +315,21 @@ public sealed class ViewUiImporter
         if (view.Ui?.SliceBy is { } sliceBy)
         {
             await TrySetSingleAsync(page, "Slice by", sliceBy, view.Name, cancellationToken).ConfigureAwait(false);
+        }
+
+        // The scraped Swimlanes value usually duplicates groupByFields (already applied
+        // above); only apply it when it deviates to avoid re-clicking the active option.
+        if (view.Ui?.Swimlanes is { } swimlanes
+            && (view.GroupByFields.Count == 0 || !string.Equals(view.GroupByFields[0], swimlanes, StringComparison.Ordinal)))
+        {
+            await TrySetSingleAsync(page, "Swimlanes", swimlanes, view.Name, cancellationToken).ConfigureAwait(false);
+        }
+
+        // "Field sum" is a checkbox overlay (Count + number fields). A fresh board
+        // defaults to ["Count"], so identical snapshots produce no clicks.
+        if (view.Ui?.FieldSum is { Count: > 0 } fieldSum)
+        {
+            await TrySetCheckboxesAsync(page, "Field sum", fieldSum, view.Name, cancellationToken).ConfigureAwait(false);
         }
 
         if (view.Ui?.Roadmap is { } roadmap)
@@ -296,7 +385,7 @@ public sealed class ViewUiImporter
             await PauseAsync(cancellationToken).ConfigureAwait(false);
             await CloseMenusAsync(page, cancellationToken).ConfigureAwait(false);
         }
-        catch (PlaywrightException exception)
+        catch (Exception exception) when (exception is PlaywrightException or TimeoutException)
         {
             _warnings.Add($"view '{viewName}': {label} could not be applied — {exception.Message}");
             await CloseMenusAsync(page, cancellationToken).ConfigureAwait(false);
@@ -331,7 +420,7 @@ public sealed class ViewUiImporter
 
             await CloseMenusAsync(page, cancellationToken).ConfigureAwait(false);
         }
-        catch (PlaywrightException exception)
+        catch (Exception exception) when (exception is PlaywrightException or TimeoutException)
         {
             _warnings.Add($"view '{viewName}': sort direction could not be applied — {exception.Message}");
             await CloseMenusAsync(page, cancellationToken).ConfigureAwait(false);
@@ -358,10 +447,19 @@ public sealed class ViewUiImporter
 
             await item.First.ClickAsync().ConfigureAwait(false);
             await PauseAsync(cancellationToken).ConfigureAwait(false);
-            await ToggleCheckboxesAsync(page, new HashSet<string>(view.VisibleFields, StringComparer.Ordinal), cancellationToken).ConfigureAwait(false);
+            // The sort field renders as a virtual column (aria-checked=true) that is never
+            // part of GraphQL visibleFields (E2E discovery, 2026-07-06) — include it in the
+            // desired set so it is not unchecked (which could drop the sort).
+            var desired = new HashSet<string>(view.VisibleFields, StringComparer.Ordinal);
+            foreach (var sort in view.SortByFields)
+            {
+                desired.Add(sort.Field);
+            }
+
+            await ToggleCheckboxesAsync(page, desired, cancellationToken).ConfigureAwait(false);
             await CloseMenusAsync(page, cancellationToken).ConfigureAwait(false);
         }
-        catch (PlaywrightException exception)
+        catch (Exception exception) when (exception is PlaywrightException or TimeoutException)
         {
             _warnings.Add($"view '{view.Name}': visible fields could not be applied — {exception.Message}");
             await CloseMenusAsync(page, cancellationToken).ConfigureAwait(false);
@@ -386,17 +484,27 @@ public sealed class ViewUiImporter
             await ToggleCheckboxesAsync(page, new HashSet<string>(values, StringComparer.Ordinal), cancellationToken).ConfigureAwait(false);
             await CloseMenusAsync(page, cancellationToken).ConfigureAwait(false);
         }
-        catch (PlaywrightException exception)
+        catch (Exception exception) when (exception is PlaywrightException or TimeoutException)
         {
             _warnings.Add($"view '{viewName}': {label} could not be applied — {exception.Message}");
             await CloseMenusAsync(page, cancellationToken).ConfigureAwait(false);
         }
     }
 
-    /// <summary>Toggles every enabled menu checkbox so the checked set matches <paramref name="desired"/>.</summary>
+    /// <summary>
+    /// Toggles every enabled overlay checkbox so the checked set matches <paramref name="desired"/>.
+    /// Overlays differ per menu (E2E discovery, 2026-07-06): "Field sum" / "Markers" render
+    /// <c>menuitemcheckbox</c> entries, while "Fields" renders <c>option</c> entries — both
+    /// carry <c>aria-checked</c>.
+    /// </summary>
     private static async Task ToggleCheckboxesAsync(IPage page, HashSet<string> desired, CancellationToken cancellationToken)
     {
         var checkboxes = page.GetByRole(AriaRole.Menuitemcheckbox);
+        if (await checkboxes.CountAsync().ConfigureAwait(false) == 0)
+        {
+            checkboxes = page.GetByRole(AriaRole.Option);
+        }
+
         var count = await checkboxes.CountAsync().ConfigureAwait(false);
         for (var i = 0; i < count; i++)
         {
@@ -444,7 +552,7 @@ public sealed class ViewUiImporter
 
             await CloseMenusAsync(page, cancellationToken).ConfigureAwait(false);
         }
-        catch (PlaywrightException exception)
+        catch (Exception exception) when (exception is PlaywrightException or TimeoutException)
         {
             _warnings.Add($"view '{viewName}': roadmap date fields could not be applied — {exception.Message}");
             await CloseMenusAsync(page, cancellationToken).ConfigureAwait(false);
@@ -479,7 +587,7 @@ public sealed class ViewUiImporter
             await filterBox.PressAsync("Enter").ConfigureAwait(false);
             await PauseAsync(cancellationToken).ConfigureAwait(false);
         }
-        catch (PlaywrightException exception)
+        catch (Exception exception) when (exception is PlaywrightException or TimeoutException)
         {
             _warnings.Add($"view '{viewName}': filter could not be applied — {exception.Message}");
         }
@@ -513,7 +621,7 @@ public sealed class ViewUiImporter
             await confirm.WaitForAsync(new() { Timeout = 5_000 }).ConfigureAwait(false);
             await confirm.GetByRole(AriaRole.Button, new() { Name = "Save", Exact = true }).First.ClickAsync().ConfigureAwait(false);
         }
-        catch (PlaywrightException)
+        catch (Exception exception) when (exception is PlaywrightException or TimeoutException)
         {
             // No confirmation dialog appeared; the save applied directly.
         }
@@ -576,7 +684,7 @@ public sealed class ViewUiImporter
             await Task.Delay(150, cancellationToken).ConfigureAwait(false);
             await page.Keyboard.PressAsync("Escape").ConfigureAwait(false);
         }
-        catch (PlaywrightException)
+        catch (Exception exception) when (exception is PlaywrightException or TimeoutException)
         {
             // Best effort; the next navigation resets the UI state anyway.
         }

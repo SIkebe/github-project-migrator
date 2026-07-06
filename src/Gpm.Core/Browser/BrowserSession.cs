@@ -169,7 +169,7 @@ public sealed class BrowserSession : IAsyncDisposable
                     return string.IsNullOrEmpty(login) ? "(unknown)" : login;
                 }
             }
-            catch (PlaywrightException)
+            catch (Exception exception) when (exception is PlaywrightException or TimeoutException)
             {
                 // The user is navigating through login/2FA/SSO pages; keep polling.
             }

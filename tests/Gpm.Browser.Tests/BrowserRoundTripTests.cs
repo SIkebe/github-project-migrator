@@ -43,6 +43,23 @@ public class BrowserRoundTripTests
         Assert.Empty(uiExporter.Warnings);
         Assert.All(source.Views, v => Assert.NotNull(v.Ui));
 
+        // Explicit source expectations (fixture enrichment, 2026-07-06) — guards against
+        // silently comparing null-to-null when the scrape misses a setting.
+        var sourceTable = Assert.Single(source.Views, v => v.Name == "View 1");
+        Assert.Equal("status:Todo", sourceTable.Filter);
+        Assert.Equal("Fixture Number", Assert.Single(sourceTable.SortByFields).Field);
+        Assert.NotNull(sourceTable.Ui!.SortBy);
+        Assert.Equal("Fixture Select", sourceTable.Ui.SliceBy);
+
+        var sourceBoard = Assert.Single(source.Views, v => v.Name == "Fixture Board");
+        Assert.Equal("Fixture Select", Assert.Single(sourceBoard.VerticalGroupByFields));
+        Assert.Equal("Status", sourceBoard.Ui!.Swimlanes);
+        Assert.Equal(["Fixture Number"], sourceBoard.Ui.FieldSum);
+
+        var sourceRoadmap = Assert.Single(source.Views, v => v.Name == "Fixture Roadmap");
+        Assert.Equal("Quarter", sourceRoadmap.Ui!.Roadmap?.Zoom);
+        Assert.Contains("Fixture Date", sourceRoadmap.Ui.Roadmap?.Markers ?? []);
+
         var title = "gpm-browser-test-" + Guid.NewGuid().ToString("N");
         var snapshot = source with { Project = source.Project with { Title = title } };
 
@@ -61,10 +78,11 @@ public class BrowserRoundTripTests
             Assert.Empty(reExportUi.Warnings);
 
             Assert.Equal(snapshot.Views.Count, reExported.Views.Count);
-            foreach (var (expected, actual) in snapshot.Views.OrderBy(v => v.Number)
-                .Zip(reExported.Views.OrderBy(v => v.Number)))
+            // Tab order re-creation is out of scope for v1 (PLAN §8.1) and target view
+            // numbers are re-assigned, so views are matched by name instead of position.
+            foreach (var expected in snapshot.Views)
             {
-                Assert.Equal(expected.Name, actual.Name);
+                var actual = Assert.Single(reExported.Views, v => string.Equals(v.Name, expected.Name, StringComparison.Ordinal));
                 Assert.Equal(expected.Layout, actual.Layout);
 
                 Assert.NotNull(expected.Ui);
@@ -72,6 +90,8 @@ public class BrowserRoundTripTests
                 Assert.Equal(expected.Ui!.GroupBy, actual.Ui!.GroupBy);
                 Assert.Equal(expected.Ui.SortBy, actual.Ui.SortBy);
                 Assert.Equal(expected.Ui.SliceBy, actual.Ui.SliceBy);
+                Assert.Equal(expected.Ui.Swimlanes, actual.Ui.Swimlanes);
+                Assert.Equal(expected.Ui.FieldSum ?? [], actual.Ui.FieldSum ?? []);
                 Assert.Equal(expected.Ui.Roadmap is null, actual.Ui.Roadmap is null);
                 if (expected.Ui.Roadmap is { } roadmap)
                 {
@@ -119,7 +139,18 @@ public class BrowserRoundTripTests
         source = await workflowExporter.EnrichAsync(source, SourceOrg, FixtureProjectNumber, cancellationToken);
         Assert.Empty(workflowExporter.Warnings);
         Assert.All(source.Workflows, w => Assert.NotNull(w.Ui));
-        Assert.Contains(source.Workflows, w => w.Ui!.Repository is not null); // fixture Auto-add
+
+        // Explicit source expectations (fixture enrichment, 2026-07-06): two Auto-add
+        // instances (exercising the Duplicate path) and a saved-but-disabled workflow
+        // (exercising the disable mirroring incl. the save-once path on the target).
+        Assert.Equal(2, source.Workflows.Count(w => w.Ui!.Repository is not null));
+        var sourceSecondary = Assert.Single(source.Workflows, w => w.Name == "Auto-add secondary");
+        Assert.True(sourceSecondary.Enabled);
+        Assert.Equal("fixture-repo", sourceSecondary.Ui!.Repository);
+        Assert.Equal("is:issue label:bug", sourceSecondary.Ui.Filter);
+        var sourceDisabled = Assert.Single(source.Workflows, w => !w.Enabled);
+        Assert.Equal("Code changes requested", sourceDisabled.Name);
+        Assert.Equal("In Progress", sourceDisabled.Ui!.StatusValue);
 
         var title = "gpm-browser-wf-test-" + Guid.NewGuid().ToString("N");
         var snapshot = source with { Project = source.Project with { Title = title } };

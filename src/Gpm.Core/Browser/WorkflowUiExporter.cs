@@ -67,7 +67,7 @@ public sealed class WorkflowUiExporter
                     ScrapedAt = DateTimeOffset.UtcNow,
                 };
             }
-            catch (PlaywrightException exception)
+            catch (Exception exception) when (exception is PlaywrightException or TimeoutException)
             {
                 _warnings.Add($"workflow '{workflow.Name}': UI settings could not be read — {exception.Message}");
             }
@@ -92,9 +92,16 @@ public sealed class WorkflowUiExporter
     /// </summary>
     internal static async Task<WorkflowUiState> ReadCurrentWorkflowAsync(IPage page, string name)
     {
-        var toggle = Sel.WorkflowToggle(page, name).First;
-        var enabled = string.Equals(
-            await toggle.GetAttributeAsync("aria-pressed").ConfigureAwait(false), "true", StringComparison.Ordinal);
+        // Unsaved workflows (GUID URL, M7 discovery) render no enable toggle at all
+        // (E2E discovery, 2026-07-06) — waiting for it would only time out.
+        var isSaved = IsSavedWorkflowUrl(page.Url);
+        var enabled = false;
+        if (isSaved)
+        {
+            var toggle = Sel.WorkflowToggle(page, name).First;
+            enabled = string.Equals(
+                await toggle.GetAttributeAsync("aria-pressed").ConfigureAwait(false), "true", StringComparison.Ordinal);
+        }
 
         string? repository = null;
         var repositoryButton = Sel.WorkflowRepositoryButton(page);
@@ -106,7 +113,7 @@ public sealed class WorkflowUiExporter
             {
                 await repositoryButton.First.WaitForAsync(new() { Timeout = 5_000 }).ConfigureAwait(false);
             }
-            catch (PlaywrightException)
+            catch (Exception exception) when (exception is PlaywrightException or TimeoutException)
             {
                 // No repository bound (fresh Auto-add) — fall through with null.
             }
@@ -158,7 +165,23 @@ public sealed class WorkflowUiExporter
             filter = ViewUiExporter.NormalizeUiText(await filters.First.InputValueAsync().ConfigureAwait(false));
         }
 
-        return new WorkflowUiState(enabled, contentTypes, statusValue, filter, repository);
+        return new WorkflowUiState(enabled, isSaved, contentTypes, statusValue, filter, repository);
+    }
+
+    /// <summary>
+    /// True when the workflow page URL points at a saved workflow. Saved workflows
+    /// use numeric ids; unsaved ones use volatile GUIDs (M7 discovery).
+    /// </summary>
+    public static bool IsSavedWorkflowUrl(string? url)
+    {
+        if (string.IsNullOrWhiteSpace(url))
+        {
+            return false;
+        }
+
+        var path = url.Split('?', 2)[0].Split('#', 2)[0].TrimEnd('/');
+        var lastSegment = path[(path.LastIndexOf('/') + 1)..];
+        return lastSegment.Length > 0 && lastSegment.All(char.IsAsciiDigit);
     }
 
     /// <summary>Parses "Status: &lt;value&gt;" into the value; null when the text has no such prefix.</summary>
@@ -205,6 +228,7 @@ public sealed class WorkflowUiExporter
 /// <summary>Settings of a workflow as currently displayed in the UI (M7).</summary>
 internal sealed record WorkflowUiState(
     bool Enabled,
+    bool IsSaved,
     IReadOnlyList<string>? ContentTypes,
     string? StatusValue,
     string? Filter,

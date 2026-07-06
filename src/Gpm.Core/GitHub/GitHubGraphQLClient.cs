@@ -71,10 +71,34 @@ public sealed class GitHubGraphQLClient : IDisposable
         ArgumentException.ThrowIfNullOrWhiteSpace(query);
 
         var payload = JsonSerializer.Serialize(new { query, variables });
-        using var document = await ExecuteAsync(payload, cancellationToken).ConfigureAwait(false);
+        var temporaryConflictRetries = 0;
 
-        if (document.RootElement.TryGetProperty("errors", out var errors))
+        while (true)
         {
+            using var document = await ExecuteAsync(payload, cancellationToken).ConfigureAwait(false);
+
+            if (!document.RootElement.TryGetProperty("errors", out var errors))
+            {
+                return document.RootElement.GetProperty("data").Clone();
+            }
+
+            var errorsJson = errors.GetRawText();
+
+            // Projects V2 mutations occasionally fail with UNPROCESSABLE
+            // "…temporary conflict. Please try again." — the API explicitly asks
+            // for a retry and the failed attempt has no side effects.
+            if (temporaryConflictRetries < MaxServerErrorRetries
+                && errorsJson.Contains("temporary conflict", StringComparison.OrdinalIgnoreCase))
+            {
+                var backoff = GetBackoff(temporaryConflictRetries);
+                temporaryConflictRetries++;
+                await NotifyAndDelayAsync(
+                    string.Create(CultureInfo.InvariantCulture, $"Temporary conflict reported by the API; retrying in {backoff.TotalSeconds:0}s (attempt {temporaryConflictRetries}/{MaxServerErrorRetries})."),
+                    backoff,
+                    cancellationToken).ConfigureAwait(false);
+                continue;
+            }
+
             string? errorType = null;
             if (errors.ValueKind == JsonValueKind.Array
                 && errors.GetArrayLength() > 0
@@ -84,14 +108,12 @@ public sealed class GitHubGraphQLClient : IDisposable
                 errorType = typeElement.GetString();
             }
 
-            throw new GitHubGraphQLException($"GraphQL error: {errors.GetRawText()}")
+            throw new GitHubGraphQLException($"GraphQL error: {errorsJson}")
             {
-                ErrorsJson = errors.GetRawText(),
+                ErrorsJson = errorsJson,
                 ErrorType = errorType,
             };
         }
-
-        return document.RootElement.GetProperty("data").Clone();
     }
 
     /// <summary>
@@ -164,9 +186,36 @@ public sealed class GitHubGraphQLClient : IDisposable
         while (true)
         {
             using var request = CreateRequest();
-            using var response = await _httpClient.SendAsync(request, cancellationToken).ConfigureAwait(false);
-            var status = response.StatusCode;
-            var body = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+            HttpResponseMessage? response = null;
+            string body;
+            HttpStatusCode status;
+            try
+            {
+                response = await _httpClient.SendAsync(request, cancellationToken).ConfigureAwait(false);
+                status = response.StatusCode;
+                body = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+            }
+            catch (HttpRequestException exception)
+            {
+                // Transient transport failures (connection reset, "response ended
+                // prematurely", DNS blips) get the same backoff budget as 5xx.
+                response?.Dispose();
+                if (serverErrorRetries >= MaxServerErrorRetries)
+                {
+                    throw new GitHubGraphQLException(
+                        $"Network error persisted after {MaxServerErrorRetries} retries: {exception.Message}");
+                }
+
+                var networkBackoff = GetBackoff(serverErrorRetries);
+                serverErrorRetries++;
+                await NotifyAndDelayAsync(
+                    string.Create(CultureInfo.InvariantCulture, $"Network error ({exception.Message}); backing off {networkBackoff.TotalSeconds:0}s (attempt {serverErrorRetries}/{MaxServerErrorRetries})."),
+                    networkBackoff,
+                    cancellationToken).ConfigureAwait(false);
+                continue;
+            }
+
+            using var _ = response;
 
             if (response.IsSuccessStatusCode)
             {

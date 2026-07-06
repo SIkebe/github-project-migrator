@@ -331,6 +331,7 @@ public sealed class ProjectVerifier
         CompareUiValue(differences, name, "group by", source.GroupBy, target.GroupBy);
         CompareUiValue(differences, name, "sort by", source.SortBy, target.SortBy);
         CompareUiValue(differences, name, "slice by", source.SliceBy, target.SliceBy);
+        CompareUiValue(differences, name, "swimlanes", source.Swimlanes, target.Swimlanes);
         if (!UiListEquals(source.FieldSum, target.FieldSum))
         {
             Add(differences, VerifySeverity.Warning, ViewCategory,

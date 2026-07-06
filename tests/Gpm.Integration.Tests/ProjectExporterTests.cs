@@ -66,7 +66,15 @@ public class ProjectExporterTests
         }
         finally
         {
-            Directory.Delete(outDirectory, recursive: true);
+            try
+            {
+                Directory.Delete(outDirectory, recursive: true);
+            }
+            catch (IOException)
+            {
+                // Best-effort cleanup in the temp folder; transient locks (AV scans
+                // during parallel test runs) must not fail the test.
+            }
         }
     }
 
@@ -150,24 +158,36 @@ public class ProjectExporterTests
         var snapshot = await ExportFixtureAsync();
 
         Assert.Equal(3, snapshot.Views.Count);
-        Assert.Equal("TABLE_LAYOUT", Assert.Single(snapshot.Views, v => v.Name == "View 1").Layout);
-        Assert.Equal("BOARD_LAYOUT", Assert.Single(snapshot.Views, v => v.Name == "Fixture Board").Layout);
+        var table = Assert.Single(snapshot.Views, v => v.Name == "View 1");
+        Assert.Equal("TABLE_LAYOUT", table.Layout);
+        Assert.Equal("status:Todo", table.Filter);
+        var sort = Assert.Single(table.SortByFields);
+        Assert.Equal("Fixture Number", sort.Field);
+        Assert.Equal("ASC", sort.Direction);
+        Assert.Contains("Fixture Text", table.VisibleFields);
+        Assert.Contains("Fixture Date", table.VisibleFields);
+
+        var board = Assert.Single(snapshot.Views, v => v.Name == "Fixture Board");
+        Assert.Equal("BOARD_LAYOUT", board.Layout);
+        Assert.Equal("Fixture Select", Assert.Single(board.VerticalGroupByFields));
+        Assert.Equal("Status", Assert.Single(board.GroupByFields)); // board swimlanes
+
         Assert.Equal("ROADMAP_LAYOUT", Assert.Single(snapshot.Views, v => v.Name == "Fixture Roadmap").Layout);
 
         foreach (var view in snapshot.Views)
         {
             Assert.True(view.Number > 0);
             Assert.NotEmpty(view.VisibleFields);
-            Assert.Null(view.Ui); // reserved for M6
+            Assert.Null(view.Ui); // browser-only (M6)
         }
     }
 
     [Fact]
-    public async Task Export_contains_seven_enabled_fixture_workflows()
+    public async Task Export_contains_nine_fixture_workflows_including_the_disabled_one()
     {
         var snapshot = await ExportFixtureAsync();
 
-        string[] expected =
+        string[] expectedEnabled =
         [
             "Item closed",
             "Pull request merged",
@@ -176,16 +196,22 @@ public class ProjectExporterTests
             "Pull request linked to issue",
             "Item added to project",
             "Auto-add to project",
+            "Auto-add secondary",
         ];
 
+        Assert.Equal(9, snapshot.Workflows.Count);
         var enabled = snapshot.Workflows.Where(w => w.Enabled).Select(w => w.Name).ToList();
-        Assert.Equal(7, enabled.Count);
-        foreach (var name in expected)
+        Assert.Equal(8, enabled.Count);
+        foreach (var name in expectedEnabled)
         {
             Assert.Contains(name, enabled);
         }
 
-        Assert.All(snapshot.Workflows, w => Assert.Null(w.Ui)); // reserved for M7
+        // Saved-but-disabled workflows are visible to GraphQL (unsaved ones are not).
+        var disabled = Assert.Single(snapshot.Workflows, w => !w.Enabled);
+        Assert.Equal("Code changes requested", disabled.Name);
+
+        Assert.All(snapshot.Workflows, w => Assert.Null(w.Ui)); // browser-only (M7)
     }
 
     [Fact]
