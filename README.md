@@ -149,7 +149,7 @@ Organization projects and user-owned projects (`--owner-type user`) are both sup
 | Project title override | ✅ | Use `--project-title` when creating the target project. |
 | Project description / README / public / closed state | ✅ | Migrated through the GraphQL API. |
 | Linked repositories | ✅ | Exported and re-linked during import when the target repository can be resolved through `--repo-mapping`. |
-| Project collaborators | ⚠️ Import-only | GitHub exposes a write API but no read API for project collaborators. `gpm` cannot export them automatically; it can apply collaborators from a hand-authored snapshot. |
+| Project collaborators | ⚠️ API import-only / UI export candidate | GitHub exposes a write API but no read API for project collaborators. Explicit collaborators are visible in the web UI and were verified with a separate user, so browser-based export is possible in a future release. Inherited/base-role access is not exportable. |
 | Project templates | ❌ | Template status is not part of v1. Use `--project-number` with a pre-created template project as a workaround. |
 
 ### Fields and field values
@@ -235,7 +235,7 @@ The following are out of scope for this project, either by design or because Git
 | Migrating repositories, issues or pull requests themselves | This is outside the Projects API. | Use GitHub Enterprise Importer first, then map the resulting repositories. |
 | Original author and creation timestamp for draft issues | GitHub always attributes newly-created draft issues to the importing user. | `gpm` prepends a note with the original metadata. |
 | Item history / field history | GitHub has no API to recreate historical field changes. | Only the current state is migrated. |
-| Exporting project collaborators | GitHub has a write mutation but no read field for current collaborators. | Add collaborators manually to the snapshot or after import. |
+| Exporting project collaborators through the API | GitHub has a write mutation but no read field for current collaborators. Explicit collaborators can be seen in the web UI and are a candidate for future browser-based export; inherited/base-role access is not reliably exportable. | Add collaborators manually to the snapshot or after import for v1. |
 | View tab drag-and-drop order | UI-only and fragile; not part of v1. | Reorder tabs manually if the order matters. |
 | Insights charts | No public API; UI is more complex than Views/Workflows. | Future v2 candidate. |
 | Redacted items | The exporting account cannot see them. | Export with an account that has access to all project content. |
@@ -251,7 +251,7 @@ Permanent limitations (cannot be solved by any tool):
 - **Original author / creation date of draft issues and status updates** cannot be preserved — the API always attributes writes to the token owner. `gpm` prepends a note with the original metadata instead.
 - **Item change history** and past field values cannot be migrated (no write API for history).
 - **Issues / pull requests themselves are not migrated** — that is the job of [GitHub Enterprise Importer](https://docs.github.com/en/migrations/using-github-enterprise-importer). `gpm` re-links items via the repository mapping CSV.
-- **Project collaborators cannot be exported** — the GraphQL API has no read field for them (write-only via `updateProjectV2Collaborators`). `gpm` migrates linked repositories automatically and applies collaborators only from hand-authored snapshots (`collaborators` array: `{ "type": "USER"|"TEAM", "login": "...", "role": "READER"|"WRITER"|"ADMIN" }`).
+- **Project collaborators cannot be exported through the API** — the GraphQL API has no read field for them (write-only via `updateProjectV2Collaborators`). Explicit collaborators are visible in the web UI and were verified with a separate user, so browser-based export is possible in a future release. Inherited access (organization owners, base role, policies, repository/team inheritance) is not reliably exportable. `gpm` migrates linked repositories automatically and applies collaborators only from hand-authored snapshots in v1 (`collaborators` array: `{ "type": "USER"|"TEAM", "login": "...", "role": "READER"|"WRITER"|"ADMIN" }`).
 - **GHES is not supported** (by design).
 - **Redacted items** (items the exporting user cannot see) cannot be exported; their count is reported as a warning.
 
