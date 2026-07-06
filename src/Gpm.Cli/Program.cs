@@ -301,7 +301,6 @@ importCommand.SetAction(async (parseResult, cancellationToken) =>
 
     using var client = new GitHubGraphQLClient(token, baseUrl is null ? null : GitHubGraphQLClient.NormalizeBaseUrl(baseUrl));
     client.OnRetry = Console.Error.WriteLine;
-    var importer = new ProjectImporter(client) { OnConflict = onConflict, OwnerType = ownerType, OnProgress = Console.Error.WriteLine };
 
     try
     {
@@ -313,6 +312,15 @@ importCommand.SetAction(async (parseResult, cancellationToken) =>
         var userMapping = userMappingPath is null
             ? System.Collections.ObjectModel.ReadOnlyDictionary<string, string>.Empty
             : CsvMapping.Load(userMappingPath);
+
+        var importer = new ProjectImporter(client)
+        {
+            OnConflict = onConflict,
+            OwnerType = ownerType,
+            RepositoryMapping = repoMapping,
+            UserMapping = userMapping,
+            OnProgress = Console.Error.WriteLine,
+        };
 
         var snapshot = await SnapshotFile.LoadAsync(inDirectory, cancellationToken);
         if (projectTitle is not null)

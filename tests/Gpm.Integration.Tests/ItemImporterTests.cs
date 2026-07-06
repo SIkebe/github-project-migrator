@@ -50,38 +50,85 @@ public class ItemImporterTests
         var title = NewTestTitle();
         var snapshot = source with { Project = source.Project with { Title = title } };
 
-        var result = await new ProjectImporter(client).ImportAsync(snapshot, TargetOrg, cancellationToken);
+        // Identity user mapping so the fixture's assigned draft keeps its assignee.
+        var userMapping = snapshot.Items
+            .SelectMany(i => i.Draft?.Assignees ?? [])
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(login => login, login => login, StringComparer.OrdinalIgnoreCase);
+
+        // The fixture links gpm-source/fixture-repo; map it to the target org's clone.
+        var linkMapping = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            [FixtureRepo] = TargetOrg + "/fixture-repo",
+        };
+
+        var projectImporter = new ProjectImporter(client) { RepositoryMapping = linkMapping };
+        var result = await projectImporter.ImportAsync(snapshot, TargetOrg, cancellationToken);
         var logDirectory = Directory.CreateTempSubdirectory("gpm-m4-").FullName;
         try
         {
-            var itemImporter = new ItemImporter(client) { RepositoryMapping = IdentityRepoMapping };
+            Assert.Empty(projectImporter.Warnings); // the mapped linked repository must resolve
+
+            var itemImporter = new ItemImporter(client) { RepositoryMapping = IdentityRepoMapping, UserMapping = userMapping };
             var itemResult = await itemImporter.ImportAsync(snapshot, result, logDirectory, cancellationToken);
 
-            // Every fixture item is mappable (drafts + fixture-repo issues), so everything is created.
+            // Every fixture item is mappable (drafts + fixture-repo issue/PR), so everything is created.
             Assert.Equal(snapshot.Items.Count, itemResult.Created);
             Assert.Equal(0, itemResult.Skipped);
 
             var imported = await ExportUntilItemCountAsync(exporter, TargetOrg, result.ProjectNumber, snapshot.Items.Count, cancellationToken);
             Assert.Equal(snapshot.Items.Count, imported.Items.Count);
 
-            // Overall order matches the snapshot (drafts and issues interleaved as in the source).
-            Assert.Equal(
-                snapshot.Items.OrderBy(i => i.Position).Select(ItemKey),
-                imported.Items.OrderBy(i => i.Position).Select(ItemKey));
+            // The linked repository was remapped to the target org.
+            Assert.NotNull(imported.LinkedRepositories);
+            Assert.Contains(TargetOrg + "/fixture-repo", imported.LinkedRepositories, StringComparer.OrdinalIgnoreCase);
 
-            // The three fixture drafts keep their titles, Status values and relative order.
-            var sourceDrafts = snapshot.Items.OrderBy(i => i.Position).Where(i => i.Type == "DRAFT_ISSUE").ToList();
-            var importedDrafts = imported.Items.OrderBy(i => i.Position).Where(i => i.Type == "DRAFT_ISSUE").ToList();
-            Assert.Equal(3, sourceDrafts.Count);
+            // Non-archived items keep the snapshot order (archived items are excluded from
+            // the position chain, so their enumeration position is not guaranteed).
+            Assert.Equal(
+                snapshot.Items.Where(i => !i.IsArchived).OrderBy(i => i.Position).Select(ItemKey),
+                imported.Items.Where(i => !i.IsArchived).OrderBy(i => i.Position).Select(ItemKey));
+
+            // The five fixture drafts keep their titles, Status values and relative order.
+            var sourceDrafts = snapshot.Items.OrderBy(i => i.Position).Where(i => i.Type == "DRAFT_ISSUE" && !i.IsArchived).ToList();
+            var importedDrafts = imported.Items.OrderBy(i => i.Position).Where(i => i.Type == "DRAFT_ISSUE" && !i.IsArchived).ToList();
+            Assert.Equal(4, sourceDrafts.Count);
             Assert.Equal(sourceDrafts.Select(i => i.Draft!.Title), importedDrafts.Select(i => i.Draft!.Title));
             Assert.Equal(sourceDrafts.Select(StatusOf), importedDrafts.Select(StatusOf));
+
+            // Every typed field value round-trips on draft 1 (text with non-ASCII, number, date, select, iteration).
+            var sourceDraft1 = Assert.Single(sourceDrafts, i => i.Draft!.Title == "Fixture draft 1");
+            var importedDraft1 = Assert.Single(importedDrafts, i => i.Draft!.Title == "Fixture draft 1");
+            foreach (var fieldName in (string[])["Fixture Text", "Fixture Number", "Fixture Date", "Fixture Select", "Fixture Sprint"])
+            {
+                var expected = sourceDraft1.FieldValues.Single(v => v.FieldName == fieldName);
+                var actual = importedDraft1.FieldValues.Single(v => v.FieldName == fieldName);
+                Assert.Equal(expected, actual);
+            }
+
+            // The fixture's Issue and PR items were relinked (identity mapping, cross-org).
+            var importedIssue = Assert.Single(imported.Items, i => i.Type == "ISSUE");
+            Assert.Equal(FixtureRepo, importedIssue.Repository);
+            Assert.Equal(1, importedIssue.Number);
+            var importedPullRequest = Assert.Single(imported.Items, i => i.Type == "PULL_REQUEST");
+            Assert.Equal(FixtureRepo, importedPullRequest.Repository);
+
+            // The archived draft was re-archived in the target.
+            var importedArchived = Assert.Single(imported.Items, i => i.IsArchived);
+            Assert.Equal("Fixture archived draft", importedArchived.Draft?.Title);
+
+            // The assigned draft kept its assignee through the identity user mapping.
+            var sourceAssigned = Assert.Single(snapshot.Items, i => i.Draft?.Title == "Fixture assigned draft");
+            var importedAssigned = Assert.Single(imported.Items, i => i.Draft?.Title == "Fixture assigned draft");
+            Assert.NotEmpty(sourceAssigned.Draft!.Assignees);
+            Assert.Equal(sourceAssigned.Draft.Assignees, importedAssigned.Draft!.Assignees);
 
             // The attribution note was prepended to every draft body.
             Assert.All(importedDrafts, draft =>
                 Assert.StartsWith("> _Originally created by @", draft.Draft!.Body, StringComparison.Ordinal));
 
             // Resume: a second run against the same log directory creates nothing new.
-            var resumeResult = await new ItemImporter(client) { RepositoryMapping = IdentityRepoMapping }
+            var resumeResult = await new ItemImporter(client) { RepositoryMapping = IdentityRepoMapping, UserMapping = userMapping }
                 .ImportAsync(snapshot, result, logDirectory, cancellationToken);
             Assert.Equal(0, resumeResult.Created);
             Assert.Equal(snapshot.Items.Count, resumeResult.Skipped);

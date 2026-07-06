@@ -96,6 +96,12 @@ public class SnapshotTests
                 FieldValues = [],
             },
         ],
+        Collaborators =
+        [
+            new CollaboratorSnapshot { Type = "USER", Login = "octocat", Role = "WRITER" },
+            new CollaboratorSnapshot { Type = "TEAM", Login = "fixture-team", Role = "READER" },
+        ],
+        LinkedRepositories = ["gpm-source/fixture-repo"],
     };
 
     [Fact]
@@ -144,6 +150,33 @@ public class SnapshotTests
         Assert.NotNull(draftItem.Draft);
         Assert.Equal("Fixture draft 1", draftItem.Draft.Title);
         Assert.Equal(["octocat"], draftItem.Draft.Assignees);
+
+        Assert.NotNull(restored.Collaborators);
+        Assert.Equal(2, restored.Collaborators.Count);
+        Assert.Equal(new CollaboratorSnapshot { Type = "USER", Login = "octocat", Role = "WRITER" }, restored.Collaborators[0]);
+        Assert.Equal(new CollaboratorSnapshot { Type = "TEAM", Login = "fixture-team", Role = "READER" }, restored.Collaborators[1]);
+        Assert.Equal(["gpm-source/fixture-repo"], restored.LinkedRepositories);
+    }
+
+    [Fact]
+    public void Deserialize_snapshot_without_collaborators_and_linked_repositories_yields_null()
+    {
+        // Snapshots written before the collaborator/linked-repository fields stay loadable
+        // within schema version 1; the new fields deserialize as null ("not captured").
+        const string Json =
+            """
+            {
+              "schemaVersion": 1,
+              "project": { "title": "T", "public": false, "closed": false },
+              "fields": [], "views": [], "workflows": [], "items": []
+            }
+            """;
+
+        var restored = JsonSerializer.Deserialize(Json, SnapshotJsonContext.Default.ProjectSnapshot);
+
+        Assert.NotNull(restored);
+        Assert.Null(restored.Collaborators);
+        Assert.Null(restored.LinkedRepositories);
     }
 
     [Fact]

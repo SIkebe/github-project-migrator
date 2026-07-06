@@ -1,3 +1,4 @@
+using System.Collections.ObjectModel;
 using System.Globalization;
 using System.Text.Json;
 using Gpm.Core.GitHub;
@@ -22,6 +23,7 @@ public sealed class ProjectImporter
         new(["TEXT", "NUMBER", "DATE", "SINGLE_SELECT", "ITERATION"], StringComparer.Ordinal);
 
     private readonly GitHubGraphQLClient _client;
+    private readonly List<string> _warnings = [];
 
     public ProjectImporter(GitHubGraphQLClient client)
     {
@@ -34,6 +36,15 @@ public sealed class ProjectImporter
 
     /// <summary>Owner type of the target: organization (default) or user.</summary>
     public ProjectOwnerType OwnerType { get; init; } = ProjectOwnerType.Organization;
+
+    /// <summary>Source "org/repo" → target "org/repo" mapping for linked repositories. Unmapped repositories are linked by their source name.</summary>
+    public IReadOnlyDictionary<string, string> RepositoryMapping { get; init; } = ReadOnlyDictionary<string, string>.Empty;
+
+    /// <summary>Source login → target login mapping for user collaborators. Unmapped logins are resolved as-is.</summary>
+    public IReadOnlyDictionary<string, string> UserMapping { get; init; } = ReadOnlyDictionary<string, string>.Empty;
+
+    /// <summary>Warnings accumulated by the last import (unresolvable collaborators, unlinkable repositories).</summary>
+    public IReadOnlyList<string> Warnings => _warnings;
 
     /// <summary>Invoked with a human-readable progress message at each import stage.</summary>
     public Action<string>? OnProgress { get; set; }
@@ -66,13 +77,13 @@ public sealed class ProjectImporter
                 case ConflictAction.Update:
                     OnProgress?.Invoke(string.Create(CultureInfo.InvariantCulture,
                         $"Project '{title}' already exists (#{existing.Number}); applying snapshot to it (on-conflict=update)."));
-                    return await ApplySnapshotAsync(snapshot, existing, created: false, cancellationToken).ConfigureAwait(false);
+                    return await ApplySnapshotAsync(snapshot, ownerLogin, existing, created: false, cancellationToken).ConfigureAwait(false);
             }
         }
 
         OnProgress?.Invoke($"Creating project '{title}' in '{ownerLogin}'...");
         var project = await CreateProjectAsync(ownerId, title, cancellationToken).ConfigureAwait(false);
-        return await ApplySnapshotAsync(snapshot, project, created: true, cancellationToken).ConfigureAwait(false);
+        return await ApplySnapshotAsync(snapshot, ownerLogin, project, created: true, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -93,12 +104,13 @@ public sealed class ProjectImporter
 
         OnProgress?.Invoke(string.Create(CultureInfo.InvariantCulture,
             $"Applying snapshot to existing project #{project.Number}..."));
-        return await ApplySnapshotAsync(snapshot, project, created: false, cancellationToken).ConfigureAwait(false);
+        return await ApplySnapshotAsync(snapshot, ownerLogin, project, created: false, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>Applies metadata, custom fields and Status options to the target project and builds the result.</summary>
-    private async Task<ImportResult> ApplySnapshotAsync(ProjectSnapshot snapshot, ProjectRef project, bool created, CancellationToken cancellationToken)
+    private async Task<ImportResult> ApplySnapshotAsync(ProjectSnapshot snapshot, string ownerLogin, ProjectRef project, bool created, CancellationToken cancellationToken)
     {
+        _warnings.Clear();
         OnProgress?.Invoke("Applying project metadata (description, README, visibility, closed state)...");
         await UpdateProjectMetadataAsync(project.Id, snapshot.Project, cancellationToken).ConfigureAwait(false);
 
@@ -140,9 +152,202 @@ public sealed class ProjectImporter
             }
         }
 
+        await ApplyCollaboratorsAsync(project.Id, ownerLogin, snapshot.Collaborators, cancellationToken).ConfigureAwait(false);
+        await ApplyLinkedRepositoriesAsync(project.Id, snapshot.LinkedRepositories, cancellationToken).ConfigureAwait(false);
+
         OnProgress?.Invoke(string.Create(CultureInfo.InvariantCulture,
             $"Import finished: project #{project.Number}, {maps.FieldIds.Count} fields mapped."));
         return maps.ToResult(project, created);
+    }
+
+    /// <summary>
+    /// Applies snapshot collaborators through a single <c>updateProjectV2Collaborators</c>
+    /// call. User logins go through <see cref="UserMapping"/> (unmapped logins are used
+    /// as-is); team slugs are resolved in the target organization. Unresolvable
+    /// collaborators are skipped with a warning. Note: exports never populate
+    /// collaborators (the API has no read field), so this only runs for hand-authored
+    /// snapshots.
+    /// </summary>
+    private async Task ApplyCollaboratorsAsync(string projectId, string ownerLogin, IReadOnlyList<CollaboratorSnapshot>? collaborators, CancellationToken cancellationToken)
+    {
+        if (collaborators is not { Count: > 0 })
+        {
+            return;
+        }
+
+        var inputs = new List<object>();
+        foreach (var collaborator in collaborators)
+        {
+            if (string.Equals(collaborator.Type, "USER", StringComparison.OrdinalIgnoreCase))
+            {
+                var login = UserMapping.TryGetValue(collaborator.Login, out var mapped) ? mapped : collaborator.Login;
+                var userId = await ResolveUserIdAsync(login, cancellationToken).ConfigureAwait(false);
+                if (userId is null)
+                {
+                    Warn($"collaborator user '{login}' was not found; skipping.");
+                    continue;
+                }
+
+                inputs.Add(new { userId, role = collaborator.Role });
+            }
+            else if (string.Equals(collaborator.Type, "TEAM", StringComparison.OrdinalIgnoreCase))
+            {
+                if (OwnerType == ProjectOwnerType.User)
+                {
+                    Warn($"collaborator team '{collaborator.Login}': team collaborators are not supported on user projects; skipping.");
+                    continue;
+                }
+
+                var teamId = await ResolveTeamIdAsync(ownerLogin, collaborator.Login, cancellationToken).ConfigureAwait(false);
+                if (teamId is null)
+                {
+                    Warn($"collaborator team '{collaborator.Login}' was not found in organization '{ownerLogin}'; skipping.");
+                    continue;
+                }
+
+                inputs.Add(new { teamId, role = collaborator.Role });
+            }
+            else
+            {
+                Warn($"collaborator '{collaborator.Login}': unknown type '{collaborator.Type}'; skipping.");
+            }
+        }
+
+        if (inputs.Count == 0)
+        {
+            return; // The mutation rejects an empty collaborators list.
+        }
+
+        OnProgress?.Invoke(string.Create(CultureInfo.InvariantCulture,
+            $"Applying {inputs.Count} project collaborators..."));
+        await _client.QueryAsync(
+            """
+            mutation($projectId: ID!, $collaborators: [ProjectV2Collaborator!]!) {
+              updateProjectV2Collaborators(input: { projectId: $projectId, collaborators: $collaborators }) {
+                collaborators(first: 100) { nodes { __typename } }
+              }
+            }
+            """,
+            new { projectId, collaborators = inputs.ToArray() },
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Links the snapshot's linked repositories to the target project via
+    /// <c>linkProjectV2ToRepository</c>. Repository names go through
+    /// <see cref="RepositoryMapping"/> (unmapped names are used as-is); repositories
+    /// that cannot be resolved or linked (e.g. not visible to the target account, or
+    /// outside a GHEC-DR tenant) are skipped with a warning.
+    /// </summary>
+    private async Task ApplyLinkedRepositoriesAsync(string projectId, IReadOnlyList<string>? repositories, CancellationToken cancellationToken)
+    {
+        if (repositories is not { Count: > 0 })
+        {
+            return;
+        }
+
+        foreach (var repository in repositories)
+        {
+            var mapped = RepositoryMapping.TryGetValue(repository, out var target) ? target : repository;
+            var separator = mapped.IndexOf('/', StringComparison.Ordinal);
+            if (separator <= 0 || separator == mapped.Length - 1)
+            {
+                Warn($"linked repository '{mapped}' is not in 'owner/name' form; skipping.");
+                continue;
+            }
+
+            var repositoryId = await ResolveRepositoryIdAsync(mapped[..separator], mapped[(separator + 1)..], cancellationToken).ConfigureAwait(false);
+            if (repositoryId is null)
+            {
+                Warn($"linked repository '{mapped}' was not found; skipping.");
+                continue;
+            }
+
+            try
+            {
+                await _client.QueryAsync(
+                    """
+                    mutation($projectId: ID!, $repositoryId: ID!) {
+                      linkProjectV2ToRepository(input: { projectId: $projectId, repositoryId: $repositoryId }) {
+                        repository { nameWithOwner }
+                      }
+                    }
+                    """,
+                    new { projectId, repositoryId },
+                    cancellationToken).ConfigureAwait(false);
+                OnProgress?.Invoke($"Linked repository '{mapped}'.");
+            }
+            catch (GitHubGraphQLException exception)
+            {
+                Warn($"could not link repository '{mapped}': {exception.Message}");
+            }
+        }
+    }
+
+    private async Task<string?> ResolveUserIdAsync(string login, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var data = await _client.QueryAsync(
+                "query($login: String!) { user(login: $login) { id } }",
+                new { login },
+                cancellationToken).ConfigureAwait(false);
+
+            var user = data.GetProperty("user");
+            return user.ValueKind == JsonValueKind.Object ? user.GetProperty("id").GetString() : null;
+        }
+        catch (GitHubGraphQLException exception) when (exception.ErrorType == "NOT_FOUND")
+        {
+            return null;
+        }
+    }
+
+    private async Task<string?> ResolveTeamIdAsync(string organizationLogin, string teamSlug, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var data = await _client.QueryAsync(
+                "query($login: String!, $slug: String!) { organization(login: $login) { team(slug: $slug) { id } } }",
+                new { login = organizationLogin, slug = teamSlug },
+                cancellationToken).ConfigureAwait(false);
+
+            var organization = data.GetProperty("organization");
+            if (organization.ValueKind != JsonValueKind.Object)
+            {
+                return null;
+            }
+
+            var team = organization.GetProperty("team");
+            return team.ValueKind == JsonValueKind.Object ? team.GetProperty("id").GetString() : null;
+        }
+        catch (GitHubGraphQLException exception) when (exception.ErrorType == "NOT_FOUND")
+        {
+            return null;
+        }
+    }
+
+    private async Task<string?> ResolveRepositoryIdAsync(string owner, string name, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var data = await _client.QueryAsync(
+                "query($owner: String!, $name: String!) { repository(owner: $owner, name: $name) { id } }",
+                new { owner, name },
+                cancellationToken).ConfigureAwait(false);
+
+            var repository = data.GetProperty("repository");
+            return repository.ValueKind == JsonValueKind.Object ? repository.GetProperty("id").GetString() : null;
+        }
+        catch (GitHubGraphQLException exception) when (exception.ErrorType == "NOT_FOUND")
+        {
+            return null;
+        }
+    }
+
+    private void Warn(string message)
+    {
+        _warnings.Add(message);
+        OnProgress?.Invoke("warning: " + message);
     }
 
     /// <summary>Skip path: reads the existing project's fields to build the mappings without modifying anything.</summary>

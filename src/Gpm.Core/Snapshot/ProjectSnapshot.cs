@@ -20,6 +20,34 @@ public sealed record ProjectSnapshot
     public required IReadOnlyList<WorkflowSnapshot> Workflows { get; init; }
 
     public required IReadOnlyList<ItemSnapshot> Items { get; init; }
+
+    /// <summary>
+    /// Project collaborators (users/teams with an explicit project role). Null when not
+    /// captured: the GraphQL API has no read field for project collaborators
+    /// (<c>ProjectV2ActorConnection</c> appears only on the
+    /// <c>updateProjectV2Collaborators</c> mutation payload), so <c>gpm export</c> always
+    /// leaves this null. Hand-authored snapshots can set it and import applies it.
+    /// </summary>
+    public IReadOnlyList<CollaboratorSnapshot>? Collaborators { get; init; }
+
+    /// <summary>
+    /// Repositories linked to the project, in "owner/name" form. Null when the snapshot
+    /// predates this field (schema additions are backward compatible within version 1).
+    /// </summary>
+    public IReadOnlyList<string>? LinkedRepositories { get; init; }
+}
+
+/// <summary>A project collaborator: a user or a team with an explicit role.</summary>
+public sealed record CollaboratorSnapshot
+{
+    /// <summary>Collaborator kind: USER or TEAM.</summary>
+    public required string Type { get; init; }
+
+    /// <summary>User login, or team slug for TEAM collaborators.</summary>
+    public required string Login { get; init; }
+
+    /// <summary>GraphQL <c>ProjectV2Roles</c> (READER, WRITER, ADMIN).</summary>
+    public required string Role { get; init; }
 }
 
 /// <summary>Project-level metadata (title, description, README, visibility).</summary>

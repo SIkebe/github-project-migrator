@@ -376,6 +376,35 @@ public class ProjectVerifierTests
     }
 
     [Fact]
+    public void Archived_item_position_differences_are_ignored()
+    {
+        // Archived items cannot be repositioned via the API, so only the relative order
+        // of non-archived items is compared.
+        var source = BuildSnapshot() with
+        {
+            Items =
+            [
+                DraftItem(position: 0, title: "Archived", body: null, status: null, archived: true),
+                DraftItem(position: 1, title: "Draft A", body: null, status: null),
+                DraftItem(position: 2, title: "Draft B", body: null, status: null),
+            ],
+        };
+        var target = source with
+        {
+            Items =
+            [
+                DraftItem(position: 0, title: "Draft A", body: null, status: null),
+                DraftItem(position: 1, title: "Draft B", body: null, status: null),
+                DraftItem(position: 2, title: "Archived", body: null, status: null, archived: true),
+            ],
+        };
+
+        var report = ProjectVerifier.Compare(source, target);
+
+        Assert.DoesNotContain(report.Differences, d => d.Message.Contains("order mismatch", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void Archived_state_difference_is_an_error()
     {
         var target = WithItems(BuildSnapshot(), i => i.Draft?.Title == "Draft B" ? i with { IsArchived = true } : i);
@@ -412,5 +441,76 @@ public class ProjectVerifierTests
 
         Assert.Contains(report.Differences, d =>
             d.Severity == VerifySeverity.Error && d.Category == "Item" && d.Message.Contains("draft body mismatch", StringComparison.Ordinal));
+    }
+
+    // ----- collaborators / linked repositories -----
+
+    [Fact]
+    public void Collaborators_are_not_compared_when_either_side_is_null()
+    {
+        // Exports always leave collaborators null (no read API), so a null side must not
+        // produce differences even when the other side carries collaborators.
+        var withCollaborators = BuildSnapshot() with
+        {
+            Collaborators = [new CollaboratorSnapshot { Type = "USER", Login = "octocat", Role = "WRITER" }],
+        };
+
+        Assert.Empty(ProjectVerifier.Compare(withCollaborators, BuildSnapshot()).Differences);
+        Assert.Empty(ProjectVerifier.Compare(BuildSnapshot(), withCollaborators).Differences);
+    }
+
+    [Fact]
+    public void Collaborator_differences_are_warnings()
+    {
+        var source = BuildSnapshot() with
+        {
+            Collaborators =
+            [
+                new CollaboratorSnapshot { Type = "USER", Login = "octocat", Role = "WRITER" },
+                new CollaboratorSnapshot { Type = "TEAM", Login = "fixture-team", Role = "READER" },
+            ],
+        };
+        var target = BuildSnapshot() with
+        {
+            Collaborators =
+            [
+                new CollaboratorSnapshot { Type = "USER", Login = "Octocat", Role = "ADMIN" }, // role drift (login is case-insensitive)
+                new CollaboratorSnapshot { Type = "USER", Login = "extra-user", Role = "READER" }, // extra
+            ],
+        };
+
+        var report = ProjectVerifier.Compare(source, target);
+
+        Assert.True(report.IsMatch); // warnings only
+        Assert.Contains(report.Differences, d =>
+            d.Severity == VerifySeverity.Warning && d.Message.Contains("USER 'octocat': role mismatch", StringComparison.Ordinal));
+        Assert.Contains(report.Differences, d =>
+            d.Severity == VerifySeverity.Warning && d.Message.Contains("TEAM 'fixture-team' is missing in the target", StringComparison.Ordinal));
+        Assert.Contains(report.Differences, d =>
+            d.Severity == VerifySeverity.Warning && d.Message.Contains("USER 'extra-user' exists only in the target", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Linked_repository_differences_are_warnings()
+    {
+        var source = BuildSnapshot() with { LinkedRepositories = ["org/repo-a", "org/repo-b"] };
+        var target = BuildSnapshot() with { LinkedRepositories = ["ORG/REPO-A", "org/repo-c"] }; // names are case-insensitive
+
+        var report = ProjectVerifier.Compare(source, target);
+
+        Assert.True(report.IsMatch); // warnings only
+        Assert.Contains(report.Differences, d =>
+            d.Severity == VerifySeverity.Warning && d.Message.Contains("'org/repo-b' is missing in the target", StringComparison.Ordinal));
+        Assert.Contains(report.Differences, d =>
+            d.Severity == VerifySeverity.Warning && d.Message.Contains("'org/repo-c' exists only in the target", StringComparison.Ordinal));
+        Assert.DoesNotContain(report.Differences, d => d.Message.Contains("repo-a", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void Linked_repositories_are_not_compared_when_the_source_predates_capture()
+    {
+        var target = BuildSnapshot() with { LinkedRepositories = ["org/repo-a"] };
+
+        Assert.Empty(ProjectVerifier.Compare(BuildSnapshot(), target).Differences);
     }
 }

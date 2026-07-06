@@ -59,6 +59,8 @@ public sealed class ProjectVerifier
         CompareViews(source.Views, target.Views, differences);
         CompareWorkflows(source.Workflows, target.Workflows, differences);
         CompareItems(source.Items, target.Items, differences);
+        CompareCollaborators(source.Collaborators, target.Collaborators, differences);
+        CompareLinkedRepositories(source.LinkedRepositories, target.LinkedRepositories, differences);
         return new VerifyReport { Differences = differences };
     }
 
@@ -221,6 +223,70 @@ public sealed class ProjectVerifier
         }
 
         return merged;
+    }
+
+    // ----- collaborators / linked repositories (warnings: the API has no collaborator
+    // read field, and linked repositories may be intentionally remapped on import) -----
+
+    private static void CompareCollaborators(IReadOnlyList<CollaboratorSnapshot>? source, IReadOnlyList<CollaboratorSnapshot>? target, List<VerifyDifference> differences)
+    {
+        // Null means "not captured" (exports always leave collaborators null because the
+        // GraphQL API has no read field for them); only compare when both sides carry data.
+        if (source is null || target is null)
+        {
+            return;
+        }
+
+        var targetByKey = target.ToDictionary(CollaboratorKey, c => c, StringComparer.OrdinalIgnoreCase);
+        foreach (var collaborator in source)
+        {
+            if (!targetByKey.TryGetValue(CollaboratorKey(collaborator), out var other))
+            {
+                Add(differences, VerifySeverity.Warning, ProjectCategory,
+                    $"collaborator {Describe(collaborator)} is missing in the target");
+            }
+            else if (!string.Equals(collaborator.Role, other.Role, StringComparison.OrdinalIgnoreCase))
+            {
+                Add(differences, VerifySeverity.Warning, ProjectCategory,
+                    $"collaborator {Describe(collaborator)}: role mismatch (source {collaborator.Role}, target {other.Role})");
+            }
+        }
+
+        var sourceKeys = source.Select(CollaboratorKey).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        foreach (var extra in target.Where(c => !sourceKeys.Contains(CollaboratorKey(c))))
+        {
+            Add(differences, VerifySeverity.Warning, ProjectCategory,
+                $"collaborator {Describe(extra)} exists only in the target");
+        }
+    }
+
+    private static string CollaboratorKey(CollaboratorSnapshot collaborator)
+        => collaborator.Type.ToUpperInvariant() + ":" + collaborator.Login;
+
+    private static string Describe(CollaboratorSnapshot collaborator)
+        => $"{collaborator.Type.ToUpperInvariant()} '{collaborator.Login}'";
+
+    private static void CompareLinkedRepositories(IReadOnlyList<string>? source, IReadOnlyList<string>? target, List<VerifyDifference> differences)
+    {
+        // Null means the snapshot predates linked-repository capture; nothing to compare.
+        if (source is null)
+        {
+            return;
+        }
+
+        var targetSet = (target ?? []).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        foreach (var repository in source.Where(r => !targetSet.Contains(r)))
+        {
+            Add(differences, VerifySeverity.Warning, ProjectCategory,
+                $"linked repository '{repository}' is missing in the target (it may be intentionally remapped)");
+        }
+
+        var sourceSet = source.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        foreach (var extra in (target ?? []).Where(r => !sourceSet.Contains(r)))
+        {
+            Add(differences, VerifySeverity.Warning, ProjectCategory,
+                $"linked repository '{extra}' exists only in the target");
+        }
     }
 
     // ----- views / workflows (errors since M6/M7 migrate them; UI details stay warnings) -----
@@ -413,16 +479,20 @@ public sealed class ProjectVerifier
             AddError(differences, ItemCategory, $"{key} exists only in the target");
         }
 
-        // The order is only comparable when both sides contain the same items.
+        // The order is only comparable when both sides contain the same items. Archived
+        // items are excluded: updateProjectV2ItemPosition cannot move them, so import
+        // cannot restore their position and the API enumerates them wherever it likes.
         var sameMultiset = sourceOrdered.Count == targetOrdered.Count
             && sourceGroups.Count == targetGroups.Count
             && sourceGroups.All(g => targetGroups.TryGetValue(g.Key, out var t) && t.Count == g.Value.Count);
         if (sameMultiset)
         {
-            for (var i = 0; i < sourceOrdered.Count; i++)
+            var sourceActive = sourceOrdered.Where(i => !i.IsArchived).ToList();
+            var targetActive = targetOrdered.Where(i => !i.IsArchived).ToList();
+            for (var i = 0; i < Math.Min(sourceActive.Count, targetActive.Count); i++)
             {
-                var sourceKey = ItemKey(sourceOrdered[i]);
-                var targetKey = ItemKey(targetOrdered[i]);
+                var sourceKey = ItemKey(sourceActive[i]);
+                var targetKey = ItemKey(targetActive[i]);
                 if (!string.Equals(sourceKey, targetKey, StringComparison.Ordinal))
                 {
                     AddError(differences, ItemCategory, string.Create(CultureInfo.InvariantCulture,

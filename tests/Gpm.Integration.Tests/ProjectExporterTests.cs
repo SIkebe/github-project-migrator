@@ -78,6 +78,24 @@ public class ProjectExporterTests
         Assert.Equal(ProjectSnapshot.CurrentSchemaVersion, snapshot.SchemaVersion);
         Assert.False(string.IsNullOrWhiteSpace(snapshot.Project.Title));
         Assert.False(snapshot.Project.Closed);
+
+        // Enriched fixture metadata: short description and a multiline README with emoji.
+        Assert.Equal("gpm fixture project", snapshot.Project.ShortDescription);
+        Assert.NotNull(snapshot.Project.Readme);
+        Assert.Contains("\n", snapshot.Project.Readme, StringComparison.Ordinal);
+        Assert.Contains("\uD83D\uDCE6", snapshot.Project.Readme, StringComparison.Ordinal); // 📦
+    }
+
+    [Fact]
+    public async Task Export_captures_linked_repositories_and_leaves_collaborators_null()
+    {
+        var snapshot = await ExportFixtureAsync();
+
+        Assert.NotNull(snapshot.LinkedRepositories);
+        Assert.Contains("gpm-source/fixture-repo", snapshot.LinkedRepositories, StringComparer.OrdinalIgnoreCase);
+
+        // The GraphQL API has no read field for project collaborators, so exports leave them null.
+        Assert.Null(snapshot.Collaborators);
     }
 
     [Fact]
@@ -106,11 +124,19 @@ public class ProjectExporterTests
         Assert.NotNull(sprint.IterationConfiguration);
         Assert.Equal(14, sprint.IterationConfiguration.Duration);
 
+        // Sprint 0 is past-dated, so the API must classify it into completedIterations.
+        var sprint0 = Assert.Single(sprint.IterationConfiguration.CompletedIterations, i => i.Title == "Sprint 0");
+        Assert.Equal(14, sprint0.Duration);
+        Assert.True(
+            DateTime.Parse(sprint0.StartDate, System.Globalization.CultureInfo.InvariantCulture).AddDays(sprint0.Duration) < DateTime.UtcNow.Date.AddDays(1),
+            $"Sprint 0 ({sprint0.StartDate} + {sprint0.Duration}d) should have ended in the past");
+
         // Iterations move to completedIterations as time passes, so check the union.
         var allIterations = sprint.IterationConfiguration.Iterations
             .Concat(sprint.IterationConfiguration.CompletedIterations)
             .ToList();
-        foreach (var title in (string[])["Sprint 1", "Sprint 2", "Sprint 3"])
+        Assert.Equal(4, allIterations.Count);
+        foreach (var title in (string[])["Sprint 0", "Sprint 1", "Sprint 2", "Sprint 3"])
         {
             var iteration = Assert.Single(allIterations, i => i.Title == title);
             Assert.Equal(14, iteration.Duration);
@@ -163,25 +189,76 @@ public class ProjectExporterTests
     }
 
     [Fact]
-    public async Task Export_contains_three_fixture_drafts_with_positions()
+    public async Task Export_contains_all_seven_fixture_items_with_positions()
     {
         var snapshot = await ExportFixtureAsync();
 
-        Assert.Equal(3, snapshot.Items.Count);
-        Assert.All(snapshot.Items, item => Assert.Equal("DRAFT_ISSUE", item.Type));
-        Assert.All(snapshot.Items, item => Assert.False(item.IsArchived));
+        Assert.Equal(7, snapshot.Items.Count);
+        Assert.Equal(Enumerable.Range(0, 7), snapshot.Items.Select(i => i.Position));
+        Assert.Equal(5, snapshot.Items.Count(i => i.Type == "DRAFT_ISSUE"));
 
-        var draftTitles = snapshot.Items.Select(i => i.Draft?.Title).ToList();
-        foreach (var title in (string[])["Fixture draft 1", "Fixture draft 2", "Fixture draft 3"])
-        {
-            Assert.Contains(title, draftTitles);
-        }
+        // Issue and PR items carry their repository and number.
+        var issue = Assert.Single(snapshot.Items, i => i.Type == "ISSUE");
+        Assert.Equal("gpm-source/fixture-repo", issue.Repository);
+        Assert.Equal(1, issue.Number);
+        Assert.False(issue.IsArchived);
 
-        // Position records enumeration order.
-        Assert.Equal([0, 1, 2], snapshot.Items.Select(i => i.Position));
+        var pullRequest = Assert.Single(snapshot.Items, i => i.Type == "PULL_REQUEST");
+        Assert.Equal("gpm-source/fixture-repo", pullRequest.Repository);
+        Assert.True(pullRequest.Number > 0);
 
-        // Drafts carry their Title as a text field value.
-        Assert.All(snapshot.Items, item =>
+        // The archived draft is exported with its archived state.
+        var archived = Assert.Single(snapshot.Items, i => i.IsArchived);
+        Assert.Equal("DRAFT_ISSUE", archived.Type);
+        Assert.Equal("Fixture archived draft", archived.Draft?.Title);
+
+        // The assigned draft carries its assignee login.
+        var assigned = Assert.Single(snapshot.Items, i => i.Draft?.Title == "Fixture assigned draft");
+        var assignee = Assert.Single(assigned.Draft!.Assignees);
+        Assert.False(string.IsNullOrWhiteSpace(assignee));
+
+        // Every draft carries its Title as a text field value.
+        Assert.All(snapshot.Items.Where(i => i.Type == "DRAFT_ISSUE"), item =>
             Assert.Contains(item.FieldValues, v => v.FieldName == "Title" && !string.IsNullOrEmpty(v.Text)));
     }
+
+    [Fact]
+    public async Task Export_captures_all_field_value_types_on_the_fixture_drafts()
+    {
+        var snapshot = await ExportFixtureAsync();
+
+        var draft1 = Assert.Single(snapshot.Items, i => i.Draft?.Title == "Fixture draft 1");
+        var draft2 = Assert.Single(snapshot.Items, i => i.Draft?.Title == "Fixture draft 2");
+        var draft3 = Assert.Single(snapshot.Items, i => i.Draft?.Title == "Fixture draft 3");
+
+        // TEXT round-trips non-ASCII (Japanese, accents, emoji) and markup-like characters.
+        Assert.Equal("日本語テキスト & <special> chars", ValueOf(draft1, "Fixture Text")?.Text);
+        Assert.Equal("Café emoji 🚀 – em dash", ValueOf(draft2, "Fixture Text")?.Text);
+        Assert.Equal("plain ascii text", ValueOf(draft3, "Fixture Text")?.Text);
+
+        // NUMBER covers fractional, negative and zero values (zero must not export as null).
+        Assert.Equal(3.14, ValueOf(draft1, "Fixture Number")?.Number);
+        Assert.Equal(-42d, ValueOf(draft2, "Fixture Number")?.Number);
+        Assert.Equal(0d, ValueOf(draft3, "Fixture Number")?.Number);
+
+        // DATE values are exported as yyyy-MM-dd.
+        foreach (var draft in (ItemSnapshot[])[draft1, draft2, draft3])
+        {
+            var date = ValueOf(draft, "Fixture Date")?.Date;
+            Assert.Matches("^\\d{4}-\\d{2}-\\d{2}$", date);
+        }
+
+        // SINGLE_SELECT covers every option once.
+        Assert.Equal("Alpha", ValueOf(draft1, "Fixture Select")?.SingleSelectOptionName);
+        Assert.Equal("Beta", ValueOf(draft2, "Fixture Select")?.SingleSelectOptionName);
+        Assert.Equal("Gamma", ValueOf(draft3, "Fixture Select")?.SingleSelectOptionName);
+
+        // ITERATION includes a completed iteration (Sprint 0) as a value.
+        Assert.Equal("Sprint 0", ValueOf(draft1, "Fixture Sprint")?.IterationTitle);
+        Assert.Equal("Sprint 1", ValueOf(draft2, "Fixture Sprint")?.IterationTitle);
+        Assert.Equal("Sprint 2", ValueOf(draft3, "Fixture Sprint")?.IterationTitle);
+    }
+
+    private static FieldValueSnapshot? ValueOf(ItemSnapshot item, string fieldName)
+        => item.FieldValues.FirstOrDefault(v => v.FieldName == fieldName);
 }

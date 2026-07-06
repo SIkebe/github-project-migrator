@@ -146,6 +146,7 @@ Permanent limitations (cannot be solved by any tool):
 - **Original author / creation date of draft issues and status updates** cannot be preserved — the API always attributes writes to the token owner. `gpm` prepends a note with the original metadata instead.
 - **Item change history** and past field values cannot be migrated (no write API for history).
 - **Issues / pull requests themselves are not migrated** — that is the job of [GitHub Enterprise Importer](https://docs.github.com/en/migrations/using-github-enterprise-importer). `gpm` re-links items via the repository mapping CSV.
+- **Project collaborators cannot be exported** — the GraphQL API has no read field for them (write-only via `updateProjectV2Collaborators`). `gpm` migrates linked repositories automatically and applies collaborators only from hand-authored snapshots (`collaborators` array: `{ "type": "USER"|"TEAM", "login": "...", "role": "READER"|"WRITER"|"ADMIN" }`).
 - **GHES is not supported** (by design).
 - **Redacted items** (items the exporting user cannot see) cannot be exported; their count is reported as a warning.
 

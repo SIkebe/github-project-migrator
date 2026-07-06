@@ -56,6 +56,7 @@ public sealed class ProjectExporter
         var fields = ParseFields(project.GetProperty("fields"));
         var views = ParseViews(project.GetProperty("views"));
         var workflows = ParseWorkflows(project.GetProperty("workflows"));
+        var linkedRepositories = ParseLinkedRepositories(project.GetProperty("repositories"));
         OnProgress?.Invoke(string.Create(
             CultureInfo.InvariantCulture,
             $"Fetched {fields.Count} fields, {views.Count} views, {workflows.Count} workflows. Fetching items..."));
@@ -71,6 +72,11 @@ public sealed class ProjectExporter
             Views = views,
             Workflows = workflows,
             Items = items,
+            // Collaborators stay null: the GraphQL API has no read field for project
+            // collaborators (verified against the live schema; ProjectV2ActorConnection
+            // appears only on the updateProjectV2Collaborators mutation payload).
+            Collaborators = null,
+            LinkedRepositories = linkedRepositories,
         };
 
         if (PostExportAsync is not null)
@@ -257,6 +263,20 @@ public sealed class ProjectExporter
         }
 
         return result;
+    }
+
+    private static List<string> ParseLinkedRepositories(JsonElement connection)
+    {
+        var repositories = new List<string>();
+        foreach (var node in connection.GetProperty("nodes").EnumerateArray())
+        {
+            if (node.TryGetProperty("nameWithOwner", out var name) && name.ValueKind == JsonValueKind.String)
+            {
+                repositories.Add(name.GetString()!);
+            }
+        }
+
+        return repositories;
     }
 
     private static List<WorkflowSnapshot> ParseWorkflows(JsonElement connection)
@@ -449,6 +469,9 @@ public sealed class ProjectExporter
               }
               workflows(first: 50) {
                 nodes { number name enabled }
+              }
+              repositories(first: 100) {
+                nodes { nameWithOwner }
               }
             }
           }

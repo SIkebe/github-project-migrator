@@ -151,7 +151,7 @@ graph LR
 | フィールド値 | GraphQL | iteration 値は title マッチで新 iterationId に解決 |
 | アイテム並び順 | GraphQL | `updateProjectV2ItemPosition` を順次適用 |
 | アーカイブ状態 | GraphQL | 値設定後に `archiveProjectV2Item` |
-| コラボレーター / チーム / リポジトリリンク | GraphQL | ユーザーマッピング CSV |
+| コラボレーター / リポジトリリンク | GraphQL | import は `updateProjectV2Collaborators` / `linkProjectV2ToRepository`(ユーザー/リポジトリマッピング CSV 適用、解決不能は warning+skip)。**コラボレーターの読み取り API は存在しない**(`ProjectV2ActorConnection` は mutation payload のみ、実スキーマで確認 2026-07-06)ため export は常に null — 手書きスナップショットでのみ import 可能。チームリンク(`linkProjectV2ToTeam`)はコラボレーターとは別概念で v1 対象外 |
 | **Views(layout, filter, groupBy, sortBy, visibleFields, 列順)** | **GraphQL + Playwright** | export は原則 GraphQL。ただし Slice by / Field sum / Roadmap 設定は API に無く UI から読み取る。import は全項目 UI 操作。詳細: [docs/BROWSER_AUTOMATION_PLAN.md](docs/BROWSER_AUTOMATION_PLAN.md) |
 | **Workflows(有効/無効, Auto-add ほか)** | **GraphQL + Playwright** | GraphQL で取れるのは name/number/enabled のみ。設定詳細(Status 値・フィルター・対象リポジトリ)は export/import とも UI。詳細: [docs/BROWSER_AUTOMATION_PLAN.md](docs/BROWSER_AUTOMATION_PLAN.md) |
 

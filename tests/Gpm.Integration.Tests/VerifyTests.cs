@@ -44,6 +44,21 @@ public class VerifyTests
         var exporter = new ProjectExporter(client);
 
         var source = await exporter.ExportAsync(SourceOrg, FixtureProjectNumber, cancellationToken);
+
+        // Guard against silent null==null passes: the enriched fixture must actually carry
+        // the elements this test claims to verify end-to-end.
+        Assert.Equal("gpm fixture project", source.Project.ShortDescription);
+        Assert.False(string.IsNullOrWhiteSpace(source.Project.Readme));
+        Assert.Contains(
+            source.Fields.Single(f => f.Name == "Fixture Sprint").IterationConfiguration!.CompletedIterations,
+            i => i.Title == "Sprint 0");
+        Assert.Equal(7, source.Items.Count);
+        Assert.Contains(source.Items, i => i.Type == "ISSUE");
+        Assert.Contains(source.Items, i => i.Type == "PULL_REQUEST");
+        Assert.Contains(source.Items, i => i.IsArchived);
+        Assert.Contains(source.Items, i => i.Draft?.Assignees is { Count: > 0 });
+        Assert.NotNull(source.LinkedRepositories);
+
         var snapshot = source with { Project = source.Project with { Title = "gpm-verify-test-" + Guid.NewGuid().ToString("N") } };
 
         var result = await new ProjectImporter(client).ImportAsync(snapshot, TargetOrg, cancellationToken);
