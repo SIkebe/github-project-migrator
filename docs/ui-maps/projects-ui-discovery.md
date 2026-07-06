@@ -45,6 +45,40 @@
 6. **EMU/SAML のセッションは短命**(数時間で失効)。失効時は `/login` リダイレクトではなく **enterprise SSO インタースティシャル**("Single sign-on to <Enterprise>" + Continue)が出る。BrowserSession.GotoAsync は Continue 自動クリックで IdP セッションが生きていれば透過再認証、死んでいれば失敗 → `gpm login` 再実行が必要(IdP セッションまで失効すると素の `/login` リダイレクトになる)
 7. 並列テスト実行時(browser E2E + integration 同時)は SPA ハイドレーションが遅くなる → Playwright 既定タイムアウトは 30s に設定
 
+## Project collaborators UI export discovery (2026-07-06)
+
+GraphQL has `updateProjectV2Collaborators` but no read field for current project collaborators. The web UI exposes **explicit** collaborators at:
+
+`/orgs/{org}/projects/{number}/settings/access`
+
+Confirmed with `ravel-maurice-uo_sde` temporarily added as a WRITER collaborator to `gpm-source/projects/3`:
+
+```yaml
+- heading "Manage access" [level=3]
+- checkbox "Select all collaborators. 1 member"
+- checkbox "Select ravel-maurice-uo_sde"
+- img "ravel-maurice-uo_sde"
+- link "Ravel Maurice":
+  - /url: /ravel-maurice-uo_sde
+- text: ravel-maurice-uo_sde
+- 'button "Role: Write"'
+- button "Remove"
+```
+
+Selectors/parse strategy:
+
+| Data | UI source |
+|---|---|
+| User collaborator login | `checkbox "Select <login>"` + profile URL `/login` |
+| Team collaborator slug | `checkbox "Select <team display name>"` + team URL `/orgs/{org}/teams/{slug}` |
+| Role | adjacent `button "Role: Read|Write|Admin"` |
+
+Important limitations:
+
+- This captures only **explicit collaborators** listed under Manage access.
+- Inherited access (organization owners, base role, enterprise policies, repository/team inheritance) is not represented as collaborator rows and is intentionally not exported.
+- Adding the exporting user as a collaborator may not create a visible row if they already have inherited admin access.
+
 ## E2E カバレッジ強化で確定した追加知見(2026-07-06)
 
 1. **Board の横グルーピングは「Group by」ではなく「Swimlanes」メニュー項目**(`menuitem "Swimlanes: <value>"`)。Board のメニューは `Fields / Column by / Swimlanes / Sort by / Field sum / Slice by` の 6 項目で "Group by" は存在しない。GraphQL の `groupByFields` は board では Swimlanes を反映する → import は board のとき Swimlanes メニューで適用する(ViewUiExporter/Importer 対応済み、ViewUiSnapshot.Swimlanes 追加)

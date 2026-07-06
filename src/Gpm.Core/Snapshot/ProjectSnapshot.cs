@@ -25,8 +25,10 @@ public sealed record ProjectSnapshot
     /// Project collaborators (users/teams with an explicit project role). Null when not
     /// captured: the GraphQL API has no read field for project collaborators
     /// (<c>ProjectV2ActorConnection</c> appears only on the
-    /// <c>updateProjectV2Collaborators</c> mutation payload), so <c>gpm export</c> always
-    /// leaves this null. Hand-authored snapshots can set it and import applies it.
+    /// <c>updateProjectV2Collaborators</c> mutation payload). Browser automation can
+    /// populate explicit collaborators from Settings → Manage access; inherited/base-role
+    /// access is not represented here. Hand-authored snapshots can also set it and import
+    /// applies it.
     /// </summary>
     public IReadOnlyList<CollaboratorSnapshot>? Collaborators { get; init; }
 

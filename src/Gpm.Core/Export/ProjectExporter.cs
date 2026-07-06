@@ -72,9 +72,9 @@ public sealed class ProjectExporter
             Views = views,
             Workflows = workflows,
             Items = items,
-            // Collaborators stay null: the GraphQL API has no read field for project
-            // collaborators (verified against the live schema; ProjectV2ActorConnection
-            // appears only on the updateProjectV2Collaborators mutation payload).
+            // Collaborators stay null in the API-only path: the GraphQL API has no
+            // read field for project collaborators. The browser post-export hook can
+            // populate explicit collaborators from Settings → Manage access.
             Collaborators = null,
             LinkedRepositories = linkedRepositories,
         };

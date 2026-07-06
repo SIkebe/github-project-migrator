@@ -115,6 +115,7 @@ exportCommand.SetAction(async (parseResult, cancellationToken) =>
     {
         ViewUiExporter? uiExporter = null;
         WorkflowUiExporter? workflowExporter = null;
+        CollaboratorUiExporter? collaboratorExporter = null;
         if (enableBrowserAutomation)
         {
             session = new BrowserSession(new BrowserSessionOptions
@@ -123,12 +124,13 @@ exportCommand.SetAction(async (parseResult, cancellationToken) =>
             });
             uiExporter = new ViewUiExporter(session) { OnProgress = Console.Error.WriteLine };
             workflowExporter = new WorkflowUiExporter(session) { OnProgress = Console.Error.WriteLine };
+            collaboratorExporter = new CollaboratorUiExporter(session) { OnProgress = Console.Error.WriteLine };
         }
 
         // Installs the browser enrichment hook for one project number.
         void SetBrowserHook(int number)
         {
-            if (uiExporter is null || workflowExporter is null)
+            if (uiExporter is null || workflowExporter is null || collaboratorExporter is null)
             {
                 return;
             }
@@ -136,7 +138,8 @@ exportCommand.SetAction(async (parseResult, cancellationToken) =>
             exporter.PostExportAsync = async (snapshot, ct) =>
             {
                 snapshot = await uiExporter.EnrichAsync(snapshot, org, number, ct);
-                return await workflowExporter.EnrichAsync(snapshot, org, number, ct);
+                snapshot = await workflowExporter.EnrichAsync(snapshot, org, number, ct);
+                return await collaboratorExporter.EnrichAsync(snapshot, org, ownerType, number, ct);
             };
         }
 
@@ -173,7 +176,9 @@ exportCommand.SetAction(async (parseResult, cancellationToken) =>
             }
         }
 
-        foreach (var warning in (uiExporter?.Warnings ?? []).Concat(workflowExporter?.Warnings ?? []))
+        foreach (var warning in (uiExporter?.Warnings ?? [])
+            .Concat(workflowExporter?.Warnings ?? [])
+            .Concat(collaboratorExporter?.Warnings ?? []))
         {
             Console.Error.WriteLine($"warning: {warning}");
         }

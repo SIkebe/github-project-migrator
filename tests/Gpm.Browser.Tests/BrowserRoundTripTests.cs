@@ -2,6 +2,7 @@ using Gpm.Core.Browser;
 using Gpm.Core.Export;
 using Gpm.Core.GitHub;
 using Gpm.Core.Import;
+using System.Text.Json;
 
 namespace Gpm.Browser.Tests;
 
@@ -16,10 +17,47 @@ namespace Gpm.Browser.Tests;
 public class BrowserRoundTripTests
 {
     private const int FixtureProjectNumber = 3;
+    private const string ExplicitCollaboratorLogin = "ravel-maurice-uo_sde";
 
     private static string SourceOrg => Environment.GetEnvironmentVariable("GPM_TEST_ORG") ?? "gpm-source";
 
     private static string TargetOrg => Environment.GetEnvironmentVariable("GPM_TEST_TARGET_ORG") ?? "gpm-target";
+
+    [Fact]
+    public async Task Explicit_collaborators_are_exported_through_browser_automation()
+    {
+        var statePath = Environment.GetEnvironmentVariable("GPM_BROWSER_STATE");
+        Assert.SkipWhen(
+            string.IsNullOrWhiteSpace(statePath) || !File.Exists(statePath),
+            "GPM_BROWSER_STATE is not set or the file does not exist; skipping browser E2E test.");
+        var token = Environment.GetEnvironmentVariable("GPM_TEST_TOKEN");
+        Assert.SkipWhen(string.IsNullOrWhiteSpace(token), "GPM_TEST_TOKEN is not set; skipping browser E2E test.");
+
+        var cancellationToken = TestContext.Current.CancellationToken;
+        using var client = new GitHubGraphQLClient(token!);
+        var (projectId, userId) = await ResolveProjectAndUserIdsAsync(client, SourceOrg, ExplicitCollaboratorLogin, cancellationToken);
+
+        await SetCollaboratorAsync(client, projectId, userId, "WRITER", cancellationToken);
+        try
+        {
+            await using var session = new BrowserSession(new BrowserSessionOptions { StatePath = statePath });
+            var exporter = new ProjectExporter(client);
+            var snapshot = await exporter.ExportAsync(SourceOrg, FixtureProjectNumber, cancellationToken);
+            var collaboratorExporter = new CollaboratorUiExporter(session);
+
+            snapshot = await collaboratorExporter.EnrichAsync(snapshot, SourceOrg, ProjectOwnerType.Organization, FixtureProjectNumber, cancellationToken);
+
+            Assert.Empty(collaboratorExporter.Warnings);
+            var collaborator = Assert.Single(snapshot.Collaborators!, c =>
+                string.Equals(c.Login, ExplicitCollaboratorLogin, StringComparison.OrdinalIgnoreCase));
+            Assert.Equal("USER", collaborator.Type);
+            Assert.Equal("WRITER", collaborator.Role);
+        }
+        finally
+        {
+            await SetCollaboratorAsync(client, projectId, userId, "NONE", CancellationToken.None);
+        }
+    }
 
     [Fact]
     public async Task Views_round_trip_through_browser_automation()
@@ -200,4 +238,41 @@ public class BrowserRoundTripTests
                 CancellationToken.None);
         }
     }
+
+        private static async Task<(string ProjectId, string UserId)> ResolveProjectAndUserIdsAsync(
+                GitHubGraphQLClient client,
+                string org,
+                string login,
+                CancellationToken cancellationToken)
+        {
+                var data = await client.QueryAsync(
+                        """
+                        query($org: String!, $number: Int!, $login: String!) {
+                            organization(login: $org) { projectV2(number: $number) { id } }
+                            user(login: $login) { id }
+                        }
+                        """,
+                        new { org, number = FixtureProjectNumber, login },
+                        cancellationToken);
+                return (
+                        data.GetProperty("organization").GetProperty("projectV2").GetProperty("id").GetString()!,
+                        data.GetProperty("user").GetProperty("id").GetString()!);
+        }
+
+        private static Task<JsonElement> SetCollaboratorAsync(
+                GitHubGraphQLClient client,
+                string projectId,
+                string userId,
+                string role,
+                CancellationToken cancellationToken)
+                => client.QueryAsync(
+                        """
+                        mutation($projectId: ID!, $userId: ID!, $role: ProjectV2Roles!) {
+                            updateProjectV2Collaborators(input: { projectId: $projectId, collaborators: [{ userId: $userId, role: $role }] }) {
+                                clientMutationId
+                            }
+                        }
+                        """,
+                        new { projectId, userId, role },
+                        cancellationToken);
 }
