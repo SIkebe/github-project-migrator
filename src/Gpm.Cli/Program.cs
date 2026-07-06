@@ -1,4 +1,4 @@
-﻿using System.CommandLine;
+using System.CommandLine;
 using System.Globalization;
 using System.Reflection;
 using Gpm.Core;
@@ -240,7 +240,7 @@ var repoMappingOption = new Option<string?>("--repo-mapping")
 };
 var userMappingOption = new Option<string?>("--user-mapping")
 {
-    Description = "CSV file mapping source user logins to target logins (header: source,target).",
+    Description = "CSV file mapping source user logins to target logins (header: mannequin-user,mannequin-id,target-user; mannequin-id is ignored).",
 };
 
 var importCommand = new Command("import", "Import a JSON snapshot into the target organization or user.")

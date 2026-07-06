@@ -1,0 +1,4 @@
+source,target
+source-org/api,target-org/api
+source-org/web,target-org/web-renamed
+source-org/docs,target-org/docs

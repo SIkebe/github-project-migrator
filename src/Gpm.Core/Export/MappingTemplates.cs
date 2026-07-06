@@ -7,8 +7,11 @@ namespace Gpm.Core.Export;
 /// Generates the mapping CSV templates written next to exported snapshots:
 /// <c>repository-mappings.csv</c> (distinct source repositories of Issue/PR items) and
 /// <c>user-mappings.csv</c> (distinct draft-issue assignee logins; only written when at
-/// least one draft has assignees). The target column is left blank for the user to fill
-/// in; rows with a blank target are ignored by <see cref="Import.CsvMapping"/>.
+/// least one draft has assignees). Repository mappings use <c>source,target</c>.
+/// User mappings use GitHub Enterprise Importer's mannequin reclaim CSV shape
+/// (<c>mannequin-user,mannequin-id,target-user</c>), with blank mannequin IDs because
+/// project snapshots only contain logins. The target column is left blank for the user
+/// to fill in; rows with a blank target are ignored by <see cref="Import.CsvMapping"/>.
 /// Existing files are never overwritten so user edits survive re-exports.
 /// </summary>
 public static class MappingTemplates
@@ -71,8 +74,10 @@ public static class MappingTemplates
         await WriteTemplateAsync(
             Path.Combine(directory, RepositoryMappingFileName),
             ExtractSourceRepositories(snapshots),
-            onProgress,
-            cancellationToken).ConfigureAwait(false);
+            header: "source,target",
+            rowFactory: source => string.Concat(source, ","),
+            onProgress: onProgress,
+            cancellationToken: cancellationToken).ConfigureAwait(false);
 
         var assignees = ExtractDraftAssignees(snapshots);
         if (assignees.Count > 0)
@@ -80,12 +85,20 @@ public static class MappingTemplates
             await WriteTemplateAsync(
                 Path.Combine(directory, UserMappingFileName),
                 assignees,
-                onProgress,
-                cancellationToken).ConfigureAwait(false);
+                header: "mannequin-user,mannequin-id,target-user",
+                rowFactory: source => string.Concat(source, ",,"),
+                onProgress: onProgress,
+                cancellationToken: cancellationToken).ConfigureAwait(false);
         }
     }
 
-    private static async Task WriteTemplateAsync(string path, IReadOnlyList<string> sources, Action<string>? onProgress, CancellationToken cancellationToken)
+    private static async Task WriteTemplateAsync(
+        string path,
+        IReadOnlyList<string> sources,
+        string header,
+        Func<string, string> rowFactory,
+        Action<string>? onProgress,
+        CancellationToken cancellationToken)
     {
         if (File.Exists(path))
         {
@@ -93,10 +106,10 @@ public static class MappingTemplates
             return;
         }
 
-        var builder = new StringBuilder("source,target\n");
+        var builder = new StringBuilder(header).Append('\n');
         foreach (var source in sources)
         {
-            builder.Append(source).Append(",\n");
+            builder.Append(rowFactory(source)).Append('\n');
         }
 
         await File.WriteAllTextAsync(path, builder.ToString(), cancellationToken).ConfigureAwait(false);

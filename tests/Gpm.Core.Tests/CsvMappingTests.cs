@@ -98,6 +98,62 @@ public class CsvMappingTests
     }
 
     [Fact]
+    public void ParseUserMapping_reads_enterprise_importer_mannequin_format()
+    {
+        var map = CsvMapping.ParseUserMapping(
+        [
+            "mannequin-user,mannequin-id,target-user",
+            "alice,MDQ6VXNlcjE=,alice_sde",
+            "bob,MDQ6VXNlcjI=,bob_sde",
+            "unmapped,MDQ6VXNlcjM=,",
+        ]);
+
+        Assert.Equal(2, map.Count);
+        Assert.Equal("alice_sde", map["alice"]);
+        Assert.Equal("bob_sde", map["bob"]);
+    }
+
+    [Fact]
+    public void ParseUserMapping_trims_enterprise_importer_mannequin_format()
+    {
+        var map = CsvMapping.ParseUserMapping(
+        [
+            " Mannequin-User , Mannequin-Id , Target-User ",
+            "  Alice , ignored , Alice_SDE ",
+        ]);
+
+        var pair = Assert.Single(map);
+        Assert.Equal("Alice", pair.Key);
+        Assert.Equal("Alice_SDE", pair.Value);
+    }
+
+    [Fact]
+    public void ParseUserMapping_rejects_source_target_header()
+    {
+        Assert.Throws<FormatException>(() => CsvMapping.ParseUserMapping(["source,target", "alice,alice_sde"]));
+    }
+
+    [Fact]
+    public void ParseUserMapping_rejects_unknown_header()
+    {
+        Assert.Throws<FormatException>(() => CsvMapping.ParseUserMapping(["mannequin,target-user", "alice,alice_sde"]));
+    }
+
+    [Theory]
+    [InlineData("alice,alice_sde")]
+    [InlineData("alice,id,alice_sde,extra")]
+    public void ParseUserMapping_throws_on_wrong_mannequin_column_count(string line)
+    {
+        Assert.Throws<FormatException>(() => CsvMapping.ParseUserMapping(["mannequin-user,mannequin-id,target-user", line]));
+    }
+
+    [Fact]
+    public void ParseUserMapping_throws_on_empty_mannequin_user_with_target()
+    {
+        Assert.Throws<FormatException>(() => CsvMapping.ParseUserMapping(["mannequin-user,mannequin-id,target-user", ",id,alice_sde"]));
+    }
+
+    [Fact]
     public void Load_parses_a_csv_file()
     {
         var path = Path.Combine(Path.GetTempPath(), "gpm-mapping-" + Guid.NewGuid().ToString("N") + ".csv");

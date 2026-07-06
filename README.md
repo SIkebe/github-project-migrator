@@ -57,9 +57,25 @@ gpm import --org target-org --in ./snapshot --token $TARGET_TOKEN \
 gpm verify --org target-org --project 12 --in ./snapshot --token $TARGET_TOKEN
 ```
 
-Tokens are resolved from `--token`, then the `GITHUB_TOKEN` / `GPM_TOKEN` environment variables. Classic PATs need the `project` and `repo` scopes (plus SSO authorization for SAML-protected organizations).
+Tokens are resolved from `--token`, then the `GITHUB_TOKEN` / `GPM_TOKEN` environment variables.
 
-`--repo-mapping` / `--user-mapping` are CSV files (`source,target` header) that map repositories (`org/repo,org/repo`) and user logins across organizations — effectively required for cross-organization moves and EMU targets (`user_shortcode` logins). `gpm export` generates ready-to-fill templates next to the snapshot: `repository-mappings.csv` (all distinct source repositories) and `user-mappings.csv` (draft-issue assignees, only when present). Fill in the `target` column and pass the files to `gpm import` — rows with a blank target are ignored, and existing files are never overwritten by later exports.
+### Token permissions
+
+You can use either a classic PAT or a fine-grained PAT. Fine-grained PATs are scoped to a single resource owner, so cross-organization or cross-account migrations usually need separate source and target tokens.
+
+Classic PATs need the `project` and `repo` scopes (plus token authorization for organizations or enterprises that require SSO, including SAML- or OIDC-backed environments).
+
+For fine-grained PATs, create the token for the organization or user that owns the projects you are exporting from or importing into. Grant repository access to every repository that can appear as a project item or linked repository; selecting all repositories for that resource owner is the simplest option during a migration.
+
+| Command | Fine-grained PAT permissions |
+|---|---|
+| `gpm export` | **Organization/account permissions → Projects: Read-only**. **Repository permissions → Metadata: Read-only**, plus **Issues: Read-only** and **Pull requests: Read-only** for private repositories that contain project items. |
+| `gpm import` | **Organization/account permissions → Projects: Read and write**. **Repository permissions → Metadata: Read-only**, plus **Issues: Read-only** and **Pull requests: Read-only** for private repositories referenced by `--repo-mapping` or auto-add workflows. If you import project collaborators that include teams, also grant **Organization permissions → Members: Read-only** when required to resolve those teams. |
+| `gpm verify` | Same as `gpm export` for the target project. |
+
+GitHub permissions are still enforced in addition to token permissions: the token owner must be allowed to read the source project and referenced repositories, and must be allowed to create or edit the target project.
+
+`--repo-mapping` / `--user-mapping` are CSV files that map repositories (`org/repo,org/repo`) and user logins across organizations — effectively required for cross-organization moves and EMU targets (`user_shortcode` logins). Repository mappings use the `source,target` header. User mappings use the same header as GitHub Enterprise Importer mannequin reclaim CSVs (`mannequin-user,mannequin-id,target-user`); for `gpm`, the mannequin ID is ignored and rows with a blank `target-user` are ignored. If a mannequin CSV has duplicate `mannequin-user` rows, reduce it to one row per login before using it with `gpm`, because project snapshots cannot disambiguate by mannequin ID. See `examples/repos.csv` and `examples/users.csv` for small sample files. `gpm export` generates ready-to-fill templates next to the snapshot: `repository-mappings.csv` (all distinct source repositories) and `user-mappings.csv` (draft-issue assignees, only when present). Fill in the target column and pass the files to `gpm import` — existing files are never overwritten by later exports.
 
 ### More import/export options
 

@@ -68,7 +68,7 @@ public class MappingTemplatesTests
             await MappingTemplates.WriteAsync([snapshot], directory, cancellationToken: TestContext.Current.CancellationToken);
 
             var userPath = Path.Combine(directory, MappingTemplates.UserMappingFileName);
-            Assert.Equal("source,target\nalice,\nbob,\n", await File.ReadAllTextAsync(userPath, TestContext.Current.CancellationToken));
+            Assert.Equal("mannequin-user,mannequin-id,target-user\nalice,,\nbob,,\n", await File.ReadAllTextAsync(userPath, TestContext.Current.CancellationToken));
         }
         finally
         {
@@ -110,6 +110,25 @@ public class MappingTemplatesTests
 
             // Blank targets are ignored, so the untouched template is a valid no-op mapping.
             var map = CsvMapping.Load(Path.Combine(directory, MappingTemplates.RepositoryMappingFileName));
+            Assert.Empty(map);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Generated_user_template_loads_as_an_empty_mapping()
+    {
+        var directory = NewTempDirectory();
+        try
+        {
+            var snapshot = SnapshotWithItems(DraftItem("d1", assignees: ["alice", "bob"]));
+            await MappingTemplates.WriteAsync([snapshot], directory, cancellationToken: TestContext.Current.CancellationToken);
+
+            // Blank target users are ignored, so the untouched template is a valid no-op mapping.
+            var map = CsvMapping.LoadUserMapping(Path.Combine(directory, MappingTemplates.UserMappingFileName));
             Assert.Empty(map);
         }
         finally
