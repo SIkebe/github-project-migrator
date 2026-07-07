@@ -76,7 +76,10 @@ jobs:
         run: dotnet restore Gpm.slnx
       - name: Build
         run: dotnet build Gpm.slnx -c Release --no-restore -warnaserror
-      - name: Test (real API when secrets are available)
+      - name: Test
+        run: dotnet test Gpm.slnx -c Release --no-build --logger trx
+      - name: Test real GitHub API integration
+        if: ${{ matrix.os == 'ubuntu-latest' }}
         env:
           GPM_TEST_TOKEN: ${{ secrets.GPM_TEST_TOKEN }}
           GPM_TEST_ORG: ${{ vars.GPM_TEST_ORG || 'gpm-source' }}
@@ -84,7 +87,7 @@ jobs:
           GPM_TEST_FIXTURE_REPO: ${{ vars.GPM_TEST_FIXTURE_REPO || 'fixture-repo2' }}
           GPM_TEST_TARGET_ORG: ${{ vars.GPM_TEST_TARGET_ORG || 'gpm-target' }}
           GPM_TEST_TARGET_FIXTURE_REPO: ${{ vars.GPM_TEST_TARGET_FIXTURE_REPO || 'fixture-repo' }}
-        run: dotnet test Gpm.slnx -c Release --no-build --logger trx
+        run: dotnet test tests/Gpm.Integration.Tests/Gpm.Integration.Tests.csproj -c Release --no-build --logger trx
       - name: Upload test result logs
         if: ${{ failure() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
