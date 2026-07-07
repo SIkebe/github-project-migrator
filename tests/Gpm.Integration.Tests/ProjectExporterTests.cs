@@ -14,7 +14,7 @@ public class ProjectExporterTests
 {
     private static int FixtureProjectNumber => IntegrationTestSettings.FixtureProjectNumber;
 
-    private static string Org => Environment.GetEnvironmentVariable("GPM_TEST_ORG") ?? "gpm-source";
+    private static string Org => IntegrationTestSettings.SourceOrg;
 
     private static string Token
     {
@@ -58,10 +58,10 @@ public class ProjectExporterTests
 
             await MappingTemplates.WriteAsync(snapshots, outDirectory, cancellationToken: cancellationToken);
 
-            Assert.True(File.Exists(Path.Combine(outDirectory, "3", SnapshotFile.FileName)));
+            Assert.True(File.Exists(Path.Combine(outDirectory, FixtureProjectNumber.ToString(System.Globalization.CultureInfo.InvariantCulture), SnapshotFile.FileName)));
             Assert.True(File.Exists(Path.Combine(outDirectory, MappingTemplates.RepositoryMappingFileName)));
 
-            var reloaded = await SnapshotFile.LoadAsync(Path.Combine(outDirectory, "3"), cancellationToken);
+            var reloaded = await SnapshotFile.LoadAsync(Path.Combine(outDirectory, FixtureProjectNumber.ToString(System.Globalization.CultureInfo.InvariantCulture)), cancellationToken);
             Assert.Equal(ProjectSnapshot.CurrentSchemaVersion, reloaded.SchemaVersion);
         }
         finally
@@ -100,7 +100,7 @@ public class ProjectExporterTests
         var snapshot = await ExportFixtureAsync();
 
         Assert.NotNull(snapshot.LinkedRepositories);
-        Assert.Contains("gpm-source/fixture-repo", snapshot.LinkedRepositories, StringComparer.OrdinalIgnoreCase);
+        Assert.Contains(IntegrationTestSettings.FixtureRepositoryFullName, snapshot.LinkedRepositories, StringComparer.OrdinalIgnoreCase);
 
         // The GraphQL API has no read field for project collaborators, so exports leave them null.
         Assert.Null(snapshot.Collaborators);
@@ -225,12 +225,12 @@ public class ProjectExporterTests
 
         // Issue and PR items carry their repository and number.
         var issue = Assert.Single(snapshot.Items, i => i.Type == "ISSUE");
-        Assert.Equal("gpm-source/fixture-repo", issue.Repository);
+        Assert.Equal(IntegrationTestSettings.FixtureRepositoryFullName, issue.Repository);
         Assert.Equal(1, issue.Number);
         Assert.False(issue.IsArchived);
 
         var pullRequest = Assert.Single(snapshot.Items, i => i.Type == "PULL_REQUEST");
-        Assert.Equal("gpm-source/fixture-repo", pullRequest.Repository);
+        Assert.Equal(IntegrationTestSettings.FixtureRepositoryFullName, pullRequest.Repository);
         Assert.True(pullRequest.Number > 0);
 
         // The archived draft is exported with its archived state.

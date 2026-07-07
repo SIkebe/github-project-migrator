@@ -19,9 +19,9 @@ namespace Gpm.Integration.Tests;
 /// </summary>
 public class CollaboratorImportTests
 {
-    private const string FixtureRepo = "gpm-source/fixture-repo";
+    private static string FixtureRepo => IntegrationTestSettings.FixtureRepositoryFullName;
 
-    private static string SourceOrg => Environment.GetEnvironmentVariable("GPM_TEST_ORG") ?? "gpm-source";
+    private static string SourceOrg => IntegrationTestSettings.SourceOrg;
 
     private static string Token
     {

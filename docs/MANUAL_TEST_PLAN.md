@@ -146,6 +146,10 @@ gh extension upgrade github/gh-gei
 | `GPM_SOURCE_TOKEN` | `gpm export` と GEI source 用。 |
 | `GPM_TARGET_TOKEN` | `gpm import` / `gpm verify` と GEI target 用。 |
 | `GPM_TEST_TOKEN` | 既存 integration / browser E2E tests を手動で回す場合。 |
+| `GPM_TEST_ORG` | integration / browser E2E tests の source organization login。未指定時は `GPM_SOURCE_ORG`、それも無ければ `gpm-source`。CI repo variable でも指定。 |
+| `GPM_TEST_TARGET_ORG` | integration tests の target organization login。未指定時は `GPM_TARGET_ORG`、それも無ければ `gpm-target`。CI repo variable でも指定。 |
+| `GPM_TEST_PROJECT_NUMBER` | integration tests が export 元として使う fixture Project number。未指定時は現在の shared fixture `89`。CI repo variable でも指定。 |
+| `GPM_TEST_FIXTURE_REPO` | integration tests が期待する source fixture repository short name。未指定時は `GPM_FIXTURE_REPO`、それも無ければ `fixture-repo`。CI repo variable でも指定。 |
 | `GPM_SOURCE_ORG` | source organization login。 |
 | `GPM_TARGET_ORG` | target organization login。 |
 | `GPM_FIXTURE_REPO` | source fixture repository 名。 |

@@ -16,9 +16,9 @@ public class ProjectImporterTests
 {
     private static int FixtureProjectNumber => IntegrationTestSettings.FixtureProjectNumber;
 
-    private static string SourceOrg => Environment.GetEnvironmentVariable("GPM_TEST_ORG") ?? "gpm-source";
+    private static string SourceOrg => IntegrationTestSettings.SourceOrg;
 
-    private static string TargetOrg => Environment.GetEnvironmentVariable("GPM_TEST_TARGET_ORG") ?? "gpm-target";
+    private static string TargetOrg => IntegrationTestSettings.TargetOrg;
 
     private static string Token
     {

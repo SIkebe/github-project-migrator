@@ -10,7 +10,7 @@ namespace Gpm.Integration.Tests;
 /// </summary>
 public class GraphQLClientIntegrationTests
 {
-    private static string Org => Environment.GetEnvironmentVariable("GPM_TEST_ORG") ?? "gpm-source";
+    private static string Org => IntegrationTestSettings.SourceOrg;
 
     private static string Token
     {

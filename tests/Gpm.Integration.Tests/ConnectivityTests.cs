@@ -32,7 +32,7 @@ public class ConnectivityTests
     [Fact]
     public async Task Source_org_is_reachable()
     {
-        var org = Environment.GetEnvironmentVariable("GPM_TEST_ORG") ?? "gpm-source";
+        var org = IntegrationTestSettings.SourceOrg;
         using var client = new GitHubGraphQLClient(Token);
 
         var data = await client.QueryAsync(
