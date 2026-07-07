@@ -153,7 +153,10 @@ public sealed class FixtureProjectBuilder
 
     private async Task<int> EnsurePullRequestAsync(string repositoryFullName, CancellationToken cancellationToken)
     {
-        var pulls = await _rest.GetAsync($"repos/{repositoryFullName}/pulls?state=open&per_page=10", cancellationToken).ConfigureAwait(false);
+        var branchName = "fixture-pr-branch";
+        var owner = repositoryFullName[..repositoryFullName.IndexOf('/', StringComparison.Ordinal)];
+        var head = Uri.EscapeDataString($"{owner}:{branchName}");
+        var pulls = await _rest.GetAsync($"repos/{repositoryFullName}/pulls?state=open&head={head}&per_page=1", cancellationToken).ConfigureAwait(false);
         var firstOpen = pulls?.EnumerateArray().FirstOrDefault();
         if (firstOpen is { ValueKind: JsonValueKind.Object } openPullRequest)
         {
@@ -163,7 +166,6 @@ public sealed class FixtureProjectBuilder
         var repository = await _rest.GetAsync($"repos/{repositoryFullName}", cancellationToken).ConfigureAwait(false)
             ?? throw new InvalidOperationException($"Repository '{repositoryFullName}' was not found after creation.");
         var defaultBranch = repository.GetProperty("default_branch").GetString() ?? "main";
-        var branchName = "fixture-pr-branch";
         var baseRef = await _rest.GetAsync($"repos/{repositoryFullName}/git/ref/heads/{defaultBranch}", cancellationToken).ConfigureAwait(false)
             ?? throw new InvalidOperationException($"Default branch '{defaultBranch}' was not found in '{repositoryFullName}'.");
         var baseSha = baseRef.GetProperty("object").GetProperty("sha").GetString()
@@ -215,7 +217,7 @@ public sealed class FixtureProjectBuilder
             {
                 Title = title,
                 ShortDescription = "gpm fixture project",
-                Readme = "# gpm fixture 📦\n\nPermanent fixture project for gpm integration tests.\n\n- All custom field types (Text / Number / Date / Single-select / Iteration)\n- Drafts with 日本語 values, an Issue, a PR, an archived item and an assigned item\n- Views and workflows are created by the C# browser module 🚀",
+                Readme = "# gpm fixture 📦\n\nPermanent fixture project for gpm integration tests.\n\n- All custom field types (Text / Number / Date / Single-select / Iteration)\n- Drafts with 日本語 values, an Issue, a PR, an archived item and an assigned item\n- Views and workflows can be created by running `gpm setup --fixture-ui` (C# browser module) 🚀",
                 Public = false,
                 Closed = false,
             },
