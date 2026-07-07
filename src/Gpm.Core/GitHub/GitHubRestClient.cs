@@ -13,13 +13,25 @@ public sealed class GitHubRestClient : IDisposable
     private readonly HttpClient _httpClient;
 
     public GitHubRestClient(string token, Uri? baseUri = null)
+        : this(token, baseUri, new HttpClientHandler())
+    {
+    }
+
+    internal GitHubRestClient(string token, Uri? baseUri, HttpMessageHandler handler)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(token);
-        _httpClient = new HttpClient { BaseAddress = baseUri ?? DefaultBaseUri };
+        ArgumentNullException.ThrowIfNull(handler);
+        _httpClient = new HttpClient(handler) { BaseAddress = baseUri ?? DefaultBaseUri };
         _httpClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
         _httpClient.DefaultRequestHeaders.UserAgent.ParseAdd("gpm");
         _httpClient.DefaultRequestHeaders.Accept.ParseAdd("application/vnd.github+json");
         _httpClient.DefaultRequestHeaders.Add("X-GitHub-Api-Version", "2022-11-28");
+    }
+
+    public static Uri ToRestBaseUri(Uri graphQlEndpoint)
+    {
+        ArgumentNullException.ThrowIfNull(graphQlEndpoint);
+        return new Uri(graphQlEndpoint, ".");
     }
 
     public async Task<JsonElement?> GetAsync(string path, CancellationToken cancellationToken = default)
@@ -55,10 +67,10 @@ public sealed class GitHubRestClient : IDisposable
         var text = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
         if (!response.IsSuccessStatusCode)
         {
-            throw new GitHubGraphQLException($"REST error {(int)response.StatusCode} {response.ReasonPhrase}: {text}")
-            {
-                StatusCode = response.StatusCode,
-            };
+            throw new HttpRequestException(
+                $"REST error {(int)response.StatusCode} {response.ReasonPhrase}: {text}",
+                null,
+                response.StatusCode);
         }
 
         if (string.IsNullOrWhiteSpace(text))

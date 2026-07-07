@@ -636,9 +636,10 @@ setupCommand.SetAction(async (parseResult, cancellationToken) =>
         }
 
         var baseUrl = parseResult.GetValue(apiBaseUrlOption);
-        using var graphQl = new GitHubGraphQLClient(token, baseUrl is null ? null : GitHubGraphQLClient.NormalizeBaseUrl(baseUrl));
+        var graphQlBaseUri = baseUrl is null ? null : GitHubGraphQLClient.NormalizeBaseUrl(baseUrl);
+        using var graphQl = new GitHubGraphQLClient(token, graphQlBaseUri);
         graphQl.OnRetry = Console.Error.WriteLine;
-        using var rest = new GitHubRestClient(token);
+        using var rest = new GitHubRestClient(token, graphQlBaseUri is null ? null : GitHubRestClient.ToRestBaseUri(graphQlBaseUri));
         var builder = new FixtureProjectBuilder(graphQl, rest) { OnProgress = Console.Error.WriteLine };
         try
         {
