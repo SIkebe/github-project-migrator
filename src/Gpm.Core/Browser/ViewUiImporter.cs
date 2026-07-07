@@ -304,12 +304,14 @@ public sealed class ViewUiImporter
             await TrySetSingleAsync(page, "Column by", view.VerticalGroupByFields[0], view.Name, cancellationToken).ConfigureAwait(false);
         }
 
+        // Some layouts only offer custom fields in the Sort by menu after they are
+        // visible on the view, so fields are applied before sorting.
+        await TrySetVisibleFieldsAsync(page, view, cancellationToken).ConfigureAwait(false);
+
         if (view.SortByFields.Count > 0)
         {
             await TrySetSortAsync(page, view.SortByFields[0], view.Name, cancellationToken).ConfigureAwait(false);
         }
-
-        await TrySetVisibleFieldsAsync(page, view, cancellationToken).ConfigureAwait(false);
 
         // UI-only settings.
         if (view.Ui?.SliceBy is { } sliceBy)

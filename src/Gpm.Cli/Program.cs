@@ -612,6 +612,7 @@ setupCommand.SetAction(async (parseResult, cancellationToken) =>
     }
 
     int? createdFixtureProjectNumber = null;
+    var fixtureAlreadyExisted = false;
     if (parseResult.GetValue(fixtureOption))
     {
         var token = parseResult.GetValue(tokenOption)
@@ -640,6 +641,7 @@ setupCommand.SetAction(async (parseResult, cancellationToken) =>
             Console.Error.WriteLine(string.Create(CultureInfo.InvariantCulture,
                 $"Fixture project {(result.Created ? "created" : "already existed")}: #{result.ProjectNumber}"));
             createdFixtureProjectNumber = result.ProjectNumber;
+            fixtureAlreadyExisted = !result.Created;
         }
         catch (Exception exception) when (exception is GitHubGraphQLException or InvalidOperationException or IOException or HttpRequestException)
         {
@@ -650,6 +652,12 @@ setupCommand.SetAction(async (parseResult, cancellationToken) =>
 
     if (!parseResult.GetValue(fixtureUiOption))
     {
+        return 0;
+    }
+
+    if (fixtureAlreadyExisted && parseResult.GetValue(fixtureProjectOption) is null)
+    {
+        Console.Error.WriteLine("Fixture project already exists; skipping --fixture-ui to avoid duplicating views/workflows. To force UI setup on an existing project, run setup --fixture-ui with --fixture-project <number> explicitly.");
         return 0;
     }
 

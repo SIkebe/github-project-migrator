@@ -242,6 +242,8 @@ dotnet run --project src/Gpm.Cli -- setup `
   --browser-profile source
 ```
 
+既に同名 Project が存在する場合、`--fixture --fixture-ui` の組み合わせでは Views / Workflows の重複作成を避けるため UI 適用は自動で skip されます。既存 Project に UI-only fixture を強制的に適用する場合だけ、`--fixture` を外して `--fixture-ui --fixture-project <source-project-number>` を明示してください。
+
 このコマンドは、既存 Project に対して標準テスト用の以下を作成します。
 
 - Views
