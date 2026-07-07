@@ -87,6 +87,10 @@ public sealed class FixtureProjectBuilder
             {
                 // Best effort cleanup only.
             }
+            catch (UnauthorizedAccessException)
+            {
+                // Best effort cleanup only.
+            }
         }
 
         return new FixtureProjectSetupResult(project.ProjectNumber, project.Url, Created: true);
