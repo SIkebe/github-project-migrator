@@ -33,6 +33,20 @@ public sealed class GitHubRestClientTests
     }
 
     [Fact]
+    public async Task GetAsync_normalizes_configured_rest_base_uri_trailing_slash()
+    {
+        using var handler = new StubHandler(new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent("{}", Encoding.UTF8, "application/json"),
+        });
+        using var client = new GitHubRestClient("dummy-token", new Uri("https://api.tenant.ghe.com/api"), handler);
+
+        await client.GetAsync("repos/octo/repo", TestContext.Current.CancellationToken);
+
+        Assert.Equal(new Uri("https://api.tenant.ghe.com/api/repos/octo/repo"), handler.RequestUri);
+    }
+
+    [Fact]
     public async Task Rest_failures_throw_HttpRequestException_with_status_code()
     {
         using var handler = new StubHandler(new HttpResponseMessage(HttpStatusCode.Forbidden)

@@ -21,7 +21,7 @@ public sealed class GitHubRestClient : IDisposable
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(token);
         ArgumentNullException.ThrowIfNull(handler);
-        _httpClient = new HttpClient(handler) { BaseAddress = baseUri ?? DefaultBaseUri };
+        _httpClient = new HttpClient(handler) { BaseAddress = EnsureTrailingSlash(baseUri ?? DefaultBaseUri) };
         _httpClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
         _httpClient.DefaultRequestHeaders.UserAgent.ParseAdd("gpm");
         _httpClient.DefaultRequestHeaders.Accept.ParseAdd("application/vnd.github+json");
@@ -32,6 +32,20 @@ public sealed class GitHubRestClient : IDisposable
     {
         ArgumentNullException.ThrowIfNull(graphQlEndpoint);
         return new Uri(graphQlEndpoint, ".");
+    }
+
+    private static Uri EnsureTrailingSlash(Uri baseUri)
+    {
+        if (baseUri.AbsolutePath.EndsWith('/'))
+        {
+            return baseUri;
+        }
+
+        var builder = new UriBuilder(baseUri)
+        {
+            Path = baseUri.AbsolutePath + "/",
+        };
+        return builder.Uri;
     }
 
     public async Task<JsonElement?> GetAsync(string path, CancellationToken cancellationToken = default)
