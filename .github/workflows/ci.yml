@@ -1,8 +1,6 @@
 name: CI
 
 on:
-  push:
-    branches: [main]
   pull_request:
     branches: [main]
 
@@ -21,6 +19,32 @@ env:
   DOTNET_NOLOGO: true
 
 jobs:
+  ghalint:
+    name: ghalint
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Install ghalint
+        run: |
+          $goModPath = 'tools/ghalint/go.mod'
+          $versionLine = Get-Content $goModPath | Where-Object { $_ -match 'github\.com/suzuki-shunsuke/ghalint\s+v\d+\.\d+\.\d+' } | Select-Object -First 1
+          if ([string]::IsNullOrWhiteSpace($versionLine)) {
+            throw "Unable to resolve ghalint version from $goModPath."
+          }
+
+          $version = [regex]::Match($versionLine, 'github\.com/suzuki-shunsuke/ghalint\s+(v\d+\.\d+\.\d+(?:[-+][^\s]+)?)').Groups[1].Value
+          go install "github.com/suzuki-shunsuke/ghalint/cmd/ghalint@$version"
+          Join-Path (go env GOPATH) 'bin' | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+      - name: Run ghalint
+        run: ghalint run
+
   build-test:
     name: Build and test (${{ matrix.os }})
     strategy:
