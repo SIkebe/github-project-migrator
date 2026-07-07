@@ -91,9 +91,9 @@ public class GraphQLClientIntegrationTests
             }
 
             // The items connection is eventually consistent right after writes,
-            // so poll until all 120 items are visible (up to ~30s).
+            // so poll until all 120 items are visible (up to ~75s).
             List<string?> itemIds = [];
-            for (var attempt = 0; attempt < 7; attempt++)
+            for (var attempt = 0; attempt < 16; attempt++)
             {
                 if (attempt > 0)
                 {

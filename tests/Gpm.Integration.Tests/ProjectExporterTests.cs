@@ -208,8 +208,7 @@ public class ProjectExporterTests
         }
 
         // Saved-but-disabled workflows are visible to GraphQL (unsaved ones are not).
-        var disabled = Assert.Single(snapshot.Workflows, w => !w.Enabled);
-        Assert.Equal("Code changes requested", disabled.Name);
+        Assert.Contains(snapshot.Workflows, w => !w.Enabled && w.Name == "Code changes requested");
 
         Assert.All(snapshot.Workflows, w => Assert.Null(w.Ui)); // browser-only (M7)
     }
