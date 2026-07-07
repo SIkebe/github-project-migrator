@@ -1,0 +1,29 @@
+version: 2
+updates:
+  - package-ecosystem: dotnet-sdk
+    directory: "/"
+    schedule:
+      interval: daily
+
+  - package-ecosystem: nuget
+    directory: "/"
+    schedule:
+      interval: daily
+    groups:
+      dependencies:
+        patterns:
+          - "*"
+
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: daily
+    groups:
+      actions:
+        patterns:
+          - "*"
+
+  - package-ecosystem: gomod
+    directory: "/tools/ghalint"
+    schedule:
+      interval: daily
