@@ -18,7 +18,7 @@ namespace Gpm.Integration.Tests;
 /// </summary>
 public class VerifyTests
 {
-    private const int FixtureProjectNumber = 3;
+    private static int FixtureProjectNumber => IntegrationTestSettings.FixtureProjectNumber;
     private const string FixtureRepo = "gpm-source/fixture-repo";
     private const string StatusFieldName = "Status";
 

@@ -42,7 +42,7 @@ public class GraphQLClientIntegrationTests
               }
             }
             """,
-            new { login = Org, number = 3 },
+            new { login = Org, number = IntegrationTestSettings.FixtureProjectNumber },
             TestContext.Current.CancellationToken);
 
         var project = data.GetProperty("organization").GetProperty("projectV2");

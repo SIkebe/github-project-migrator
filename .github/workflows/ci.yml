@@ -78,8 +78,9 @@ jobs:
         run: dotnet build Gpm.slnx -c Release --no-restore -warnaserror
       - name: Test (real API when secrets are available)
         env:
-          GPM_TEST_TOKEN: ${{ vars.GPM_RUN_REAL_API_TESTS == 'true' && secrets.GPM_TEST_TOKEN || '' }}
+          GPM_TEST_TOKEN: ${{ secrets.GPM_TEST_TOKEN }}
           GPM_TEST_ORG: ${{ vars.GPM_TEST_ORG || 'gpm-source' }}
+          GPM_TEST_PROJECT_NUMBER: ${{ vars.GPM_TEST_PROJECT_NUMBER || '89' }}
           GPM_TEST_TARGET_ORG: ${{ vars.GPM_TEST_TARGET_ORG || 'gpm-target' }}
         run: dotnet test Gpm.slnx -c Release --no-build --logger trx
       - name: Upload test result logs

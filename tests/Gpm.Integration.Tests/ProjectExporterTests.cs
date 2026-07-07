@@ -12,7 +12,7 @@ namespace Gpm.Integration.Tests;
 /// </summary>
 public class ProjectExporterTests
 {
-    private const int FixtureProjectNumber = 3;
+    private static int FixtureProjectNumber => IntegrationTestSettings.FixtureProjectNumber;
 
     private static string Org => Environment.GetEnvironmentVariable("GPM_TEST_ORG") ?? "gpm-source";
 
