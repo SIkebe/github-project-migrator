@@ -12,11 +12,14 @@ internal static class IntegrationTestSettings
 
     public static string FixtureRepositoryName => Environment.GetEnvironmentVariable("GPM_TEST_FIXTURE_REPO")
         ?? Environment.GetEnvironmentVariable("GPM_FIXTURE_REPO")
+        ?? "fixture-repo2";
+
+    public static string TargetFixtureRepositoryName => Environment.GetEnvironmentVariable("GPM_TEST_TARGET_FIXTURE_REPO")
         ?? "fixture-repo";
 
     public static string FixtureRepositoryFullName => $"{SourceOrg}/{FixtureRepositoryName}";
 
-    public static string TargetFixtureRepositoryFullName => $"{TargetOrg}/{FixtureRepositoryName}";
+    public static string TargetFixtureRepositoryFullName => $"{TargetOrg}/{TargetFixtureRepositoryName}";
 
     public static int FixtureProjectNumber
     {

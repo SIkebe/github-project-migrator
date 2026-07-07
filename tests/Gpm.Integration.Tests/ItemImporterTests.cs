@@ -56,7 +56,7 @@ public class ItemImporterTests
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToDictionary(login => login, login => login, StringComparer.OrdinalIgnoreCase);
 
-        // The fixture links gpm-source/fixture-repo; map it to the target org's clone.
+        // The fixture links the source fixture repository; map it to the target org's clone.
         var linkMapping = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
             [FixtureRepo] = IntegrationTestSettings.TargetFixtureRepositoryFullName,
