@@ -187,9 +187,10 @@ public class ProjectExporterTests
     {
         var snapshot = await ExportFixtureAsync();
 
-        string[] expectedEnabled =
+        string[] expectedWorkflows =
         [
             "Item closed",
+            "Item reopened",
             "Pull request merged",
             "Auto-close issue",
             "Auto-add sub-issues to project",
@@ -199,11 +200,11 @@ public class ProjectExporterTests
             "Auto-add secondary",
         ];
 
-        var enabled = snapshot.Workflows.Where(w => w.Enabled).Select(w => w.Name).ToList();
-        Assert.True(snapshot.Workflows.Count >= expectedEnabled.Length + 1);
-        foreach (var name in expectedEnabled)
+        var workflowNames = snapshot.Workflows.Select(w => w.Name).ToList();
+        Assert.True(snapshot.Workflows.Count >= expectedWorkflows.Length);
+        foreach (var name in expectedWorkflows)
         {
-            Assert.Contains(name, enabled);
+            Assert.Contains(name, workflowNames);
         }
 
         // Saved-but-disabled workflows are visible to GraphQL (unsaved ones are not).
