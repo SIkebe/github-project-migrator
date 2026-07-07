@@ -106,13 +106,13 @@ public sealed class FixtureProjectBuilder
             repository = await _rest.PostAsync($"orgs/{organization}/repos", new { name = repositoryName, @private = true }, cancellationToken).ConfigureAwait(false);
         }
 
-        await EnsureReadmeAsync(repositoryFullName, cancellationToken).ConfigureAwait(false);
+        await EnsureReadmeAsync(repositoryFullName, repositoryName, cancellationToken).ConfigureAwait(false);
         await EnsureIssuesAsync(repositoryFullName, cancellationToken).ConfigureAwait(false);
         await EnsureBugLabelAsync(repositoryFullName, cancellationToken).ConfigureAwait(false);
         return await EnsurePullRequestAsync(repositoryFullName, cancellationToken).ConfigureAwait(false);
     }
 
-    private async Task EnsureReadmeAsync(string repositoryFullName, CancellationToken cancellationToken)
+    private async Task EnsureReadmeAsync(string repositoryFullName, string repositoryName, CancellationToken cancellationToken)
     {
         if (await _rest.GetAsync($"repos/{repositoryFullName}/contents/README.md", cancellationToken).ConfigureAwait(false) is not null)
         {
@@ -120,7 +120,7 @@ public sealed class FixtureProjectBuilder
         }
 
         OnProgress?.Invoke("Creating initial commit (README.md)...");
-        var content = Convert.ToBase64String(Encoding.UTF8.GetBytes("# fixture-repo\n\nPermanent fixture repository for gpm integration tests.\n"));
+        var content = Convert.ToBase64String(Encoding.UTF8.GetBytes($"# {repositoryName}\n\nPermanent fixture repository for gpm integration tests.\n"));
         await _rest.PutAsync(
             $"repos/{repositoryFullName}/contents/README.md",
             new { message = "Initial commit", content },
