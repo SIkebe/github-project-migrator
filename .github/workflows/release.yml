@@ -7,11 +7,52 @@ on:
 permissions:
   contents: write
 
+defaults:
+  run:
+    shell: pwsh
+
+concurrency:
+  group: release-${{ github.ref_name }}
+  cancel-in-progress: false
+
 env:
   DOTNET_NOLOGO: true
 
 jobs:
+  release-preflight:
+    name: Check release immutability preconditions
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Require a new release or empty draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          $releaseJson = gh release view $env:TAG --repo $env:REPOSITORY --json isDraft,assets 2>$null
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "No existing GitHub Release found for $env:TAG."
+            exit 0
+          }
+
+          $release = $releaseJson | ConvertFrom-Json
+          $assetCount = @($release.assets).Count
+
+          if (-not $release.isDraft) {
+            throw "GitHub Release '$env:TAG' is already published. Use a new tag for corrected assets."
+          }
+
+          if ($assetCount -gt 0) {
+            throw "Draft GitHub Release '$env:TAG' already has $assetCount asset(s). Delete the draft before rerunning, or use a new tag."
+          }
+
+          Write-Host "Found an empty draft GitHub Release for $env:TAG; it can be reused."
+
   publish-self-contained:
+    needs: release-preflight
     timeout-minutes: 30
     permissions:
       contents: read
@@ -35,10 +76,19 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5.4.0
         with:
-          dotnet-version: 10.0.x
+          global-json-file: global.json
+      - name: Cache NuGet packages
+        uses: actions/cache@2c8a9bd7457de244a408f35966fab2fb45fda9c8 # v6.0.0
+        with:
+          path: ~/.nuget/packages
+          key: ${{ runner.os }}-nuget-${{ hashFiles('global.json', 'Directory.Packages.props', '**/*.csproj') }}
+          restore-keys: |
+            ${{ runner.os }}-nuget-
+      - name: Restore
+        run: dotnet restore src/Gpm.Cli -r ${{ matrix.rid }}
       - name: Publish self-contained (${{ matrix.rid }})
         shell: pwsh
-        run: dotnet publish src/Gpm.Cli -c Release --self-contained true -r ${{ matrix.rid }} -o "stage/gpm-${{ github.ref_name }}-${{ matrix.rid }}"
+        run: dotnet publish src/Gpm.Cli -c Release --no-restore --self-contained true -r ${{ matrix.rid }} -o "stage/gpm-${{ github.ref_name }}-${{ matrix.rid }}"
       - name: Smoke test
         if: ${{ matrix.smoke }}
         shell: pwsh
@@ -67,6 +117,7 @@ jobs:
           if-no-files-found: error
 
   publish-framework-dependent:
+    needs: release-preflight
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
@@ -77,10 +128,19 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5.4.0
         with:
-          dotnet-version: 10.0.x
+          global-json-file: global.json
+      - name: Cache NuGet packages
+        uses: actions/cache@2c8a9bd7457de244a408f35966fab2fb45fda9c8 # v6.0.0
+        with:
+          path: ~/.nuget/packages
+          key: ${{ runner.os }}-nuget-${{ hashFiles('global.json', 'Directory.Packages.props', '**/*.csproj') }}
+          restore-keys: |
+            ${{ runner.os }}-nuget-
+      - name: Restore
+        run: dotnet restore src/Gpm.Cli
       - name: Publish framework-dependent (portable)
         shell: pwsh
-        run: dotnet publish src/Gpm.Cli -c Release --self-contained false -o "stage/gpm-${{ github.ref_name }}-portable"
+        run: dotnet publish src/Gpm.Cli -c Release --no-restore --self-contained false -o "stage/gpm-${{ github.ref_name }}-portable"
       - name: Smoke test
         shell: pwsh
         run: |
@@ -102,6 +162,7 @@ jobs:
           if-no-files-found: error
 
   pack-tool:
+    needs: release-preflight
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
@@ -112,9 +173,18 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5.4.0
         with:
-          dotnet-version: 10.0.x
+          global-json-file: global.json
+      - name: Cache NuGet packages
+        uses: actions/cache@2c8a9bd7457de244a408f35966fab2fb45fda9c8 # v6.0.0
+        with:
+          path: ~/.nuget/packages
+          key: ${{ runner.os }}-nuget-${{ hashFiles('global.json', 'Directory.Packages.props', '**/*.csproj') }}
+          restore-keys: |
+            ${{ runner.os }}-nuget-
+      - name: Restore
+        run: dotnet restore Gpm.slnx
       - name: Pack NuGet global tool
-        run: dotnet pack src/Gpm.Cli -c Release -o dist
+        run: dotnet pack src/Gpm.Cli -c Release --no-restore -o dist
       - name: Smoke test (install from local package)
         shell: pwsh
         run: |
