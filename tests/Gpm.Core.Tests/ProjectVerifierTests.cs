@@ -507,6 +507,31 @@ public class ProjectVerifierTests
     }
 
     [Fact]
+    public void Repository_mapping_normalizes_items_linked_repositories_and_workflow_ui_repositories()
+    {
+        var workflowUi = new WorkflowUiSnapshot { Repository = "repo", Filter = "is:open" };
+        var source = BuildSnapshot() with
+        {
+            LinkedRepositories = ["org/repo"],
+            Workflows = [BuildSnapshot().Workflows[0] with { Ui = workflowUi }],
+        };
+        var target = source with
+        {
+            Items = source.Items.Select(item => item.Repository == "org/repo" ? item with { Repository = "target-org/renamed-repo" } : item).ToList(),
+            LinkedRepositories = ["target-org/renamed-repo"],
+            Workflows = [source.Workflows[0] with { Ui = workflowUi with { Repository = "renamed-repo" } }],
+        };
+
+        var report = ProjectVerifier.Compare(source, target, new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["org/repo"] = "target-org/renamed-repo",
+        });
+
+        Assert.Empty(report.Differences);
+        Assert.True(report.IsMatch);
+    }
+
+    [Fact]
     public void Linked_repositories_are_not_compared_when_the_source_predates_capture()
     {
         var target = BuildSnapshot() with { LinkedRepositories = ["org/repo-a"] };

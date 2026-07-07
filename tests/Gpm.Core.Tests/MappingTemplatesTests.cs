@@ -28,14 +28,19 @@ public class MappingTemplatesTests
     }
 
     [Fact]
-    public void ExtractDraftAssignees_dedupes_across_drafts()
+    public void ExtractUserLogins_dedupes_draft_assignees_and_user_collaborators()
     {
         var snapshot = SnapshotWithItems(
+            [
+                new CollaboratorSnapshot { Type = "USER", Login = "Carol", Role = "WRITER" },
+                new CollaboratorSnapshot { Type = "TEAM", Login = "team-a", Role = "READER" },
+                new CollaboratorSnapshot { Type = "USER", Login = "dave", Role = "READER" },
+            ],
             DraftItem("d1", assignees: ["alice", "bob"]),
             DraftItem("d2", assignees: ["Alice", "carol"]),
             IssueItem("org-a/repo-1"));
 
-        Assert.Equal(["alice", "bob", "carol"], MappingTemplates.ExtractDraftAssignees([snapshot]));
+        Assert.Equal(["alice", "bob", "carol", "dave"], MappingTemplates.ExtractUserLogins([snapshot]));
     }
 
     [Fact]
@@ -69,6 +74,28 @@ public class MappingTemplatesTests
 
             var userPath = Path.Combine(directory, MappingTemplates.UserMappingFileName);
             Assert.Equal("mannequin-user,mannequin-id,target-user\nalice,,\nbob,,\n", await File.ReadAllTextAsync(userPath, TestContext.Current.CancellationToken));
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task WriteAsync_writes_user_template_when_snapshot_has_user_collaborators()
+    {
+        var directory = NewTempDirectory();
+        try
+        {
+            var snapshot = SnapshotWithItems(
+                [
+                    new CollaboratorSnapshot { Type = "USER", Login = "octocat", Role = "WRITER" },
+                    new CollaboratorSnapshot { Type = "TEAM", Login = "fixture-team", Role = "READER" },
+                ]);
+            await MappingTemplates.WriteAsync([snapshot], directory, cancellationToken: TestContext.Current.CancellationToken);
+
+            var userPath = Path.Combine(directory, MappingTemplates.UserMappingFileName);
+            Assert.Equal("mannequin-user,mannequin-id,target-user\noctocat,,\n", await File.ReadAllTextAsync(userPath, TestContext.Current.CancellationToken));
         }
         finally
         {
@@ -144,7 +171,10 @@ public class MappingTemplatesTests
         return directory;
     }
 
-    private static ProjectSnapshot SnapshotWithItems(params ItemSnapshot[] items) => new()
+    private static ProjectSnapshot SnapshotWithItems(params ItemSnapshot[] items)
+        => SnapshotWithItems(null, items);
+
+    private static ProjectSnapshot SnapshotWithItems(IReadOnlyList<CollaboratorSnapshot>? collaborators, params ItemSnapshot[] items) => new()
     {
         SchemaVersion = ProjectSnapshot.CurrentSchemaVersion,
         Project = new ProjectInfoSnapshot { Title = "t", Public = false, Closed = false },
@@ -152,6 +182,7 @@ public class MappingTemplatesTests
         Views = [],
         Workflows = [],
         Items = items,
+        Collaborators = collaborators,
     };
 
     private static ItemSnapshot IssueItem(string repository) => new()

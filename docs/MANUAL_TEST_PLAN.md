@@ -386,7 +386,7 @@ $env:GPM_SOURCE_ORG/$env:GPM_FIXTURE_REPO,$env:GPM_TARGET_ORG/$env:GPM_TARGET_RE
 "@ | Set-Content -Encoding UTF8 "$env:GPM_SNAPSHOT_DIR/repository-mappings.csv"
 ```
 
-`user-mappings.csv` が生成されている場合は、EMU target login に合わせて `target-user` を補完します。
+`user-mappings.csv` が生成されている場合は、EMU target login に合わせて `target-user` を補完します。`user-mappings.csv` には draft issue assignee と explicit user collaborator が含まれます。既存ファイルは re-export しても上書きされないため、collaborator 追加後にテンプレート行が増えない場合は、手動で行を追加するか、編集内容を退避してから既存 `user-mappings.csv` を削除して再 export してください。
 
 ### 7.3 Target Project へ import
 
@@ -422,8 +422,11 @@ dotnet run --project src/Gpm.Cli -- verify `
   --project <target-project-number> `
   --in $env:GPM_SNAPSHOT_DIR `
   --token $env:GPM_TARGET_TOKEN `
+  --repo-mapping "$env:GPM_SNAPSHOT_DIR/repository-mappings.csv" `
   --no-update-check
 ```
+
+source / target の repository 名が異なる場合、`verify` にも import と同じ `--repo-mapping` を渡してください。これにより Issue / PR item と linked repository は target repository 名へ正規化して比較されます。
 
 期待値:
 

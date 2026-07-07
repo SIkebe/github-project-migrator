@@ -317,7 +317,7 @@ importCommand.SetAction(async (parseResult, cancellationToken) =>
             : CsvMapping.Load(repoMappingPath);
         var userMapping = userMappingPath is null
             ? System.Collections.ObjectModel.ReadOnlyDictionary<string, string>.Empty
-            : CsvMapping.Load(userMappingPath);
+            : CsvMapping.LoadUserMapping(userMappingPath);
 
         var importer = new ProjectImporter(client)
         {
@@ -420,6 +420,7 @@ var verifyCommand = new Command("verify", "Verify a migrated project against the
     verifyProjectOption,
     ownerTypeOption,
     inOption,
+    repoMappingOption,
     tokenOption,
     targetBaseUrlOption,
     noUpdateCheckOption,
@@ -445,10 +446,19 @@ verifyCommand.SetAction(async (parseResult, cancellationToken) =>
 
     using var client = new GitHubGraphQLClient(token, baseUrl is null ? null : GitHubGraphQLClient.NormalizeBaseUrl(baseUrl));
     client.OnRetry = Console.Error.WriteLine;
-    var verifier = new ProjectVerifier(client) { OnProgress = Console.Error.WriteLine, OwnerType = ownerType };
 
     try
     {
+        var repoMappingPath = parseResult.GetValue(repoMappingOption);
+        var repoMapping = repoMappingPath is null
+            ? System.Collections.ObjectModel.ReadOnlyDictionary<string, string>.Empty
+            : CsvMapping.Load(repoMappingPath);
+        var verifier = new ProjectVerifier(client)
+        {
+            OnProgress = Console.Error.WriteLine,
+            OwnerType = ownerType,
+            RepositoryMapping = repoMapping,
+        };
         var snapshot = await SnapshotFile.LoadAsync(inDirectory, cancellationToken);
         var report = await verifier.VerifyAsync(snapshot, org, projectNumber, cancellationToken);
         WriteVerifyReport(report);
