@@ -94,7 +94,7 @@ public static class MappingTemplates
         {
             await WriteTemplateAsync(
                 Path.Combine(directory, UserMappingFileName),
-            userLogins,
+                userLogins,
                 header: "mannequin-user,mannequin-id,target-user",
                 rowFactory: source => string.Concat(source, ",,"),
                 onProgress: onProgress,
