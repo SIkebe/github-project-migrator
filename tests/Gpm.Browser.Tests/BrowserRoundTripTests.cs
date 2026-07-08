@@ -14,6 +14,7 @@ namespace Gpm.Browser.Tests;
 /// saved by <c>gpm login</c>) and GPM_TEST_TOKEN; skipped otherwise.
 /// The created project is deleted in a finally block.
 /// </summary>
+[Trait("Category", "E2E")]
 public class BrowserRoundTripTests
 {
     private const int FixtureProjectNumber = 3;
