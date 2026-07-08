@@ -566,6 +566,11 @@ var setupBrowserProfileOption = new Option<string?>("--browser-profile")
 {
     Description = "Named browser profile from 'gpm login --profile <name>' used with --fixture-ui.",
 };
+var setupApiBaseUrlOption = new Option<string?>("--api-base-url")
+{
+    Description = "GraphQL API base URL used with --fixture, e.g. https://api.TENANT.ghe.com or https://api.TENANT.ghe.com/graphql. Defaults to https://api.github.com/graphql.",
+};
+setupApiBaseUrlOption.Validators.Add(ValidateBaseUrl);
 
 setupCommand.Options.Add(fixtureOption);
 setupCommand.Options.Add(fixtureUiOption);
@@ -574,8 +579,9 @@ setupCommand.Options.Add(fixtureProjectOption);
 setupCommand.Options.Add(fixtureTitleOption);
 setupCommand.Options.Add(fixtureRepoOption);
 setupCommand.Options.Add(setupBrowserProfileOption);
+setupCommand.Options.Add(baseUrlOption);
 setupCommand.Options.Add(tokenOption);
-setupCommand.Options.Add(apiBaseUrlOption);
+setupCommand.Options.Add(setupApiBaseUrlOption);
 
 setupCommand.Validators.Add(result =>
 {
@@ -635,7 +641,7 @@ setupCommand.SetAction(async (parseResult, cancellationToken) =>
             return 1;
         }
 
-        var baseUrl = parseResult.GetValue(apiBaseUrlOption);
+        var baseUrl = parseResult.GetValue(setupApiBaseUrlOption);
         var graphQlBaseUri = baseUrl is null ? null : GitHubGraphQLClient.NormalizeBaseUrl(baseUrl);
         using var graphQl = new GitHubGraphQLClient(token, graphQlBaseUri);
         graphQl.OnRetry = Console.Error.WriteLine;
@@ -674,6 +680,7 @@ setupCommand.SetAction(async (parseResult, cancellationToken) =>
 
     await using var session = new BrowserSession(new BrowserSessionOptions
     {
+        BaseUrl = parseResult.GetValue(baseUrlOption)!,
         Profile = parseResult.GetValue(setupBrowserProfileOption),
     });
 
