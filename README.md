@@ -263,6 +263,11 @@ The following are out of scope for this project, either by design or because Git
 
 `export` / `import` / `verify` asynchronously check GitHub Releases for a newer version (2-second timeout; failures are silently ignored; **no telemetry is ever sent**). Opt out with `--no-update-check` or by setting the `GPM_NO_UPDATE_CHECK` environment variable.
 
+## Development docs
+
+- [Test strategy](docs/TEST_STRATEGY.md) is a Japanese summary of the automated, browser, CI, packaging and manual release validation layers.
+- [Manual test plan](docs/MANUAL_TEST_PLAN.md) walks through the GEI + `gpm` end-to-end migration validation flow.
+
 ## Limitations
 
 Permanent limitations (cannot be solved by any tool):
