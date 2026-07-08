@@ -1,3 +1,5 @@
+using System.Globalization;
+
 namespace Gpm.Integration.Tests;
 
 internal static class IntegrationTestSettings
@@ -31,7 +33,12 @@ internal static class IntegrationTestSettings
                 return 89;
             }
 
-            return int.Parse(value, System.Globalization.CultureInfo.InvariantCulture);
+            if (int.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out var projectNumber))
+            {
+                return projectNumber;
+            }
+
+            throw new FormatException($"GPM_TEST_PROJECT_NUMBER must be a valid integer, but was '{value}'.");
         }
     }
 }
