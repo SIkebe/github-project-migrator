@@ -1,3 +1,4 @@
+using System.Collections.ObjectModel;
 using System.Globalization;
 using Gpm.Core.Export;
 using Gpm.Core.GitHub;
@@ -36,6 +37,9 @@ public sealed class ProjectVerifier
     /// <summary>Owner type of the target project: organization (default) or user.</summary>
     public ProjectOwnerType OwnerType { get; init; } = ProjectOwnerType.Organization;
 
+    /// <summary>Source → target repository mapping ("owner/name" form), used to normalize the source snapshot before comparison.</summary>
+    public IReadOnlyDictionary<string, string> RepositoryMapping { get; init; } = ReadOnlyDictionary<string, string>.Empty;
+
     /// <summary>Exports the target project and compares it against <paramref name="source"/>.</summary>
     public async Task<VerifyReport> VerifyAsync(ProjectSnapshot source, string targetOrgLogin, int targetProjectNumber, CancellationToken cancellationToken = default)
     {
@@ -44,14 +48,24 @@ public sealed class ProjectVerifier
 
         var exporter = new ProjectExporter(_client) { OnProgress = OnProgress, OwnerType = OwnerType };
         var target = await exporter.ExportAsync(targetOrgLogin, targetProjectNumber, cancellationToken).ConfigureAwait(false);
-        return Compare(source, target);
+        return Compare(source, target, RepositoryMapping);
     }
 
     /// <summary>Pure snapshot-to-snapshot comparison (no API access).</summary>
     public static VerifyReport Compare(ProjectSnapshot source, ProjectSnapshot target)
+        => Compare(source, target, ReadOnlyDictionary<string, string>.Empty);
+
+    /// <summary>Pure snapshot-to-snapshot comparison (no API access), with source repository names normalized through a mapping.</summary>
+    public static VerifyReport Compare(ProjectSnapshot source, ProjectSnapshot target, IReadOnlyDictionary<string, string> repositoryMapping)
     {
         ArgumentNullException.ThrowIfNull(source);
         ArgumentNullException.ThrowIfNull(target);
+        ArgumentNullException.ThrowIfNull(repositoryMapping);
+
+        if (repositoryMapping.Count > 0)
+        {
+            source = ApplyRepositoryMapping(source, repositoryMapping);
+        }
 
         var differences = new List<VerifyDifference>();
         CompareProject(source.Project, target.Project, differences);
@@ -62,6 +76,42 @@ public sealed class ProjectVerifier
         CompareCollaborators(source.Collaborators, target.Collaborators, differences);
         CompareLinkedRepositories(source.LinkedRepositories, target.LinkedRepositories, differences);
         return new VerifyReport { Differences = differences };
+    }
+
+    private static ProjectSnapshot ApplyRepositoryMapping(ProjectSnapshot source, IReadOnlyDictionary<string, string> repositoryMapping)
+    {
+        return source with
+        {
+            Items = source.Items.Select(item => item.Repository is { Length: > 0 } repository
+                    && repositoryMapping.TryGetValue(repository, out var mappedRepository)
+                ? item with { Repository = mappedRepository }
+                : item).ToList(),
+            LinkedRepositories = source.LinkedRepositories?.Select(repository => repositoryMapping.TryGetValue(repository, out var mappedRepository)
+                ? mappedRepository
+                : repository).ToList(),
+            Workflows = source.Workflows.Select(workflow => workflow.Ui?.Repository is { Length: > 0 } repository
+                ? workflow with { Ui = workflow.Ui with { Repository = ResolveRepositoryName(repository, repositoryMapping) } }
+                : workflow).ToList(),
+        };
+    }
+
+    private static string ResolveRepositoryName(string sourceRepository, IReadOnlyDictionary<string, string> mapping)
+    {
+        foreach (var (source, target) in mapping)
+        {
+            if (string.Equals(ShortName(source), sourceRepository, StringComparison.OrdinalIgnoreCase))
+            {
+                return ShortName(target);
+            }
+        }
+
+        return sourceRepository;
+
+        static string ShortName(string repository)
+        {
+            var separator = repository.LastIndexOf('/');
+            return separator < 0 ? repository : repository[(separator + 1)..];
+        }
     }
 
     // ----- project metadata -----

@@ -6,6 +6,9 @@
 # dotenv files
 .env
 
+# Local manual migration test artifacts
+.manual-test/
+
 # User-specific files
 *.rsuser
 *.suo

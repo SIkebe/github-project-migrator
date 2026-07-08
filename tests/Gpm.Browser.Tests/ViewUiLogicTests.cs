@@ -146,6 +146,18 @@ public class ViewUiLogicTests
         Assert.Equal(2, warnings.Count);
     }
 
+    [Fact]
+    public void FixtureUiSnapshotFactory_creates_importable_standard_views_and_workflows()
+    {
+        var snapshot = FixtureUiSnapshotFactory.Create("fixture-repo");
+
+        Assert.Equal(["View 1", "Fixture Board", "Fixture Roadmap"], snapshot.Views.Select(v => v.Name));
+        Assert.Contains(snapshot.Workflows, w => w.Name == "Auto-add to project" && w.Ui?.Repository == "fixture-repo");
+        Assert.Contains(snapshot.Workflows, w => w.Name == "Auto-add secondary" && w.Ui?.Filter == "is:issue label:bug");
+        Assert.Empty(ViewUiImporter.CollectPreflightWarnings(snapshot));
+        Assert.Empty(WorkflowUiImporter.CollectPreflightWarnings(snapshot, WorkflowUiImporter.DefaultMaxAutoAddWorkflows));
+    }
+
     // ----- verifier: Ui comparison (M6) -----
 
     [Fact]

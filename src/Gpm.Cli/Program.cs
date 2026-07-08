@@ -4,6 +4,7 @@ using System.Reflection;
 using Gpm.Core;
 using Gpm.Core.Browser;
 using Gpm.Core.Export;
+using Gpm.Core.Fixtures;
 using Gpm.Core.GitHub;
 using Gpm.Core.Import;
 using Gpm.Core.Snapshot;
@@ -316,7 +317,7 @@ importCommand.SetAction(async (parseResult, cancellationToken) =>
             : CsvMapping.Load(repoMappingPath);
         var userMapping = userMappingPath is null
             ? System.Collections.ObjectModel.ReadOnlyDictionary<string, string>.Empty
-            : CsvMapping.Load(userMappingPath);
+            : CsvMapping.LoadUserMapping(userMappingPath);
 
         var importer = new ProjectImporter(client)
         {
@@ -419,6 +420,7 @@ var verifyCommand = new Command("verify", "Verify a migrated project against the
     verifyProjectOption,
     ownerTypeOption,
     inOption,
+    repoMappingOption,
     tokenOption,
     targetBaseUrlOption,
     noUpdateCheckOption,
@@ -444,10 +446,19 @@ verifyCommand.SetAction(async (parseResult, cancellationToken) =>
 
     using var client = new GitHubGraphQLClient(token, baseUrl is null ? null : GitHubGraphQLClient.NormalizeBaseUrl(baseUrl));
     client.OnRetry = Console.Error.WriteLine;
-    var verifier = new ProjectVerifier(client) { OnProgress = Console.Error.WriteLine, OwnerType = ownerType };
 
     try
     {
+        var repoMappingPath = parseResult.GetValue(repoMappingOption);
+        var repoMapping = repoMappingPath is null
+            ? System.Collections.ObjectModel.ReadOnlyDictionary<string, string>.Empty
+            : CsvMapping.Load(repoMappingPath);
+        var verifier = new ProjectVerifier(client)
+        {
+            OnProgress = Console.Error.WriteLine,
+            OwnerType = ownerType,
+            RepositoryMapping = repoMapping,
+        };
         var snapshot = await SnapshotFile.LoadAsync(inDirectory, cancellationToken);
         var report = await verifier.VerifyAsync(snapshot, org, projectNumber, cancellationToken);
         WriteVerifyReport(report);
@@ -525,20 +536,189 @@ var setupCommand = new Command("setup", "Install prerequisites such as Playwrigh
     browsersOption,
 };
 
-setupCommand.SetAction(parseResult =>
+var fixtureUiOption = new Option<bool>("--fixture-ui")
 {
-    if (!parseResult.GetValue(browsersOption))
+    Description = "Create the standard test fixture Views and Workflows on an existing project using browser automation.",
+};
+var fixtureOption = new Option<bool>("--fixture")
+{
+    Description = "Create the standard API-backed test fixture repository/project.",
+};
+var fixtureOrgOption = new Option<string?>("--fixture-org")
+{
+    Description = "Organization login that owns the fixture used with --fixture or --fixture-ui.",
+};
+var fixtureProjectOption = new Option<int?>("--fixture-project")
+{
+    Description = "Project number to configure with the standard fixture Views and Workflows used with --fixture-ui.",
+};
+var fixtureTitleOption = new Option<string>("--fixture-title")
+{
+    Description = "Project title used with --fixture.",
+    DefaultValueFactory = _ => "gpm-fixture",
+};
+var fixtureRepoOption = new Option<string>("--fixture-repo")
+{
+    Description = "Repository short name used by the fixture Auto-add workflows.",
+    DefaultValueFactory = _ => "fixture-repo",
+};
+var setupBrowserProfileOption = new Option<string?>("--browser-profile")
+{
+    Description = "Named browser profile from 'gpm login --profile <name>' used with --fixture-ui.",
+};
+var setupApiBaseUrlOption = new Option<string?>("--api-base-url")
+{
+    Description = "GraphQL API base URL used with --fixture, e.g. https://api.TENANT.ghe.com or https://api.TENANT.ghe.com/graphql. Defaults to https://api.github.com/graphql.",
+};
+setupApiBaseUrlOption.Validators.Add(ValidateBaseUrl);
+
+setupCommand.Options.Add(fixtureOption);
+setupCommand.Options.Add(fixtureUiOption);
+setupCommand.Options.Add(fixtureOrgOption);
+setupCommand.Options.Add(fixtureProjectOption);
+setupCommand.Options.Add(fixtureTitleOption);
+setupCommand.Options.Add(fixtureRepoOption);
+setupCommand.Options.Add(setupBrowserProfileOption);
+setupCommand.Options.Add(baseUrlOption);
+setupCommand.Options.Add(tokenOption);
+setupCommand.Options.Add(setupApiBaseUrlOption);
+
+setupCommand.Validators.Add(result =>
+{
+    if (result.GetValue(fixtureOption) && string.IsNullOrWhiteSpace(result.GetValue(fixtureOrgOption)))
     {
-        Console.Error.WriteLine("Nothing to install. Use 'gpm setup --browsers' to install the Playwright Chromium browser.");
+        result.AddError("--fixture requires --fixture-org.");
+    }
+
+    if (!result.GetValue(fixtureUiOption))
+    {
+        return;
+    }
+
+    if (string.IsNullOrWhiteSpace(result.GetValue(fixtureOrgOption)))
+    {
+        result.AddError("--fixture-ui requires --fixture-org.");
+    }
+
+    if (!result.GetValue(fixtureOption) && result.GetValue(fixtureProjectOption) is null)
+    {
+        result.AddError("--fixture-ui requires --fixture-project unless it is combined with --fixture.");
+    }
+});
+
+setupCommand.SetAction(async (parseResult, cancellationToken) =>
+{
+    if (!parseResult.GetValue(browsersOption) && !parseResult.GetValue(fixtureOption) && !parseResult.GetValue(fixtureUiOption))
+    {
+        Console.Error.WriteLine("Nothing to install. Use 'gpm setup --browsers' to install the Playwright Chromium browser, 'gpm setup --fixture' to create the API-backed test fixture, or 'gpm setup --fixture-ui' to create test fixture Views/Workflows.");
         return 1;
     }
 
-    Console.Error.WriteLine("Installing the Playwright Chromium browser...");
-    var exitCode = Microsoft.Playwright.Program.Main(["install", "chromium"]);
-    Console.Error.WriteLine(exitCode == 0
-        ? "Chromium installed."
-        : string.Create(CultureInfo.InvariantCulture, $"Playwright install failed with exit code {exitCode}."));
-    return exitCode;
+    if (parseResult.GetValue(browsersOption))
+    {
+        Console.Error.WriteLine("Installing the Playwright Chromium browser...");
+        var exitCode = Microsoft.Playwright.Program.Main(["install", "chromium"]);
+        Console.Error.WriteLine(exitCode == 0
+            ? "Chromium installed."
+            : string.Create(CultureInfo.InvariantCulture, $"Playwright install failed with exit code {exitCode}."));
+        if (exitCode != 0)
+        {
+            return exitCode;
+        }
+    }
+
+    int? createdFixtureProjectNumber = null;
+    var fixtureAlreadyExisted = false;
+    if (parseResult.GetValue(fixtureOption))
+    {
+        var token = parseResult.GetValue(tokenOption)
+            ?? Environment.GetEnvironmentVariable("GITHUB_TOKEN")
+            ?? Environment.GetEnvironmentVariable("GPM_TOKEN")
+            ?? Environment.GetEnvironmentVariable("GPM_TEST_TOKEN");
+        if (string.IsNullOrWhiteSpace(token))
+        {
+            Console.Error.WriteLine("error: no token provided. Use --token or set GITHUB_TOKEN / GPM_TOKEN / GPM_TEST_TOKEN.");
+            return 1;
+        }
+
+        var baseUrl = parseResult.GetValue(setupApiBaseUrlOption);
+        var graphQlBaseUri = baseUrl is null ? null : GitHubGraphQLClient.NormalizeBaseUrl(baseUrl);
+        using var graphQl = new GitHubGraphQLClient(token, graphQlBaseUri);
+        graphQl.OnRetry = Console.Error.WriteLine;
+        using var rest = new GitHubRestClient(token, graphQlBaseUri is null ? null : GitHubRestClient.ToRestBaseUri(graphQlBaseUri));
+        var builder = new FixtureProjectBuilder(graphQl, rest) { OnProgress = Console.Error.WriteLine };
+        try
+        {
+            var result = await builder.CreateAsync(
+                parseResult.GetValue(fixtureOrgOption)!,
+                parseResult.GetValue(fixtureTitleOption) ?? "gpm-fixture",
+                parseResult.GetValue(fixtureRepoOption) ?? "fixture-repo",
+                cancellationToken);
+            Console.WriteLine(result.Url);
+            Console.Error.WriteLine(string.Create(CultureInfo.InvariantCulture,
+                $"Fixture project {(result.Created ? "created" : "already existed")}: #{result.ProjectNumber}"));
+            createdFixtureProjectNumber = result.ProjectNumber;
+            fixtureAlreadyExisted = !result.Created;
+        }
+        catch (Exception exception) when (exception is GitHubGraphQLException or InvalidOperationException or IOException or HttpRequestException)
+        {
+            Console.Error.WriteLine($"error: {exception.Message}");
+            return 1;
+        }
+    }
+
+    if (!parseResult.GetValue(fixtureUiOption))
+    {
+        return 0;
+    }
+
+    if (fixtureAlreadyExisted && parseResult.GetValue(fixtureProjectOption) is null)
+    {
+        Console.Error.WriteLine("Fixture project already exists; skipping --fixture-ui to avoid duplicating views/workflows. To force UI setup on an existing project, run setup --fixture-ui with --fixture-project <number> explicitly.");
+        return 0;
+    }
+
+    await using var session = new BrowserSession(new BrowserSessionOptions
+    {
+        BaseUrl = parseResult.GetValue(baseUrlOption)!,
+        Profile = parseResult.GetValue(setupBrowserProfileOption),
+    });
+
+    try
+    {
+        var org = parseResult.GetValue(fixtureOrgOption)!;
+        var projectNumber = parseResult.GetValue(fixtureProjectOption) ?? createdFixtureProjectNumber;
+        if (projectNumber is null)
+        {
+            Console.Error.WriteLine("error: --fixture-ui requires --fixture-project unless it is combined with --fixture.");
+            return 1;
+        }
+
+        var snapshot = FixtureUiSnapshotFactory.Create(parseResult.GetValue(fixtureRepoOption) ?? "fixture-repo");
+
+        var viewImporter = new ViewUiImporter(session) { OnProgress = Console.Error.WriteLine };
+        await viewImporter.ImportAsync(snapshot, org, projectNumber.Value, cancellationToken);
+        foreach (var warning in viewImporter.Warnings)
+        {
+            Console.Error.WriteLine($"warning: {warning}");
+        }
+
+        var workflowImporter = new WorkflowUiImporter(session) { OnProgress = Console.Error.WriteLine };
+        await workflowImporter.ImportAsync(snapshot, org, projectNumber.Value, cancellationToken);
+        foreach (var warning in workflowImporter.Warnings)
+        {
+            Console.Error.WriteLine($"warning: {warning}");
+        }
+
+        Console.Error.WriteLine(string.Create(CultureInfo.InvariantCulture,
+            $"Fixture UI applied: views={snapshot.Views.Count} workflows={workflowImporter.ImportedCount} viewWarnings={viewImporter.Warnings.Count} workflowWarnings={workflowImporter.Warnings.Count}"));
+        return viewImporter.Warnings.Count == 0 && workflowImporter.Warnings.Count == 0 ? 0 : 1;
+    }
+    catch (Exception exception) when (exception is PlaywrightException or InvalidOperationException or IOException or TimeoutException)
+    {
+        Console.Error.WriteLine($"error: {exception.Message}");
+        return 1;
+    }
 });
 
 rootCommand.Subcommands.Add(setupCommand);

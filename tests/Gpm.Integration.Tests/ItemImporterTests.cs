@@ -15,12 +15,12 @@ namespace Gpm.Integration.Tests;
 /// </summary>
 public class ItemImporterTests
 {
-    private const int FixtureProjectNumber = 3;
-    private const string FixtureRepo = "gpm-source/fixture-repo";
+    private static int FixtureProjectNumber => IntegrationTestSettings.FixtureProjectNumber;
+    private static string FixtureRepo => IntegrationTestSettings.FixtureRepositoryFullName;
 
-    private static string SourceOrg => Environment.GetEnvironmentVariable("GPM_TEST_ORG") ?? "gpm-source";
+    private static string SourceOrg => IntegrationTestSettings.SourceOrg;
 
-    private static string TargetOrg => Environment.GetEnvironmentVariable("GPM_TEST_TARGET_ORG") ?? "gpm-target";
+    private static string TargetOrg => IntegrationTestSettings.TargetOrg;
 
     private static string Token
     {
@@ -56,10 +56,10 @@ public class ItemImporterTests
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToDictionary(login => login, login => login, StringComparer.OrdinalIgnoreCase);
 
-        // The fixture links gpm-source/fixture-repo; map it to the target org's clone.
+        // The fixture links the source fixture repository; map it to the target org's clone.
         var linkMapping = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
-            [FixtureRepo] = TargetOrg + "/fixture-repo",
+            [FixtureRepo] = IntegrationTestSettings.TargetFixtureRepositoryFullName,
         };
 
         var projectImporter = new ProjectImporter(client) { RepositoryMapping = linkMapping };
@@ -81,7 +81,7 @@ public class ItemImporterTests
 
             // The linked repository was remapped to the target org.
             Assert.NotNull(imported.LinkedRepositories);
-            Assert.Contains(TargetOrg + "/fixture-repo", imported.LinkedRepositories, StringComparer.OrdinalIgnoreCase);
+            Assert.Contains(IntegrationTestSettings.TargetFixtureRepositoryFullName, imported.LinkedRepositories, StringComparer.OrdinalIgnoreCase);
 
             // Non-archived items keep the snapshot order (archived items are excluded from
             // the position chain, so their enumeration position is not guaranteed).
@@ -158,7 +158,7 @@ public class ItemImporterTests
         var logDirectory = Directory.CreateTempSubdirectory("gpm-m4-issue-").FullName;
         try
         {
-            var issueId = await GetIssueIdAsync(client, "gpm-source", "fixture-repo", 1, cancellationToken);
+            var issueId = await GetIssueIdAsync(client, SourceOrg, IntegrationTestSettings.FixtureRepositoryName, 1, cancellationToken);
             await client.QueryAsync(
                 """
                 mutation($projectId: ID!, $contentId: ID!) {

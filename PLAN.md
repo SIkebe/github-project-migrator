@@ -227,6 +227,8 @@ v1 で扱わないものと将来対応は §8 のロードマップを参照。
 
 **基本方針: 実 API でテストできるものは実 API でテストする。** モックは「実 API では意図的に再現できない/してはいけないケース」のみに限定する。
 
+GEI で repository / Issue / Pull Request を移行してから `gpm` の Project 移行を手動検証する end-to-end 手順は [docs/MANUAL_TEST_PLAN.md](docs/MANUAL_TEST_PLAN.md) を参照。
+
 | レイヤー | 手法 | 実行条件 |
 |---|---|---|
 | 統合(実 API)— 主軸 | テスト専用 org(`GPM_TEST_ORG`)+ フィクスチャープロジェクト + 自動クリーンアップ | CI 常時(secrets のない fork PR のみ skip) |

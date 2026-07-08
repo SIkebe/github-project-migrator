@@ -54,7 +54,8 @@ gpm import --org target-org --in ./snapshot --token $TARGET_TOKEN \
   --repo-mapping repos.csv --user-mapping users.csv
 
 # 3. Verify the migrated project against the snapshot
-gpm verify --org target-org --project 12 --in ./snapshot --token $TARGET_TOKEN
+gpm verify --org target-org --project 12 --in ./snapshot --token $TARGET_TOKEN \
+  --repo-mapping repos.csv
 ```
 
 Tokens are resolved from `--token`, then the `GITHUB_TOKEN` / `GPM_TOKEN` environment variables.
@@ -75,7 +76,7 @@ For fine-grained PATs, create the token for the organization or user that owns t
 
 GitHub permissions are still enforced in addition to token permissions: the token owner must be allowed to read the source project and referenced repositories, and must be allowed to create or edit the target project.
 
-`--repo-mapping` / `--user-mapping` are CSV files that map repositories (`org/repo,org/repo`) and user logins across organizations — effectively required for cross-organization moves and EMU targets (`user_shortcode` logins). Repository mappings use the `source,target` header. User mappings use the same header as GitHub Enterprise Importer mannequin reclaim CSVs (`mannequin-user,mannequin-id,target-user`); for `gpm`, the mannequin ID is ignored and rows with a blank `target-user` are ignored. If a mannequin CSV has duplicate `mannequin-user` rows, reduce it to one row per login before using it with `gpm`, because project snapshots cannot disambiguate by mannequin ID. See `examples/repos.csv` and `examples/users.csv` for small sample files. `gpm export` generates ready-to-fill templates next to the snapshot: `repository-mappings.csv` (all distinct source repositories) and `user-mappings.csv` (draft-issue assignees, only when present). Fill in the target column and pass the files to `gpm import` — existing files are never overwritten by later exports.
+`--repo-mapping` / `--user-mapping` are CSV files that map repositories (`org/repo,org/repo`) and user logins across organizations — effectively required for cross-organization moves and EMU targets (`user_shortcode` logins). Repository mappings use the `source,target` header. User mappings use the same header as GitHub Enterprise Importer mannequin reclaim CSVs (`mannequin-user,mannequin-id,target-user`); for `gpm`, the mannequin ID is ignored and rows with a blank `target-user` are ignored. If a mannequin CSV has duplicate `mannequin-user` rows, reduce it to one row per login before using it with `gpm`, because project snapshots cannot disambiguate by mannequin ID. See `examples/repos.csv` and `examples/users.csv` for small sample files. `gpm export` generates ready-to-fill templates next to the snapshot: `repository-mappings.csv` (all distinct source repositories) and `user-mappings.csv` (draft-issue assignees and explicit user collaborators, only when present). Fill in the target column and pass the files to `gpm import` — existing files are never overwritten by later exports.
 
 ### More import/export options
 
@@ -239,6 +240,8 @@ Workflows are migrated through the GitHub Projects web UI because GitHub has no 
 4. **Fill in `user-mappings.csv` if generated.** This is important for Enterprise Managed Users where target logins usually have a `_shortcode` suffix.
 5. **Use browser automation only when you need Views or Workflows.** Run `gpm setup --browsers` and `gpm login` first, then pass `--enable-browser-automation` to both export and import.
 
+When source and target repository names differ, pass the same `--repo-mapping` file to `gpm verify` as well. This lets verification compare imported Issue / Pull Request items and linked repositories after repository remapping.
+
 If you do not enable browser automation, `gpm` still migrates projects, fields, items, values, ordering, archived state and linked repositories, but **Views and Workflows will not be fully recreated**.
 
 ## What gpm intentionally does not support
@@ -259,6 +262,11 @@ The following are out of scope for this project, either by design or because Git
 ## Update check
 
 `export` / `import` / `verify` asynchronously check GitHub Releases for a newer version (2-second timeout; failures are silently ignored; **no telemetry is ever sent**). Opt out with `--no-update-check` or by setting the `GPM_NO_UPDATE_CHECK` environment variable.
+
+## Development docs
+
+- [Test strategy](docs/TEST_STRATEGY.md) is a Japanese summary of the automated, browser, CI, packaging and manual release validation layers.
+- [Manual test plan](docs/MANUAL_TEST_PLAN.md) walks through the GEI + `gpm` end-to-end migration validation flow.
 
 ## Limitations
 

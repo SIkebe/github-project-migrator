@@ -6,8 +6,8 @@ namespace Gpm.Core.Export;
 /// <summary>
 /// Generates the mapping CSV templates written next to exported snapshots:
 /// <c>repository-mappings.csv</c> (distinct source repositories of Issue/PR items) and
-/// <c>user-mappings.csv</c> (distinct draft-issue assignee logins; only written when at
-/// least one draft has assignees). Repository mappings use <c>source,target</c>.
+/// <c>user-mappings.csv</c> (distinct draft-issue assignee and explicit user collaborator
+/// logins; only written when at least one user login is present). Repository mappings use <c>source,target</c>.
 /// User mappings use GitHub Enterprise Importer's mannequin reclaim CSV shape
 /// (<c>mannequin-user,mannequin-id,target-user</c>), with blank mannequin IDs because
 /// project snapshots only contain logins. The target column is left blank for the user
@@ -37,8 +37,8 @@ public static class MappingTemplates
         return repositories;
     }
 
-    /// <summary>Distinct assignee logins across all draft-issue items, in first-seen order.</summary>
-    public static IReadOnlyList<string> ExtractDraftAssignees(IEnumerable<ProjectSnapshot> snapshots)
+    /// <summary>Distinct user logins from draft-issue assignees and explicit user collaborators, in first-seen order.</summary>
+    public static IReadOnlyList<string> ExtractUserLogins(IEnumerable<ProjectSnapshot> snapshots)
     {
         ArgumentNullException.ThrowIfNull(snapshots);
 
@@ -52,12 +52,22 @@ public static class MappingTemplates
             }
         }
 
+        foreach (var collaborator in snapshots.SelectMany(s => s.Collaborators ?? []))
+        {
+            if (string.Equals(collaborator.Type, "USER", StringComparison.OrdinalIgnoreCase)
+                && collaborator.Login.Length > 0
+                && seen.Add(collaborator.Login))
+            {
+                logins.Add(collaborator.Login);
+            }
+        }
+
         return logins;
     }
 
     /// <summary>
     /// Writes the mapping templates into <paramref name="directory"/>.
-    /// <c>user-mappings.csv</c> is only written when at least one draft item has assignees.
+    /// <c>user-mappings.csv</c> is only written when at least one draft assignee or explicit user collaborator exists.
     /// Files that already exist are skipped (reported via <paramref name="onProgress"/>).
     /// </summary>
     public static async Task WriteAsync(
@@ -79,12 +89,12 @@ public static class MappingTemplates
             onProgress: onProgress,
             cancellationToken: cancellationToken).ConfigureAwait(false);
 
-        var assignees = ExtractDraftAssignees(snapshots);
-        if (assignees.Count > 0)
+        var userLogins = ExtractUserLogins(snapshots);
+        if (userLogins.Count > 0)
         {
             await WriteTemplateAsync(
                 Path.Combine(directory, UserMappingFileName),
-                assignees,
+                userLogins,
                 header: "mannequin-user,mannequin-id,target-user",
                 rowFactory: source => string.Concat(source, ",,"),
                 onProgress: onProgress,

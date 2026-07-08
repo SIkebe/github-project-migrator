@@ -168,4 +168,20 @@ public class CsvMappingTests
             File.Delete(path);
         }
     }
+
+    [Fact]
+    public void LoadUserMapping_parses_a_mannequin_csv_file()
+    {
+        var path = Path.Combine(Path.GetTempPath(), "gpm-user-mapping-" + Guid.NewGuid().ToString("N") + ".csv");
+        File.WriteAllText(path, "mannequin-user,mannequin-id,target-user\nalice,ignored,alice_sde\n");
+        try
+        {
+            var map = CsvMapping.LoadUserMapping(path);
+            Assert.Equal("alice_sde", map["alice"]);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
 }

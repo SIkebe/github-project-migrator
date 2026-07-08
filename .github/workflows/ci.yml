@@ -1,35 +1,110 @@
 name: CI
 
 on:
-  push:
-    branches: [main]
   pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: pwsh
 
 env:
   DOTNET_NOLOGO: true
 
 jobs:
+  ghalint:
+    name: ghalint
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Setup Go
+        uses: actions/setup-go@44694675825211faa026b3c33043df3e48a5fa00 # v6.0.0
+        with:
+          go-version-file: tools/ghalint/go.mod
+      - name: Install ghalint
+        run: |
+          $goModPath = 'tools/ghalint/go.mod'
+          $versionLine = Get-Content $goModPath | Where-Object { $_ -match 'github\.com/suzuki-shunsuke/ghalint\s+v\d+\.\d+\.\d+' } | Select-Object -First 1
+          if ([string]::IsNullOrWhiteSpace($versionLine)) {
+            throw "Unable to resolve ghalint version from $goModPath."
+          }
+
+          $version = [regex]::Match($versionLine, 'github\.com/suzuki-shunsuke/ghalint\s+(v\d+\.\d+\.\d+(?:[-+][^\s]+)?)').Groups[1].Value
+          go install "github.com/suzuki-shunsuke/ghalint/cmd/ghalint@$version"
+          Join-Path (go env GOPATH) 'bin' | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+      - name: Run ghalint
+        run: ghalint run
+
   build-test:
+    name: Build and test (${{ matrix.os }})
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest]
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    permissions:
+      contents: read
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-dotnet@v4
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
-          dotnet-version: 10.0.x
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Setup .NET SDK
+        uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5.4.0
+        with:
+          global-json-file: global.json
+      - name: Cache NuGet packages
+        uses: actions/cache@2c8a9bd7457de244a408f35966fab2fb45fda9c8 # v6.0.0
+        with:
+          path: ~/.nuget/packages
+          key: ${{ runner.os }}-nuget-${{ hashFiles('global.json', 'Directory.Packages.props', '**/*.csproj') }}
+          restore-keys: |
+            ${{ runner.os }}-nuget-
+      - name: Restore
+        run: dotnet restore Gpm.slnx
       - name: Build
-        run: dotnet build -c Release
-      - name: Test (real API when secrets are available)
+        run: dotnet build Gpm.slnx -c Release --no-restore -warnaserror
+      - name: Test deterministic suites
+        run: |
+          dotnet test tests/Gpm.Core.Tests/Gpm.Core.Tests.csproj -c Release --no-build --logger trx
+          dotnet test tests/Gpm.Browser.Tests/Gpm.Browser.Tests.csproj -c Release --no-build --filter "Category!=E2E" --logger trx
+      - name: Test real GitHub API integration
+        if: ${{ matrix.os == 'ubuntu-latest' }}
         env:
           GPM_TEST_TOKEN: ${{ secrets.GPM_TEST_TOKEN }}
-          GPM_TEST_ORG: gpm-source
-          GPM_TARGET_ORG: gpm-target
-        run: dotnet test -c Release --no-build
+          GPM_TEST_ORG: ${{ vars.GPM_TEST_ORG || 'gpm-source' }}
+          GPM_TEST_PROJECT_NUMBER: ${{ vars.GPM_TEST_PROJECT_NUMBER || '89' }}
+          GPM_TEST_FIXTURE_REPO: ${{ vars.GPM_TEST_FIXTURE_REPO || 'fixture-repo2' }}
+          GPM_TEST_TARGET_ORG: ${{ vars.GPM_TEST_TARGET_ORG || 'gpm-target' }}
+          GPM_TEST_TARGET_FIXTURE_REPO: ${{ vars.GPM_TEST_TARGET_FIXTURE_REPO || 'fixture-repo' }}
+        run: dotnet test tests/Gpm.Integration.Tests/Gpm.Integration.Tests.csproj -c Release --no-build --logger trx
+      - name: Upload test result logs
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: test-results-${{ matrix.os }}
+          path: tests/**/TestResults/**
+          if-no-files-found: warn
+          retention-days: 7
 
   publish:
+    name: Publish (${{ matrix.rid }})
     needs: build-test
     strategy:
       fail-fast: false
@@ -45,11 +120,26 @@ jobs:
             rid: linux-x64
             smoke: true
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    permissions:
+      contents: read
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-dotnet@v4
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
-          dotnet-version: 10.0.x
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Setup .NET SDK
+        uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5.4.0
+        with:
+          global-json-file: global.json
+      - name: Cache NuGet packages
+        uses: actions/cache@2c8a9bd7457de244a408f35966fab2fb45fda9c8 # v6.0.0
+        with:
+          path: ~/.nuget/packages
+          key: ${{ runner.os }}-nuget-${{ hashFiles('global.json', 'Directory.Packages.props', '**/*.csproj') }}
+          restore-keys: |
+            ${{ runner.os }}-nuget-
       - name: Publish self-contained (${{ matrix.rid }})
         run: dotnet publish src/Gpm.Cli -c Release --self-contained true -r ${{ matrix.rid }} -o artifacts/sc-${{ matrix.rid }}
       - name: Publish framework-dependent (portable)

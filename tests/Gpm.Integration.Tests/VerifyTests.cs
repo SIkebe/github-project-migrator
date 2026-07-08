@@ -18,13 +18,13 @@ namespace Gpm.Integration.Tests;
 /// </summary>
 public class VerifyTests
 {
-    private const int FixtureProjectNumber = 3;
-    private const string FixtureRepo = "gpm-source/fixture-repo";
+    private static int FixtureProjectNumber => IntegrationTestSettings.FixtureProjectNumber;
+    private static string FixtureRepo => IntegrationTestSettings.FixtureRepositoryFullName;
     private const string StatusFieldName = "Status";
 
-    private static string SourceOrg => Environment.GetEnvironmentVariable("GPM_TEST_ORG") ?? "gpm-source";
+    private static string SourceOrg => IntegrationTestSettings.SourceOrg;
 
-    private static string TargetOrg => Environment.GetEnvironmentVariable("GPM_TEST_TARGET_ORG") ?? "gpm-target";
+    private static string TargetOrg => IntegrationTestSettings.TargetOrg;
 
     private static string Token
     {
