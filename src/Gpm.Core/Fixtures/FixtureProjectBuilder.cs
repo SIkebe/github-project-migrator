@@ -129,15 +129,37 @@ public sealed class FixtureProjectBuilder
 
     private async Task EnsureIssuesAsync(string repositoryFullName, CancellationToken cancellationToken)
     {
-        var issues = await _rest.GetAsync($"repos/{repositoryFullName}/issues?state=all&per_page=100", cancellationToken).ConfigureAwait(false);
-        var issueCount = issues?.EnumerateArray().Count(i => !i.TryGetProperty("pull_request", out _)) ?? 0;
-        for (var i = issueCount + 1; i <= 2; i++)
+        for (var number = 1; number <= 2; number++)
         {
-            OnProgress?.Invoke($"Creating Fixture issue {i}...");
-            await _rest.PostAsync(
-                $"repos/{repositoryFullName}/issues",
-                new { title = $"Fixture issue {i}", body = $"Permanent fixture issue {i}." },
-                cancellationToken).ConfigureAwait(false);
+            var existing = await _rest.GetAsync($"repos/{repositoryFullName}/issues/{number}", cancellationToken).ConfigureAwait(false);
+            if (existing is null)
+            {
+                OnProgress?.Invoke($"Creating Fixture issue {number}...");
+                var created = await _rest.PostAsync(
+                    $"repos/{repositoryFullName}/issues",
+                    new { title = $"Fixture issue {number}", body = $"Permanent fixture issue {number}." },
+                    cancellationToken).ConfigureAwait(false);
+                EnsureExpectedIssue(created, repositoryFullName, number);
+                continue;
+            }
+
+            EnsureExpectedIssue(existing.Value, repositoryFullName, number);
+        }
+    }
+
+    private static void EnsureExpectedIssue(JsonElement issue, string repositoryFullName, int expectedNumber)
+    {
+        var actualNumber = issue.GetProperty("number").GetInt32();
+        if (actualNumber != expectedNumber)
+        {
+            throw new InvalidOperationException(string.Create(CultureInfo.InvariantCulture,
+                $"Fixture repository '{repositoryFullName}' must contain Issue #{expectedNumber}, but GitHub created Issue #{actualNumber}. Use an empty fixture repository so Issue #1 and #2 can be reserved for the fixture."));
+        }
+
+        if (issue.TryGetProperty("pull_request", out _))
+        {
+            throw new InvalidOperationException(string.Create(CultureInfo.InvariantCulture,
+                $"Fixture repository '{repositoryFullName}' must contain Issue #{expectedNumber}, but #{expectedNumber} is a pull request. Use an empty fixture repository so Issue #1 and #2 can be reserved for the fixture."));
         }
     }
 
