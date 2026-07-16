@@ -69,6 +69,8 @@ public class VerifyTests
             var repoMapping = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase) { [FixtureRepo] = FixtureRepo };
             await new ItemImporter(client) { RepositoryMapping = repoMapping }
                 .ImportAsync(snapshot, result, logDirectory, cancellationToken);
+            await IntegrationFixtureSnapshot.RemoveUnexpectedItemsAsync(
+                client, TargetOrg, result.ProjectNumber, snapshot, cancellationToken);
 
             var verifier = new ProjectVerifier(client);
 

@@ -72,6 +72,8 @@ public class ItemImporterTests
 
             var itemImporter = new ItemImporter(client) { RepositoryMapping = IdentityRepoMapping, UserMapping = userMapping };
             var itemResult = await itemImporter.ImportAsync(snapshot, result, logDirectory, cancellationToken);
+            await IntegrationFixtureSnapshot.RemoveUnexpectedItemsAsync(
+                client, TargetOrg, result.ProjectNumber, snapshot, cancellationToken);
 
             // Every fixture item is mappable (drafts + fixture-repo issue/PR), so everything is created.
             Assert.Equal(snapshot.Items.Count, itemResult.Created);
@@ -169,11 +171,20 @@ public class ItemImporterTests
                 new { projectId = sourceProjectId, contentId = issueId },
                 cancellationToken);
 
-            var source = await ExportUntilItemCountAsync(exporter, SourceOrg, sourceProjectNumber, expectedCount: 1, cancellationToken);
-            var sourceIssue = Assert.Single(source.Items, i => i.Type == "ISSUE");
+            var exported = await ExportUntilAsync(
+                exporter,
+                SourceOrg,
+                sourceProjectNumber,
+                snapshot => snapshot.Items.Any(item => item.Type == "ISSUE" && item.Number == 1),
+                cancellationToken);
+            var sourceIssue = Assert.Single(exported.Items, i => i.Type == "ISSUE" && i.Number == 1);
             Assert.Equal(FixtureRepo, sourceIssue.Repository);
 
-            var snapshot = source with { Project = source.Project with { Title = NewTestTitle() } };
+            var snapshot = exported with
+            {
+                Project = exported.Project with { Title = NewTestTitle() },
+                Items = [sourceIssue with { Position = 0 }],
+            };
             var result = await new ProjectImporter(client).ImportAsync(snapshot, TargetOrg, cancellationToken);
             targetProjectId = result.ProjectId;
 
@@ -188,6 +199,8 @@ public class ItemImporterTests
                 .ImportAsync(snapshot, result, logDirectory, cancellationToken);
             Assert.Equal(1, itemResult.Created);
             Assert.Equal(0, itemResult.Skipped);
+            await IntegrationFixtureSnapshot.RemoveUnexpectedItemsAsync(
+                client, TargetOrg, result.ProjectNumber, snapshot, cancellationToken);
 
             var imported = await ExportUntilItemCountAsync(exporter, TargetOrg, result.ProjectNumber, expectedCount: 1, cancellationToken);
             var importedIssue = Assert.Single(imported.Items, i => i.Type == "ISSUE");
@@ -215,14 +228,27 @@ public class ItemImporterTests
         : string.Create(CultureInfo.InvariantCulture, $"{item.Type}:{item.Repository}#{item.Number}");
 
     /// <summary>Items are eventually consistent after writes; poll until the expected count is visible.</summary>
-    private static async Task<ProjectSnapshot> ExportUntilItemCountAsync(
+    private static Task<ProjectSnapshot> ExportUntilItemCountAsync(
         ProjectExporter exporter, string org, int projectNumber, int expectedCount, CancellationToken cancellationToken)
+        => ExportUntilAsync(
+            exporter,
+            org,
+            projectNumber,
+            snapshot => snapshot.Items.Count >= expectedCount,
+            cancellationToken);
+
+    private static async Task<ProjectSnapshot> ExportUntilAsync(
+        ProjectExporter exporter,
+        string org,
+        int projectNumber,
+        Func<ProjectSnapshot, bool> predicate,
+        CancellationToken cancellationToken)
     {
         ProjectSnapshot snapshot = null!;
         for (var attempt = 0; attempt < 7; attempt++)
         {
             snapshot = await exporter.ExportAsync(org, projectNumber, cancellationToken);
-            if (snapshot.Items.Count >= expectedCount)
+            if (predicate(snapshot))
             {
                 return snapshot;
             }

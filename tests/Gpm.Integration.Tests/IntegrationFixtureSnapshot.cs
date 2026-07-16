@@ -1,4 +1,5 @@
 using Gpm.Core.Snapshot;
+using Gpm.Core.GitHub;
 
 namespace Gpm.Integration.Tests;
 
@@ -35,4 +36,81 @@ internal static class IntegrationFixtureSnapshot
         => snapshot.Items.Single(item =>
             item.Type == "DRAFT_ISSUE"
             && string.Equals(item.Draft?.Title, title, StringComparison.Ordinal));
+
+    public static async Task RemoveUnexpectedItemsAsync(
+        GitHubGraphQLClient client,
+        string org,
+        int projectNumber,
+        ProjectSnapshot expected,
+        CancellationToken cancellationToken)
+    {
+        var expectedKeys = expected.Items.Select(ItemKey).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        HashSet<string> observedKeys = [];
+        for (var attempt = 0; attempt < 7; attempt++)
+        {
+            var data = await client.QueryAsync(
+                """
+                query($org: String!, $number: Int!) {
+                  organization(login: $org) {
+                    projectV2(number: $number) {
+                      id
+                      items(first: 100) {
+                        nodes {
+                          id
+                          type
+                          content {
+                            ... on DraftIssue { title }
+                            ... on Issue { number repository { nameWithOwner } }
+                            ... on PullRequest { number repository { nameWithOwner } }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+                """,
+                new { org, number = projectNumber },
+                cancellationToken);
+            var project = data.GetProperty("organization").GetProperty("projectV2");
+            var projectId = project.GetProperty("id").GetString()!;
+            var nodes = project.GetProperty("items").GetProperty("nodes").EnumerateArray().ToArray();
+            observedKeys = nodes.Select(ItemKey).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            if (observedKeys.SetEquals(expectedKeys))
+            {
+                return;
+            }
+
+            foreach (var node in nodes.Where(node => !expectedKeys.Contains(ItemKey(node))))
+            {
+                await client.QueryAsync(
+                    """
+                    mutation($projectId: ID!, $itemId: ID!) {
+                      deleteProjectV2Item(input: { projectId: $projectId, itemId: $itemId }) {
+                        deletedItemId
+                      }
+                    }
+                    """,
+                    new { projectId, itemId = node.GetProperty("id").GetString()! },
+                    cancellationToken);
+            }
+
+            await Task.Delay(TimeSpan.FromSeconds(2), cancellationToken);
+        }
+
+        throw new InvalidOperationException(
+            $"Project #{projectNumber} items did not stabilize. Expected [{string.Join(", ", expectedKeys)}], observed [{string.Join(", ", observedKeys)}].");
+    }
+
+    private static string ItemKey(ItemSnapshot item) => item.Type == "DRAFT_ISSUE"
+        ? $"DRAFT_ISSUE:{item.Draft?.Title}"
+        : $"{item.Type}:{item.Repository}#{item.Number}";
+
+    private static string ItemKey(System.Text.Json.JsonElement item)
+    {
+        var type = item.GetProperty("type").GetString()!;
+        var content = item.GetProperty("content");
+        return type == "DRAFT_ISSUE"
+            ? $"DRAFT_ISSUE:{content.GetProperty("title").GetString()}"
+            : $"{type}:{content.GetProperty("repository").GetProperty("nameWithOwner").GetString()}#{content.GetProperty("number").GetInt32()}";
+    }
 }
