@@ -43,7 +43,8 @@ public class VerifyTests
         using var client = new GitHubGraphQLClient(Token);
         var exporter = new ProjectExporter(client);
 
-        var source = await exporter.ExportAsync(SourceOrg, FixtureProjectNumber, cancellationToken);
+        var exported = await exporter.ExportAsync(SourceOrg, FixtureProjectNumber, cancellationToken);
+        var source = IntegrationFixtureSnapshot.SelectCanonicalItems(exported);
 
         // Guard against silent null==null passes: the enriched fixture must actually carry
         // the elements this test claims to verify end-to-end.

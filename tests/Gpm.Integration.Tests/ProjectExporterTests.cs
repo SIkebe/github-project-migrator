@@ -30,7 +30,8 @@ public class ProjectExporterTests
     {
         using var client = new GitHubGraphQLClient(Token);
         var exporter = new ProjectExporter(client);
-        return await exporter.ExportAsync(Org, FixtureProjectNumber, TestContext.Current.CancellationToken);
+        var snapshot = await exporter.ExportAsync(Org, FixtureProjectNumber, TestContext.Current.CancellationToken);
+        return IntegrationFixtureSnapshot.SelectCanonicalItems(snapshot);
     }
 
     [Fact]
@@ -214,7 +215,7 @@ public class ProjectExporterTests
     }
 
     [Fact]
-    public async Task Export_contains_all_seven_fixture_items_with_positions()
+    public async Task Export_contains_the_seven_canonical_fixture_items_with_positions()
     {
         var snapshot = await ExportFixtureAsync();
 

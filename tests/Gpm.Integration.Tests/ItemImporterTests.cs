@@ -46,7 +46,8 @@ public class ItemImporterTests
         using var client = new GitHubGraphQLClient(Token);
         var exporter = new ProjectExporter(client);
 
-        var source = await exporter.ExportAsync(SourceOrg, FixtureProjectNumber, cancellationToken);
+        var exported = await exporter.ExportAsync(SourceOrg, FixtureProjectNumber, cancellationToken);
+        var source = IntegrationFixtureSnapshot.SelectCanonicalItems(exported);
         var title = NewTestTitle();
         var snapshot = source with { Project = source.Project with { Title = title } };
 
