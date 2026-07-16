@@ -20,7 +20,7 @@ public sealed class BrowserSession : IAsyncDisposable
     public BrowserSession(BrowserSessionOptions? options = null)
     {
         _options = options ?? new BrowserSessionOptions();
-        BaseUrl = _options.BaseUrl.TrimEnd('/');
+        BaseUrl = BrowserBaseUrl.NormalizeStandalone(_options.BaseUrl);
     }
 
     /// <summary>Web UI base URL without a trailing slash.</summary>
@@ -113,15 +113,40 @@ public sealed class BrowserSession : IAsyncDisposable
         var page = await GetPageAsync(cancellationToken).ConfigureAwait(false);
         await page.GotoAsync(url).ConfigureAwait(false);
         EnsureSignedIn(page);
+        EnsureExpectedHost(page);
 
         if (await Sel.SsoHeading(page).CountAsync().ConfigureAwait(false) > 0)
         {
             await Sel.SsoContinueButton(page).First.ClickAsync().ConfigureAwait(false);
             await page.WaitForURLAsync(url, new() { Timeout = 30_000 }).ConfigureAwait(false);
             EnsureSignedIn(page);
+            EnsureExpectedHost(page);
         }
 
         return page;
+    }
+
+    /// <summary>
+    /// Verifies that the stored browser state is signed in to this session's host as the
+    /// same account used by the API client. Call before any migration writes.
+    /// </summary>
+    public async Task ValidateAuthenticationAsync(string expectedLogin, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(expectedLogin);
+        var page = await GotoAsync(BaseUrl, cancellationToken).ConfigureAwait(false);
+        var actualLogin = await page.EvaluateAsync<string?>(
+            "() => document.querySelector('meta[name=\"user-login\"]')?.content || null").ConfigureAwait(false);
+        if (string.IsNullOrWhiteSpace(actualLogin))
+        {
+            throw new InvalidOperationException(
+                $"The browser session is not signed in to '{new Uri(BaseUrl).Host}'. Run 'gpm login' for this browser base URL.");
+        }
+
+        if (!string.Equals(actualLogin, expectedLogin, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException(
+                $"Browser profile account '{actualLogin}' does not match API token account '{expectedLogin}'. Use matching credentials before continuing.");
+        }
     }
 
     /// <summary>Saves the current context's storage state to <see cref="StatePath"/>.</summary>
@@ -192,6 +217,19 @@ public sealed class BrowserSession : IAsyncDisposable
         {
             throw new InvalidOperationException(
                 "The browser session is not signed in (redirected to the login page). Run 'gpm login' to save a fresh sign-in state.");
+        }
+    }
+
+    private void EnsureExpectedHost(IPage page)
+    {
+        if (!Uri.TryCreate(page.Url, UriKind.Absolute, out var actual)
+            || !Uri.TryCreate(BaseUrl, UriKind.Absolute, out var expected)
+            || !string.Equals(actual.Scheme, expected.Scheme, StringComparison.OrdinalIgnoreCase)
+            || !string.Equals(actual.Host, expected.Host, StringComparison.OrdinalIgnoreCase)
+            || actual.Port != expected.Port)
+        {
+            throw new InvalidOperationException(
+                $"Browser navigation left the configured GitHub host '{BaseUrl}' and reached '{page.Url}'. Check the browser base URL and profile.");
         }
     }
 

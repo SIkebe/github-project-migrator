@@ -68,6 +68,11 @@ var browserProfileOption = new Option<string?>("--browser-profile")
 {
     Description = "Named browser profile from 'gpm login --profile <name>'. Use different profiles for source and target when they use different accounts (e.g. non-EMU source, EMU target).",
 };
+var browserBaseUrlOption = new Option<string?>("--browser-base-url")
+{
+    Description = "GitHub web base URL for browser automation. Derived from the API URL when omitted, e.g. https://TENANT.ghe.com for https://api.TENANT.ghe.com.",
+};
+browserBaseUrlOption.Validators.Add(ValidateBrowserBaseUrl);
 var noUpdateCheckOption = new Option<bool>("--no-update-check")
 {
     Description = "Skip the update check against GitHub Releases (also disabled by the GPM_NO_UPDATE_CHECK environment variable).",
@@ -84,6 +89,7 @@ var exportCommand = new Command("export", "Export one project (or all projects o
     apiBaseUrlOption,
     enableBrowserOption,
     browserProfileOption,
+    browserBaseUrlOption,
     noUpdateCheckOption,
 };
 
@@ -107,7 +113,8 @@ exportCommand.SetAction(async (parseResult, cancellationToken) =>
         return 1;
     }
 
-    using var client = new GitHubGraphQLClient(token, baseUrl is null ? null : GitHubGraphQLClient.NormalizeBaseUrl(baseUrl));
+    var graphQlBaseUrl = baseUrl is null ? null : GitHubGraphQLClient.NormalizeBaseUrl(baseUrl);
+    using var client = new GitHubGraphQLClient(token, graphQlBaseUrl);
     client.OnRetry = Console.Error.WriteLine;
     var exporter = new ProjectExporter(client) { OnProgress = Console.Error.WriteLine, OwnerType = ownerType };
 
@@ -121,8 +128,11 @@ exportCommand.SetAction(async (parseResult, cancellationToken) =>
         {
             session = new BrowserSession(new BrowserSessionOptions
             {
+                BaseUrl = BrowserBaseUrl.Resolve(graphQlBaseUrl, parseResult.GetValue(browserBaseUrlOption)),
                 Profile = parseResult.GetValue(browserProfileOption),
             });
+            var apiLogin = await client.GetViewerLoginAsync(cancellationToken);
+            await session.ValidateAuthenticationAsync(apiLogin, cancellationToken);
             uiExporter = new ViewUiExporter(session) { OnProgress = Console.Error.WriteLine };
             workflowExporter = new WorkflowUiExporter(session) { OnProgress = Console.Error.WriteLine };
             collaboratorExporter = new CollaboratorUiExporter(session) { OnProgress = Console.Error.WriteLine };
@@ -188,7 +198,7 @@ exportCommand.SetAction(async (parseResult, cancellationToken) =>
         await NotifyUpdateAsync(updateCheck);
         return 0;
     }
-    catch (Exception exception) when (exception is GitHubGraphQLException or InvalidOperationException or IOException or PlaywrightException)
+    catch (Exception exception) when (exception is GitHubGraphQLException or InvalidOperationException or IOException or PlaywrightException or ArgumentException or FormatException)
     {
         Console.Error.WriteLine($"error: {exception.Message}");
         return 1;
@@ -258,6 +268,7 @@ var importCommand = new Command("import", "Import a JSON snapshot into the targe
     targetBaseUrlOption,
     enableBrowserOption,
     browserProfileOption,
+    browserBaseUrlOption,
     noUpdateCheckOption,
 };
 
@@ -305,11 +316,25 @@ importCommand.SetAction(async (parseResult, cancellationToken) =>
         return 1;
     }
 
-    using var client = new GitHubGraphQLClient(token, baseUrl is null ? null : GitHubGraphQLClient.NormalizeBaseUrl(baseUrl));
+    var graphQlBaseUrl = baseUrl is null ? null : GitHubGraphQLClient.NormalizeBaseUrl(baseUrl);
+    using var client = new GitHubGraphQLClient(token, graphQlBaseUrl);
     client.OnRetry = Console.Error.WriteLine;
 
     try
     {
+        await using var session = enableBrowserAutomation
+            ? new BrowserSession(new BrowserSessionOptions
+            {
+                BaseUrl = BrowserBaseUrl.Resolve(graphQlBaseUrl, parseResult.GetValue(browserBaseUrlOption)),
+                Profile = parseResult.GetValue(browserProfileOption),
+            })
+            : null;
+        if (session is not null)
+        {
+            var apiLogin = await client.GetViewerLoginAsync(cancellationToken);
+            await session.ValidateAuthenticationAsync(apiLogin, cancellationToken);
+        }
+
         var repoMappingPath = parseResult.GetValue(repoMappingOption);
         var userMappingPath = parseResult.GetValue(userMappingOption);
         var repoMapping = repoMappingPath is null
@@ -351,10 +376,7 @@ importCommand.SetAction(async (parseResult, cancellationToken) =>
         var workflowsImported = 0;
         if (enableBrowserAutomation)
         {
-            await using var session = new BrowserSession(new BrowserSessionOptions
-            {
-                Profile = parseResult.GetValue(browserProfileOption),
-            });
+            System.Diagnostics.Debug.Assert(session is not null);
             var viewImporter = new ViewUiImporter(session) { OnProgress = Console.Error.WriteLine };
             await viewImporter.ImportAsync(snapshot, org, result.ProjectNumber, cancellationToken);
             foreach (var warning in viewImporter.Warnings)
@@ -393,7 +415,7 @@ importCommand.SetAction(async (parseResult, cancellationToken) =>
         await NotifyUpdateAsync(updateCheck);
         return 0;
     }
-    catch (Exception exception) when (exception is GitHubGraphQLException or InvalidOperationException or IOException or FormatException or PlaywrightException)
+    catch (Exception exception) when (exception is GitHubGraphQLException or InvalidOperationException or IOException or FormatException or PlaywrightException or ArgumentException)
     {
         Console.Error.WriteLine($"error: {exception.Message}");
         return 1;
@@ -480,6 +502,7 @@ var baseUrlOption = new Option<string>("--base-url")
     Description = "GitHub web base URL (e.g. https://TENANT.ghe.com for GHEC with data residency).",
     DefaultValueFactory = _ => "https://github.com",
 };
+baseUrlOption.Validators.Add(ValidateBrowserBaseUrl);
 var statePathOption = new Option<string?>("--state-path")
 {
     Description = "File to store the browser sign-in state. Defaults to GPM_BROWSER_STATE, then %APPDATA%/gpm/browser-state.json.",
@@ -504,7 +527,7 @@ loginCommand.SetAction(async (parseResult, cancellationToken) =>
     await using var session = new BrowserSession(new BrowserSessionOptions
     {
         Headless = false,
-        BaseUrl = baseUrl,
+        BaseUrl = BrowserBaseUrl.NormalizeStandalone(baseUrl),
         StatePath = statePath,
         Profile = parseResult.GetValue(profileOption),
     });
@@ -745,6 +768,25 @@ static void ValidateBaseUrl(System.CommandLine.Parsing.OptionResult result)
     catch (Exception exception) when (exception is FormatException or ArgumentException)
     {
         result.AddError($"{result.IdentifierToken?.Value ?? "--base-url"}: {exception.Message}");
+    }
+}
+
+// Rejects malformed web origins. API/web pairing is validated after both values are parsed.
+static void ValidateBrowserBaseUrl(System.CommandLine.Parsing.OptionResult result)
+{
+    var value = result.GetValueOrDefault<string?>();
+    if (value is null)
+    {
+        return;
+    }
+
+    try
+    {
+        BrowserBaseUrl.NormalizeStandalone(value);
+    }
+    catch (Exception exception) when (exception is FormatException or ArgumentException)
+    {
+        result.AddError($"{result.IdentifierToken?.Value ?? "--browser-base-url"}: {exception.Message}");
     }
 }
 

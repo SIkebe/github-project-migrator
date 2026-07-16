@@ -590,6 +590,7 @@ dotnet run --project src/Gpm.Cli -- import `
   --in $env:GPM_SNAPSHOT_DIR `
   --token $env:GPM_TARGET_TOKEN `
   --target-base-url https://api.TENANT.ghe.com `
+  --browser-base-url https://TENANT.ghe.com `
   --repo-mapping "$env:GPM_SNAPSHOT_DIR/repository-mappings.csv" `
   --enable-browser-automation `
   --browser-profile target `
