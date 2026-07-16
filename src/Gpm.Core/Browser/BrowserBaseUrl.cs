@@ -35,6 +35,13 @@ public static class BrowserBaseUrl
     private static Uri FromApiUrl(Uri apiBaseUrl)
     {
         ArgumentNullException.ThrowIfNull(apiBaseUrl);
+        if (apiBaseUrl.Scheme != Uri.UriSchemeHttps)
+        {
+            throw new ArgumentException(
+                $"API base URL '{apiBaseUrl.AbsoluteUri}' must use HTTPS.",
+                nameof(apiBaseUrl));
+        }
+
         var host = apiBaseUrl.Host;
         string webHost;
         if (string.Equals(host, "api.github.com", StringComparison.OrdinalIgnoreCase))
@@ -72,6 +79,11 @@ public static class BrowserBaseUrl
             || (uri.AbsolutePath.Length > 1 && uri.AbsolutePath != "/"))
         {
             throw new FormatException($"'{baseUrl}' must be an origin URL without a path, query, or fragment.");
+        }
+
+        if (uri.Scheme == Uri.UriSchemeHttp && !uri.IsLoopback)
+        {
+            throw new FormatException($"'{baseUrl}' must use HTTPS. HTTP is allowed only for loopback test origins.");
         }
 
         return new UriBuilder(uri.Scheme, uri.Host, uri.IsDefaultPort ? -1 : uri.Port).Uri;

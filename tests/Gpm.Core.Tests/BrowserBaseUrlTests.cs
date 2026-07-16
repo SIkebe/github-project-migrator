@@ -28,6 +28,8 @@ public class BrowserBaseUrlTests
     [Theory]
     [InlineData("https://github.com/path")]
     [InlineData("ftp://github.com")]
+    [InlineData("http://github.com")]
+    [InlineData("http://tenant.ghe.com")]
     [InlineData("not-a-url")]
     public void NormalizeStandalone_rejects_invalid_web_origin(string baseUrl)
     {
@@ -35,9 +37,23 @@ public class BrowserBaseUrlTests
     }
 
     [Theory]
+    [InlineData("http://localhost:8080", "http://localhost:8080")]
+    [InlineData("http://127.0.0.1:8080/", "http://127.0.0.1:8080")]
+    public void NormalizeStandalone_allows_http_only_for_loopback_tests(string input, string expected)
+    {
+        Assert.Equal(expected, BrowserBaseUrl.NormalizeStandalone(input));
+    }
+
+    [Fact]
+    public void Resolve_rejects_cleartext_cloud_api_url()
+    {
+        Assert.Throws<ArgumentException>(() =>
+            BrowserBaseUrl.Resolve(new Uri("http://api.tenant.ghe.com/graphql")));
+    }
+
+    [Theory]
     [InlineData("https://api.tenant.ghe.com/graphql", "https://other.ghe.com")]
     [InlineData("https://api.github.com/graphql", "https://tenant.ghe.com")]
-    [InlineData("https://api.tenant.ghe.com/graphql", "http://tenant.ghe.com")]
     public void Resolve_rejects_mismatched_api_and_web_urls(string apiUrl, string webUrl)
     {
         Assert.Throws<ArgumentException>(() => BrowserBaseUrl.Resolve(new Uri(apiUrl), webUrl));

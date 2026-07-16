@@ -57,6 +57,11 @@ public sealed class GitHubGraphQLClient : IDisposable
             throw new FormatException($"'{baseUrl}' is not an absolute http(s) URL.");
         }
 
+        if (uri.Scheme == Uri.UriSchemeHttp && !uri.IsLoopback)
+        {
+            throw new FormatException($"'{baseUrl}' must use HTTPS. HTTP is allowed only for loopback test endpoints.");
+        }
+
         if (!trimmed.EndsWith("/graphql", StringComparison.OrdinalIgnoreCase))
         {
             trimmed += "/graphql";

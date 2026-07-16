@@ -136,10 +136,17 @@ public sealed class BrowserSession : IAsyncDisposable
         var page = await GotoAsync(BaseUrl, cancellationToken).ConfigureAwait(false);
         var actualLogin = await page.EvaluateAsync<string?>(
             "() => document.querySelector('meta[name=\"user-login\"]')?.content || null").ConfigureAwait(false);
+        EnsureAuthenticationResult(BaseUrl, page.Url, actualLogin, expectedLogin);
+    }
+
+    internal static void EnsureAuthenticationResult(
+        string baseUrl, string actualUrl, string? actualLogin, string expectedLogin)
+    {
+        EnsureExpectedOrigin(baseUrl, actualUrl);
         if (string.IsNullOrWhiteSpace(actualLogin))
         {
             throw new InvalidOperationException(
-                $"The browser session is not signed in to '{new Uri(BaseUrl).Host}'. Run 'gpm login' for this browser base URL.");
+                $"The browser session is not signed in to '{new Uri(baseUrl).Host}'. Run 'gpm login' for this browser base URL.");
         }
 
         if (!string.Equals(actualLogin, expectedLogin, StringComparison.OrdinalIgnoreCase))
@@ -221,15 +228,18 @@ public sealed class BrowserSession : IAsyncDisposable
     }
 
     private void EnsureExpectedHost(IPage page)
+        => EnsureExpectedOrigin(BaseUrl, page.Url);
+
+    internal static void EnsureExpectedOrigin(string baseUrl, string actualUrl)
     {
-        if (!Uri.TryCreate(page.Url, UriKind.Absolute, out var actual)
-            || !Uri.TryCreate(BaseUrl, UriKind.Absolute, out var expected)
+        if (!Uri.TryCreate(actualUrl, UriKind.Absolute, out var actual)
+            || !Uri.TryCreate(baseUrl, UriKind.Absolute, out var expected)
             || !string.Equals(actual.Scheme, expected.Scheme, StringComparison.OrdinalIgnoreCase)
             || !string.Equals(actual.Host, expected.Host, StringComparison.OrdinalIgnoreCase)
             || actual.Port != expected.Port)
         {
             throw new InvalidOperationException(
-                $"Browser navigation left the configured GitHub host '{BaseUrl}' and reached '{page.Url}'. Check the browser base URL and profile.");
+                $"Browser navigation left the configured GitHub host '{baseUrl}' and reached '{actualUrl}'. Check the browser base URL and profile.");
         }
     }
 

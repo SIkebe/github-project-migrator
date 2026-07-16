@@ -603,6 +603,7 @@ setupCommand.Options.Add(fixtureTitleOption);
 setupCommand.Options.Add(fixtureRepoOption);
 setupCommand.Options.Add(setupBrowserProfileOption);
 setupCommand.Options.Add(baseUrlOption);
+setupCommand.Options.Add(browserBaseUrlOption);
 setupCommand.Options.Add(tokenOption);
 setupCommand.Options.Add(setupApiBaseUrlOption);
 
@@ -616,6 +617,12 @@ setupCommand.Validators.Add(result =>
     if (!result.GetValue(fixtureUiOption))
     {
         return;
+    }
+
+    if (result.GetResult(baseUrlOption) is { Implicit: false }
+        && result.GetResult(browserBaseUrlOption) is { Implicit: false })
+    {
+        result.AddError("--fixture-ui accepts either --browser-base-url or the legacy --base-url, not both.");
     }
 
     if (string.IsNullOrWhiteSpace(result.GetValue(fixtureOrgOption)))
@@ -649,6 +656,52 @@ setupCommand.SetAction(async (parseResult, cancellationToken) =>
             return exitCode;
         }
     }
+
+    BrowserSession? authenticatedFixtureUiSession = null;
+    if (parseResult.GetValue(fixtureUiOption))
+    {
+        try
+        {
+            var token = parseResult.GetValue(tokenOption)
+                ?? Environment.GetEnvironmentVariable("GITHUB_TOKEN")
+                ?? Environment.GetEnvironmentVariable("GPM_TOKEN")
+                ?? Environment.GetEnvironmentVariable("GPM_TEST_TOKEN");
+            if (string.IsNullOrWhiteSpace(token))
+            {
+                Console.Error.WriteLine("error: no token provided. Use --token or set GITHUB_TOKEN / GPM_TOKEN / GPM_TEST_TOKEN.");
+                return 1;
+            }
+
+            var apiBaseUrl = parseResult.GetValue(setupApiBaseUrlOption);
+            var graphQlBaseUri = apiBaseUrl is null ? null : GitHubGraphQLClient.NormalizeBaseUrl(apiBaseUrl);
+            var legacyBrowserBaseUrl = parseResult.GetResult(baseUrlOption) is { Implicit: false }
+                ? parseResult.GetValue(baseUrlOption)
+                : null;
+            authenticatedFixtureUiSession = new BrowserSession(new BrowserSessionOptions
+            {
+                BaseUrl = BrowserBaseUrl.Resolve(
+                    graphQlBaseUri,
+                    parseResult.GetValue(browserBaseUrlOption) ?? legacyBrowserBaseUrl),
+                Profile = parseResult.GetValue(setupBrowserProfileOption),
+            });
+            using var authClient = new GitHubGraphQLClient(token, graphQlBaseUri);
+            authClient.OnRetry = Console.Error.WriteLine;
+            var apiLogin = await authClient.GetViewerLoginAsync(cancellationToken);
+            await authenticatedFixtureUiSession.ValidateAuthenticationAsync(apiLogin, cancellationToken);
+        }
+        catch (Exception exception) when (exception is PlaywrightException or InvalidOperationException or IOException or TimeoutException or GitHubGraphQLException or ArgumentException or FormatException)
+        {
+            if (authenticatedFixtureUiSession is not null)
+            {
+                await authenticatedFixtureUiSession.DisposeAsync();
+            }
+
+            Console.Error.WriteLine($"error: {exception.Message}");
+            return 1;
+        }
+    }
+
+    await using var fixtureUiSession = authenticatedFixtureUiSession;
 
     int? createdFixtureProjectNumber = null;
     var fixtureAlreadyExisted = false;
@@ -701,12 +754,6 @@ setupCommand.SetAction(async (parseResult, cancellationToken) =>
         return 0;
     }
 
-    await using var session = new BrowserSession(new BrowserSessionOptions
-    {
-        BaseUrl = parseResult.GetValue(baseUrlOption)!,
-        Profile = parseResult.GetValue(setupBrowserProfileOption),
-    });
-
     try
     {
         var org = parseResult.GetValue(fixtureOrgOption)!;
@@ -719,14 +766,15 @@ setupCommand.SetAction(async (parseResult, cancellationToken) =>
 
         var snapshot = FixtureUiSnapshotFactory.Create(parseResult.GetValue(fixtureRepoOption) ?? "fixture-repo");
 
-        var viewImporter = new ViewUiImporter(session) { OnProgress = Console.Error.WriteLine };
+        System.Diagnostics.Debug.Assert(fixtureUiSession is not null);
+        var viewImporter = new ViewUiImporter(fixtureUiSession) { OnProgress = Console.Error.WriteLine };
         await viewImporter.ImportAsync(snapshot, org, projectNumber.Value, cancellationToken);
         foreach (var warning in viewImporter.Warnings)
         {
             Console.Error.WriteLine($"warning: {warning}");
         }
 
-        var workflowImporter = new WorkflowUiImporter(session) { OnProgress = Console.Error.WriteLine };
+        var workflowImporter = new WorkflowUiImporter(fixtureUiSession) { OnProgress = Console.Error.WriteLine };
         await workflowImporter.ImportAsync(snapshot, org, projectNumber.Value, cancellationToken);
         foreach (var warning in workflowImporter.Warnings)
         {
@@ -737,7 +785,7 @@ setupCommand.SetAction(async (parseResult, cancellationToken) =>
             $"Fixture UI applied: views={snapshot.Views.Count} workflows={workflowImporter.ImportedCount} viewWarnings={viewImporter.Warnings.Count} workflowWarnings={workflowImporter.Warnings.Count}"));
         return viewImporter.Warnings.Count == 0 && workflowImporter.Warnings.Count == 0 ? 0 : 1;
     }
-    catch (Exception exception) when (exception is PlaywrightException or InvalidOperationException or IOException or TimeoutException)
+    catch (Exception exception) when (exception is PlaywrightException or InvalidOperationException or IOException or TimeoutException or GitHubGraphQLException or ArgumentException or FormatException)
     {
         Console.Error.WriteLine($"error: {exception.Message}");
         return 1;

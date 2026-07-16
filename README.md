@@ -136,7 +136,7 @@ gpm import --org target-org --in ./snapshot \
   --enable-browser-automation --browser-profile target
 ```
 
-For GHEC with data residency, point `gpm export --base-url` (source) or `gpm import`/`gpm verify` `--target-base-url` (target) at the tenant API endpoint, e.g. `https://api.TENANT.ghe.com` (a trailing `/graphql` is added automatically). Browser-enabled export/import derives `https://TENANT.ghe.com` from that API URL; `--browser-base-url` can set it explicitly and is rejected when it names a different deployment. Before export reads or import writes, `gpm` also verifies that the selected browser profile is signed in on that host as the same login used by the API token. GHEC with data residency is designed to work but **untested**.
+For GHEC with data residency, point `gpm export --base-url` (source) or `gpm import`/`gpm verify` `--target-base-url` (target) at the tenant API endpoint, e.g. `https://api.TENANT.ghe.com` (a trailing `/graphql` is added automatically). Browser-enabled export/import derives `https://TENANT.ghe.com` from that API URL; `--browser-base-url` can set it explicitly and is rejected when it names a different deployment. `setup --fixture-ui` applies the same derivation and validation to `--api-base-url`. Before browser reads or writes, `gpm` also verifies that the selected browser profile is signed in on that host as the same login used by the API token. Cloud API and browser origins must use HTTPS; HTTP is accepted only for loopback test origins. GHEC with data residency is designed to work but requires the manual tenant validation described below.
 
 ### Proxies
 
