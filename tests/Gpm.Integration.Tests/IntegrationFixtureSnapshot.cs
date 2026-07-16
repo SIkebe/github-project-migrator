@@ -54,7 +54,7 @@ internal static class IntegrationFixtureSnapshot
                   organization(login: $org) {
                     projectV2(number: $number) {
                       id
-                      items(first: 100) {
+                      items(first: 100, archivedStates: [ARCHIVED, NOT_ARCHIVED]) {
                         nodes {
                           id
                           type
