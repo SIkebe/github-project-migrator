@@ -40,13 +40,24 @@ public sealed class ProjectVerifier
     /// <summary>Source → target repository mapping ("owner/name" form), used to normalize the source snapshot before comparison.</summary>
     public IReadOnlyDictionary<string, string> RepositoryMapping { get; init; } = ReadOnlyDictionary<string, string>.Empty;
 
+    /// <summary>
+    /// Optional post-processing hook for the target snapshot. Browser-assisted verification
+    /// uses this to re-read UI-only settings before comparison.
+    /// </summary>
+    public Func<ProjectSnapshot, CancellationToken, Task<ProjectSnapshot>>? PostExportAsync { get; set; }
+
     /// <summary>Exports the target project and compares it against <paramref name="source"/>.</summary>
     public async Task<VerifyReport> VerifyAsync(ProjectSnapshot source, string targetOrgLogin, int targetProjectNumber, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(source);
         ArgumentException.ThrowIfNullOrWhiteSpace(targetOrgLogin);
 
-        var exporter = new ProjectExporter(_client) { OnProgress = OnProgress, OwnerType = OwnerType };
+        var exporter = new ProjectExporter(_client)
+        {
+            OnProgress = OnProgress,
+            OwnerType = OwnerType,
+            PostExportAsync = PostExportAsync,
+        };
         var target = await exporter.ExportAsync(targetOrgLogin, targetProjectNumber, cancellationToken).ConfigureAwait(false);
         return Compare(source, target, RepositoryMapping);
     }

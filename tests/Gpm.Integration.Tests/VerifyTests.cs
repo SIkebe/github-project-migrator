@@ -72,12 +72,21 @@ public class VerifyTests
             await IntegrationFixtureSnapshot.RemoveUnexpectedItemsAsync(
                 client, TargetOrg, result.ProjectNumber, snapshot, cancellationToken);
 
-            var verifier = new ProjectVerifier(client);
+            var postExportCalled = false;
+            var verifier = new ProjectVerifier(client)
+            {
+                PostExportAsync = (target, _) =>
+                {
+                    postExportCalled = true;
+                    return Task.FromResult(target);
+                },
+            };
 
             // 1) Right after a full API import the target matches the snapshot except for
             //    views/workflows, which only the browser module migrates (errors since M7).
             //    Items are eventually consistent, so poll until no other error remains.
             var matchReport = await VerifyUntilAsync(verifier, snapshot, result.ProjectNumber, r => !HasNonBrowserError(r), cancellationToken);
+            Assert.True(postExportCalled);
             Assert.DoesNotContain(matchReport.Differences, d => d.Severity == VerifySeverity.Error && !IsBrowserCategory(d));
             Assert.Contains(matchReport.Differences, d => d.Severity == VerifySeverity.Error && d.Category == "View");
             Assert.Contains(matchReport.Differences, d => d.Severity == VerifySeverity.Error && d.Category == "Workflow");

@@ -8,7 +8,7 @@
 - 移行先: GitHub.com または GHEC / EMU の target organization / account
 - リポジトリ移行: GEI
 - Project V2 移行: `gpm export` → `gpm import` → `gpm verify`
-- Views / Workflows / collaborator export: `--enable-browser-automation` を使う
+- Views / Workflows / collaborator の export / verify: `--enable-browser-automation` を使う
 
 > 注意: トークン値、organization 名、repository 名、project number は環境ごとに置き換えてください。トークンはチャットやログに貼らないでください。
 
@@ -429,8 +429,12 @@ dotnet run --project src/Gpm.Cli -- verify `
   --in $env:GPM_SNAPSHOT_DIR `
   --token $env:GPM_TARGET_TOKEN `
   --repo-mapping "$env:GPM_SNAPSHOT_DIR/repository-mappings.csv" `
+  --enable-browser-automation `
+  --browser-profile target `
   --no-update-check
 ```
+
+`--enable-browser-automation` を付けた verify は、比較前に target の View / Workflow UI 設定と explicit collaborators を再取得します。選択した profile が target host に未認証、または API token と別アカウントの場合は、target の読み取り開始前に明確なエラーと非ゼロ終了になります。
 
 source / target の repository 名が異なる場合、`verify` にも import と同じ `--repo-mapping` を渡してください。これにより Issue / PR item と linked repository は target repository 名へ正規化して比較されます。
 
@@ -579,7 +583,7 @@ Follow-up issues:
 GHEC with data residency target を検証する場合は、通常手順に以下を追加します。
 
 1. target browser profile を tenant host で作成する。
-2. `gpm import` / `gpm verify` に `--target-base-url https://api.TENANT.ghe.com` を指定する。
+2. `gpm import` / `gpm verify` に `--target-base-url https://api.TENANT.ghe.com` と `--browser-base-url https://TENANT.ghe.com` を指定する。
 3. target repository mapping は tenant 内 repository にする。GHEC-DR tenant 外の repository link は不可。
 4. GEI 側の target organization / enterprise 設定が DR tenant に向いていることを GEI の公式手順で確認する。
 
@@ -597,5 +601,23 @@ dotnet run --project src/Gpm.Cli -- import `
   --browser-profile target `
   --no-update-check
 ```
+
+続けて browser-assisted verify を実行します。
+
+```powershell
+dotnet run --project src/Gpm.Cli -- verify `
+  --org $env:GPM_TARGET_ORG `
+  --project <target-project-number> `
+  --in $env:GPM_SNAPSHOT_DIR `
+  --token $env:GPM_TARGET_TOKEN `
+  --target-base-url https://api.TENANT.ghe.com `
+  --browser-base-url https://TENANT.ghe.com `
+  --repo-mapping "$env:GPM_SNAPSHOT_DIR/repository-mappings.csv" `
+  --enable-browser-automation `
+  --browser-profile target `
+  --no-update-check
+```
+
+異なる tenant の `--browser-base-url`、GitHub.com 用 profile、または API token と異なるアカウントの profile を指定した negative test では、UI 読み取り前に非ゼロ終了し、host/account mismatch がエラーに含まれることを確認します。
 
 GHEC-DR は host / SSO / storage state の切り分けが失敗しやすいため、GitHub.com target の通常シナリオが green になってから実施してください。
