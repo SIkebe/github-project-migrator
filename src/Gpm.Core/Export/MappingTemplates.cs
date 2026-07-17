@@ -1,4 +1,5 @@
 using System.Text;
+using Gpm.Core.Import;
 using Gpm.Core.Snapshot;
 
 namespace Gpm.Core.Export;
@@ -18,17 +19,24 @@ public static class MappingTemplates
 {
     public const string RepositoryMappingFileName = "repository-mappings.csv";
     public const string UserMappingFileName = "user-mappings.csv";
+    public const string OrganizationMappingFileName = "organization-mappings.csv";
 
     /// <summary>Distinct source repositories ("org/repo") of all Issue/PR items, in first-seen order.</summary>
     public static IReadOnlyList<string> ExtractSourceRepositories(IEnumerable<ProjectSnapshot> snapshots)
     {
         ArgumentNullException.ThrowIfNull(snapshots);
+        var snapshotList = snapshots.ToList();
 
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var repositories = new List<string>();
-        foreach (var item in snapshots.SelectMany(s => s.Items))
+        foreach (var repository in snapshotList.SelectMany(s => s.Items)
+                     .Select(item => item.Repository)
+                     .Concat(snapshotList.SelectMany(s => s.LinkedRepositories ?? []))
+                     .Concat(snapshotList.SelectMany(s => s.Workflows)
+                         .Select(workflow => workflow.Ui?.Repository))
+                     .Concat(FilterIdentifiers(snapshotList, "repo").Select(identifier => identifier.Value)))
         {
-            if (item.Repository is { Length: > 0 } repository && seen.Add(repository))
+            if (repository is { Length: > 0 } && seen.Add(repository))
             {
                 repositories.Add(repository);
             }
@@ -62,7 +70,42 @@ public static class MappingTemplates
             }
         }
 
+        foreach (var identifier in FilterIdentifiers(snapshots, "assignee", "author"))
+        {
+            if (identifier.Value.Length > 0 && seen.Add(identifier.Value))
+            {
+                logins.Add(identifier.Value);
+            }
+        }
+
         return logins;
+    }
+
+    public static IReadOnlyList<string> ExtractOrganizations(IEnumerable<ProjectSnapshot> snapshots)
+    {
+        ArgumentNullException.ThrowIfNull(snapshots);
+        var snapshotList = snapshots.ToList();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var organizations = new List<string>();
+
+        foreach (var repository in ExtractSourceRepositories(snapshotList))
+        {
+            var separator = repository.IndexOf('/');
+            if (separator > 0 && seen.Add(repository[..separator]))
+            {
+                organizations.Add(repository[..separator]);
+            }
+        }
+
+        foreach (var identifier in FilterIdentifiers(snapshotList, "org"))
+        {
+            if (identifier.Value.Length > 0 && seen.Add(identifier.Value))
+            {
+                organizations.Add(identifier.Value);
+            }
+        }
+
+        return organizations;
     }
 
     /// <summary>
@@ -89,6 +132,14 @@ public static class MappingTemplates
             onProgress: onProgress,
             cancellationToken: cancellationToken).ConfigureAwait(false);
 
+        await WriteTemplateAsync(
+            Path.Combine(directory, OrganizationMappingFileName),
+            ExtractOrganizations(snapshots),
+            header: "source,target",
+            rowFactory: source => string.Concat(source, ","),
+            onProgress: onProgress,
+            cancellationToken: cancellationToken).ConfigureAwait(false);
+
         var userLogins = ExtractUserLogins(snapshots);
         if (userLogins.Count > 0)
         {
@@ -100,6 +151,20 @@ public static class MappingTemplates
                 onProgress: onProgress,
                 cancellationToken: cancellationToken).ConfigureAwait(false);
         }
+
+    }
+
+    private static IEnumerable<FilterIdentifier> FilterIdentifiers(
+        IEnumerable<ProjectSnapshot> snapshots,
+        params string[] qualifiers)
+    {
+        var allowed = new HashSet<string>(qualifiers, StringComparer.OrdinalIgnoreCase);
+        return snapshots
+            .SelectMany(snapshot => snapshot.Views.Select(view => view.Filter)
+                .Concat(snapshot.Workflows.Select(workflow => workflow.Ui?.Filter)))
+            .Where(filter => filter is not null)
+            .SelectMany(filter => ProjectFilterTransformer.ExtractIdentifiers(filter!))
+            .Where(identifier => allowed.Contains(identifier.Qualifier));
     }
 
     private static async Task WriteTemplateAsync(

@@ -1,6 +1,7 @@
 using System.Collections.ObjectModel;
 using System.Globalization;
 using Gpm.Core.GitHub;
+using Gpm.Core.Import;
 using Gpm.Core.Snapshot;
 using Microsoft.Playwright;
 
@@ -48,6 +49,10 @@ public sealed class WorkflowUiImporter
     /// <summary>Source → target repository mapping ("owner/name" form, shared with the item importer).</summary>
     public IReadOnlyDictionary<string, string> RepositoryMapping { get; init; } = ReadOnlyDictionary<string, string>.Empty;
 
+    public IReadOnlyDictionary<string, string> UserMapping { get; init; } = ReadOnlyDictionary<string, string>.Empty;
+
+    public IReadOnlyDictionary<string, string> OrganizationMapping { get; init; } = ReadOnlyDictionary<string, string>.Empty;
+
     /// <summary>Plan limit for Auto-add workflow instances on the target.</summary>
     public int MaxAutoAddWorkflows { get; init; } = DefaultMaxAutoAddWorkflows;
 
@@ -64,26 +69,7 @@ public sealed class WorkflowUiImporter
     /// source name is used unchanged (same-name repository expected on the target).
     /// </summary>
     public static string ResolveRepositoryName(string sourceRepository, IReadOnlyDictionary<string, string> mapping)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(sourceRepository);
-        ArgumentNullException.ThrowIfNull(mapping);
-
-        foreach (var (source, target) in mapping)
-        {
-            if (string.Equals(ShortName(source), sourceRepository, StringComparison.Ordinal))
-            {
-                return ShortName(target);
-            }
-        }
-
-        return sourceRepository;
-
-        static string ShortName(string repository)
-        {
-            var separator = repository.LastIndexOf('/');
-            return separator < 0 ? repository : repository[(separator + 1)..];
-        }
-    }
+        => ProjectFilterTransformer.ResolveRepositoryName(sourceRepository, mapping);
 
     /// <summary>
     /// Pure pre-flight check: warns about Auto-add instances beyond the plan limit
@@ -235,7 +221,7 @@ public sealed class WorkflowUiImporter
         var needsEdit = workflow.Ui is { } ui
             && (!ContentTypesEqual(ui.ContentTypes, current.ContentTypes)
                 || !ValueEquals(ui.StatusValue, current.StatusValue)
-                || !ValueEquals(ui.Filter, current.Filter));
+                || !ValueEquals(ui.Filter is null ? null : TransformFilter(ui.Filter), current.Filter));
 
         if (needsEdit)
         {
@@ -304,9 +290,10 @@ public sealed class WorkflowUiImporter
             await SetStatusValueAsync(page, workflow.Name, statusValue, cancellationToken).ConfigureAwait(false);
         }
 
-        if (ui.Filter is { } filter && !ValueEquals(filter, current.Filter))
+        if (ui.Filter is { } filter && !ValueEquals(TransformFilter(filter), current.Filter))
         {
-            await Sel.WorkflowFiltersCombobox(page).First.FillAsync(filter).ConfigureAwait(false);
+            var transformed = TransformFilter(filter);
+            await Sel.WorkflowFiltersCombobox(page).First.FillAsync(transformed).ConfigureAwait(false);
             await PauseAsync(cancellationToken).ConfigureAwait(false);
         }
 
@@ -365,7 +352,7 @@ public sealed class WorkflowUiImporter
 
         if (ui.Filter is { } filter)
         {
-            await Sel.WorkflowFiltersCombobox(page).First.FillAsync(filter).ConfigureAwait(false);
+            await Sel.WorkflowFiltersCombobox(page).First.FillAsync(TransformFilter(filter)).ConfigureAwait(false);
             await PauseAsync(cancellationToken).ConfigureAwait(false);
         }
 
@@ -381,6 +368,13 @@ public sealed class WorkflowUiImporter
             await ToggleAsync(page, workflow.Name, cancellationToken).ConfigureAwait(false);
         }
     }
+
+    private string TransformFilter(string filter)
+        => ProjectFilterTransformer.Transform(
+            filter,
+            UserMapping,
+            RepositoryMapping,
+            OrganizationMapping).Transformed;
 
     /// <summary>
     /// Creates an additional Auto-add instance: hover the saved Auto-add sidebar link,

@@ -253,6 +253,14 @@ var userMappingOption = new Option<string?>("--user-mapping")
 {
     Description = "CSV file mapping source user logins to target logins (header: mannequin-user,mannequin-id,target-user; mannequin-id is ignored).",
 };
+var organizationMappingOption = new Option<string?>("--org-mapping")
+{
+    Description = "CSV file mapping source organizations to target organizations (header: source,target). Repository owner mappings are inferred when unambiguous.",
+};
+var strictFilterMappingOption = new Option<bool>("--strict-filter-mapping")
+{
+    Description = "Stop before writing when a View or Workflow filter contains an unmapped assignee, author, repository or organization.",
+};
 
 var importCommand = new Command("import", "Import a JSON snapshot into the target organization or user.")
 {
@@ -264,6 +272,8 @@ var importCommand = new Command("import", "Import a JSON snapshot into the targe
     onConflictOption,
     repoMappingOption,
     userMappingOption,
+    organizationMappingOption,
+    strictFilterMappingOption,
     tokenOption,
     targetBaseUrlOption,
     enableBrowserOption,
@@ -300,6 +310,7 @@ importCommand.SetAction(async (parseResult, cancellationToken) =>
     var baseUrl = parseResult.GetValue(targetBaseUrlOption);
     var updateCheck = StartUpdateCheck(parseResult.GetValue(noUpdateCheckOption));
     var enableBrowserAutomation = parseResult.GetValue(enableBrowserOption);
+    var strictFilterMapping = parseResult.GetValue(strictFilterMappingOption);
     if (!ConflictActions.TryParse(parseResult.GetValue(onConflictOption), out var onConflict))
     {
         Console.Error.WriteLine("error: --on-conflict must be one of: skip, update, fail.");
@@ -331,6 +342,10 @@ importCommand.SetAction(async (parseResult, cancellationToken) =>
         var userMapping = userMappingPath is null
             ? System.Collections.ObjectModel.ReadOnlyDictionary<string, string>.Empty
             : CsvMapping.LoadUserMapping(userMappingPath);
+        var organizationMappingPath = parseResult.GetValue(organizationMappingOption);
+        var organizationMapping = organizationMappingPath is null
+            ? System.Collections.ObjectModel.ReadOnlyDictionary<string, string>.Empty
+            : CsvMapping.Load(organizationMappingPath);
 
         async Task ValidateBrowserBeforeWriteAsync(CancellationToken ct)
         {
@@ -357,6 +372,35 @@ importCommand.SetAction(async (parseResult, cancellationToken) =>
         if (projectTitle is not null)
         {
             snapshot = snapshot with { Project = snapshot.Project with { Title = projectTitle } };
+        }
+
+        if (enableBrowserAutomation || strictFilterMapping)
+        {
+            var filterTransforms = ProjectFilterTransformer.AnalyzeSnapshot(
+                snapshot,
+                userMapping,
+                repoMapping,
+                organizationMapping);
+            foreach (var transform in filterTransforms)
+            {
+                if (transform.Result.Changes.Count > 0)
+                {
+                    Console.Error.WriteLine(
+                        $"Filter preflight {transform.Location}: '{transform.Result.Original}' -> '{transform.Result.Transformed}'");
+                }
+
+                foreach (var identifier in transform.Result.Unresolved)
+                {
+                    Console.Error.WriteLine(
+                        $"warning: Filter preflight {transform.Location}: unmapped {identifier.Qualifier} value '{identifier.Value}'");
+                }
+            }
+
+            if (strictFilterMapping && filterTransforms.Any(transform => transform.Result.Unresolved.Count > 0))
+            {
+                throw new InvalidOperationException(
+                    "Strict filter mapping preflight failed; fill the generated mapping CSV rows before importing.");
+            }
         }
 
         var result = projectNumber is { } number
@@ -387,7 +431,13 @@ importCommand.SetAction(async (parseResult, cancellationToken) =>
         if (enableBrowserAutomation)
         {
             System.Diagnostics.Debug.Assert(session is not null);
-            var viewImporter = new ViewUiImporter(session) { OnProgress = Console.Error.WriteLine };
+            var viewImporter = new ViewUiImporter(session)
+            {
+                RepositoryMapping = repoMapping,
+                UserMapping = userMapping,
+                OrganizationMapping = organizationMapping,
+                OnProgress = Console.Error.WriteLine,
+            };
             await viewImporter.ImportAsync(snapshot, org, result.ProjectNumber, cancellationToken);
             foreach (var warning in viewImporter.Warnings)
             {
@@ -399,6 +449,8 @@ importCommand.SetAction(async (parseResult, cancellationToken) =>
             var workflowImporter = new WorkflowUiImporter(session)
             {
                 RepositoryMapping = repoMapping,
+                UserMapping = userMapping,
+                OrganizationMapping = organizationMapping,
                 OnProgress = Console.Error.WriteLine,
             };
             await workflowImporter.ImportAsync(snapshot, org, result.ProjectNumber, cancellationToken);
@@ -471,6 +523,7 @@ var verifyCommand = new Command("verify", "Verify a migrated project against the
     inOption,
     repoMappingOption,
     userMappingOption,
+    organizationMappingOption,
     tokenOption,
     targetBaseUrlOption,
     enableBrowserOption,
@@ -529,12 +582,17 @@ verifyCommand.SetAction(async (parseResult, cancellationToken) =>
         var userMapping = userMappingPath is null
             ? System.Collections.ObjectModel.ReadOnlyDictionary<string, string>.Empty
             : CsvMapping.LoadUserMapping(userMappingPath);
+        var organizationMappingPath = parseResult.GetValue(organizationMappingOption);
+        var organizationMapping = organizationMappingPath is null
+            ? System.Collections.ObjectModel.ReadOnlyDictionary<string, string>.Empty
+            : CsvMapping.Load(organizationMappingPath);
         var verifier = new ProjectVerifier(client)
         {
             OnProgress = Console.Error.WriteLine,
             OwnerType = ownerType,
             RepositoryMapping = repoMapping,
             UserMapping = userMapping,
+            OrganizationMapping = organizationMapping,
         };
         ViewUiExporter? viewExporter = null;
         WorkflowUiExporter? workflowExporter = null;

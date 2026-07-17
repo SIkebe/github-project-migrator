@@ -44,6 +44,47 @@ public class MappingTemplatesTests
     }
 
     [Fact]
+    public void Mapping_candidates_include_linked_auto_add_and_filter_identifiers()
+    {
+        var snapshot = SnapshotWithItems(IssueItem("items-org/item-repo")) with
+        {
+            LinkedRepositories = ["linked-org/linked-repo"],
+            Views =
+            [
+                new ViewSnapshot
+                {
+                    Number = 1,
+                    Name = "Filtered",
+                    Layout = "TABLE_LAYOUT",
+                    Filter = "assignee:filter-user author:@me repo:filter-org/filter-repo org:explicit-org",
+                    GroupByFields = [],
+                    SortByFields = [],
+                    VerticalGroupByFields = [],
+                    VisibleFields = [],
+                },
+            ],
+            Workflows =
+            [
+                new WorkflowSnapshot
+                {
+                    Number = 1,
+                    Name = "Auto-add",
+                    Enabled = true,
+                    Ui = new WorkflowUiSnapshot { Repository = "auto-add-repo", Filter = "author:workflow-user" },
+                },
+            ],
+        };
+
+        Assert.Equal(
+            ["items-org/item-repo", "linked-org/linked-repo", "auto-add-repo", "filter-org/filter-repo"],
+            MappingTemplates.ExtractSourceRepositories([snapshot]));
+        Assert.Equal(["filter-user", "workflow-user"], MappingTemplates.ExtractUserLogins([snapshot]));
+        Assert.Equal(
+            ["items-org", "linked-org", "filter-org", "explicit-org"],
+            MappingTemplates.ExtractOrganizations([snapshot]));
+    }
+
+    [Fact]
     public async Task WriteAsync_writes_repository_template_and_skips_user_template_without_assignees()
     {
         var directory = NewTempDirectory();

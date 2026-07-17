@@ -86,6 +86,50 @@ public class CliImportTests
             var request = Assert.Single(server.RequestBodies);
             Assert.DoesNotContain("mutation", request, StringComparison.OrdinalIgnoreCase);
         }
+
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Strict_filter_mapping_fails_before_any_api_request()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var directory = Path.Combine(Path.GetTempPath(), "gpm-cli-filter-preflight-" + Guid.NewGuid().ToString("N"));
+        var snapshot = MinimalSnapshot() with
+        {
+            Views =
+            [
+                new ViewSnapshot
+                {
+                    Number = 1,
+                    Name = "EMU",
+                    Layout = "TABLE_LAYOUT",
+                    Filter = "assignee:old-user",
+                    GroupByFields = [],
+                    SortByFields = [],
+                    VerticalGroupByFields = [],
+                    VisibleFields = [],
+                },
+            ],
+        };
+        await SnapshotFile.SaveAsync(snapshot, directory, cancellationToken);
+
+        using var server = new GraphQlStubServer(ExistingProjectResponse);
+        try
+        {
+            var result = await RunCliAsync(
+                directory,
+                server,
+                "--strict-filter-mapping");
+
+            Assert.Equal(1, result.ExitCode);
+            Assert.Contains("unmapped assignee value 'old-user'", result.Error, StringComparison.Ordinal);
+            Assert.Contains("Strict filter mapping preflight failed", result.Error, StringComparison.Ordinal);
+            Assert.Empty(server.RequestBodies);
+        }
         finally
         {
             Directory.Delete(directory, recursive: true);

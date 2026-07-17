@@ -86,6 +86,18 @@ public class WorkflowUiLogicTests
         => Assert.Equal("fixture-repo", WorkflowUiImporter.ResolveRepositoryName(
             "fixture-repo", new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)));
 
+    [Fact]
+    public void ResolveRepositoryName_does_not_guess_when_short_name_mapping_is_ambiguous()
+    {
+        var mapping = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["source-a/fixture-repo"] = "target/renamed-a",
+            ["source-b/fixture-repo"] = "target/renamed-b",
+        };
+
+        Assert.Equal("fixture-repo", WorkflowUiImporter.ResolveRepositoryName("fixture-repo", mapping));
+    }
+
     // ----- pre-flight: Auto-add plan limit -----
 
     [Fact]
