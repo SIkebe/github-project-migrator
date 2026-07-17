@@ -415,6 +415,16 @@ public class ItemImporterResumeTests
             var snapshot = CreateStageSnapshot(archived: false, withField: false);
             await CreateImporter(client).ImportAsync(snapshot, Target, directory, cancellationToken);
 
+            var equivalentImporter = new ItemImporter(client)
+            {
+                RepositoryMapping = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+                {
+                    ["source/repo"] = "TARGET/REPO",
+                },
+            };
+            var equivalentResult = await equivalentImporter.ImportAsync(snapshot, Target, directory, cancellationToken);
+            Assert.Equal(1, equivalentResult.AlreadyComplete);
+
             var changedImporter = new ItemImporter(client)
             {
                 RepositoryMapping = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
@@ -425,7 +435,7 @@ public class ItemImporterResumeTests
             var exception = await Assert.ThrowsAsync<InvalidOperationException>(
                 () => changedImporter.ImportAsync(snapshot, Target, directory, cancellationToken));
 
-            Assert.Contains("repository mapping no longer matches", exception.Message, StringComparison.Ordinal);
+            Assert.Contains("target content mapping no longer matches", exception.Message, StringComparison.Ordinal);
             Assert.Equal(1, handler.CreateMutationCount);
         }
         finally

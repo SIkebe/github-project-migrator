@@ -63,6 +63,10 @@ public sealed record ImportLog
                 throw new InvalidDataException(
                     $"{FileName} uses unsupported schema version {log.SchemaVersion}; expected {CurrentSchemaVersion}. The log cannot be resumed safely.");
             }
+            if (string.IsNullOrWhiteSpace(log.ProjectId))
+            {
+                throw new InvalidDataException($"{FileName} does not contain a target project ID and cannot be resumed safely.");
+            }
             if (string.IsNullOrWhiteSpace(log.SourceSnapshotFingerprint))
             {
                 throw new InvalidDataException($"{FileName} does not contain a source snapshot fingerprint and cannot be resumed safely.");

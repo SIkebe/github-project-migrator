@@ -90,7 +90,7 @@ public sealed class ItemImporter
                 && !string.Equals(existingState.TargetContentIdentity, targetContentIdentity, StringComparison.Ordinal))
             {
                 throw new InvalidOperationException(
-                    $"{label}: the repository mapping no longer matches the target content recorded in {ImportLog.FileName}. Restore the original mapping or use a separate log directory.");
+                    $"{label}: the target content mapping no longer matches the identity recorded in {ImportLog.FileName}. Restore the original repository or user mapping, or use a separate log directory.");
             }
 
             if (log.ItemStates.TryGetValue(stateKey, out var completedState)
@@ -905,7 +905,7 @@ public sealed class ItemImporter
             : null;
         return repository is null
             ? null
-            : string.Create(CultureInfo.InvariantCulture, $"{item.Type}:{repository}:{item.Number.Value}");
+            : string.Create(CultureInfo.InvariantCulture, $"{item.Type}:{repository.ToLowerInvariant()}:{item.Number.Value}");
     }
 
     private async Task<string?> ResolveIssueOrPullRequestIdAsync(string owner, string name, int number, CancellationToken cancellationToken)

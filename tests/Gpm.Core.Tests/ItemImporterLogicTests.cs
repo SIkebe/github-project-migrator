@@ -172,6 +172,57 @@ public class ItemImporterLogicTests
     }
 
     [Fact]
+    public async Task Import_rejects_changed_snapshot_without_mutating_log_or_target()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var directory = Directory.CreateTempSubdirectory("gpm-importlog-snapshot-").FullName;
+        try
+        {
+            var snapshot = new ProjectSnapshot
+            {
+                SchemaVersion = ProjectSnapshot.CurrentSchemaVersion,
+                Project = new ProjectInfoSnapshot { Title = "Snapshot", Public = false, Closed = false },
+                Fields = [],
+                Views = [],
+                Workflows = [],
+                Items = [],
+            };
+            var log = new ImportLog
+            {
+                ProjectId = "PVT_target",
+                SourceSnapshotFingerprint = ImportLog.ComputeSnapshotFingerprint(snapshot),
+            };
+            await log.SaveAsync(directory, cancellationToken);
+            var changed = snapshot with
+            {
+                Project = snapshot.Project with { ShortDescription = "changed" },
+            };
+            var target = new ImportResult
+            {
+                ProjectId = "PVT_target",
+                ProjectNumber = 1,
+                Url = "https://example.test/project/1",
+                Outcome = ProjectImportOutcome.Updated,
+                FieldIds = new Dictionary<string, string>(),
+                OptionIds = new Dictionary<string, IReadOnlyDictionary<string, string>>(),
+                IterationIds = new Dictionary<string, IReadOnlyDictionary<string, string>>(),
+            };
+            using var client = new GitHubGraphQLClient("dummy-token");
+
+            await Assert.ThrowsAsync<InvalidOperationException>(
+                () => new ItemImporter(client).ImportAsync(changed, target, directory, cancellationToken));
+
+            var preserved = await ImportLog.LoadAsync(directory, cancellationToken);
+            Assert.Equal(log.SourceSnapshotFingerprint, preserved!.SourceSnapshotFingerprint);
+            Assert.Empty(preserved.ItemStates);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
     public void SelectReconciledDraftItemId_returns_only_new_unimported_match()
     {
         var result = ItemImporter.SelectReconciledDraftItemId(
