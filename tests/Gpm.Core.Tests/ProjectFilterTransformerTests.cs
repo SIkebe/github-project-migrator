@@ -106,6 +106,17 @@ public class ProjectFilterTransformerTests
     }
 
     [Fact]
+    public void Transform_requires_mapping_for_repo_and_org_values_that_resemble_user_shortcuts()
+    {
+        var result = ProjectFilterTransformer.Transform("repo:none org:@me");
+
+        Assert.Equal(
+            [new FilterIdentifier("repo", "none"), new FilterIdentifier("org", "@me")],
+            result.Unresolved);
+        Assert.Empty(result.Unchanged);
+    }
+
+    [Fact]
     public void Transform_maps_comma_separated_values_independently()
     {
         var result = ProjectFilterTransformer.Transform(

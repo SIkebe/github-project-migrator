@@ -115,7 +115,7 @@ public static class ProjectFilterTransformer
                     else
                     {
                         builder.Append(item);
-                        if (IsMappingRequired(identity))
+                        if (IsMappingRequired(qualifier, identity))
                         {
                             unresolved.Add(new FilterIdentifier(qualifier, identity));
                         }
@@ -395,10 +395,11 @@ public static class ProjectFilterTransformer
         return true;
     }
 
-    private static bool IsMappingRequired(string value)
+    private static bool IsMappingRequired(string qualifier, string value)
         => value.Length > 0
-            && value[0] != '@'
-            && !string.Equals(value, "none", StringComparison.OrdinalIgnoreCase);
+            && (!UserQualifiers.Contains(qualifier)
+                || value[0] != '@'
+                && !string.Equals(value, "none", StringComparison.OrdinalIgnoreCase));
 
 }
 
