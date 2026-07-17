@@ -61,20 +61,33 @@ public class VerifyTests
         Assert.NotNull(source.LinkedRepositories);
 
         var snapshot = source with { Project = source.Project with { Title = "gpm-verify-test-" + Guid.NewGuid().ToString("N") } };
+        var targetFixtureRepo = IntegrationTestSettings.TargetFixtureRepositoryFullName;
+        var repoMapping = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            [FixtureRepo] = targetFixtureRepo,
+        };
 
-        var result = await new ProjectImporter(client).ImportAsync(snapshot, TargetOrg, cancellationToken);
+        var result = await new ProjectImporter(client) { RepositoryMapping = repoMapping }
+            .ImportAsync(snapshot, TargetOrg, cancellationToken);
         var logDirectory = Directory.CreateTempSubdirectory("gpm-m5-").FullName;
         try
         {
-            var repoMapping = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase) { [FixtureRepo] = FixtureRepo };
             await new ItemImporter(client) { RepositoryMapping = repoMapping }
                 .ImportAsync(snapshot, result, logDirectory, cancellationToken);
+            var targetSnapshot = snapshot with
+            {
+                Items = snapshot.Items.Select(item =>
+                    string.Equals(item.Repository, FixtureRepo, StringComparison.OrdinalIgnoreCase)
+                        ? item with { Repository = targetFixtureRepo }
+                        : item).ToList(),
+            };
             await IntegrationFixtureSnapshot.RemoveUnexpectedItemsAsync(
-                client, TargetOrg, result.ProjectNumber, snapshot, cancellationToken);
+                client, TargetOrg, result.ProjectNumber, targetSnapshot, cancellationToken);
 
             var postExportCalled = false;
             var verifier = new ProjectVerifier(client)
             {
+                RepositoryMapping = repoMapping,
                 PostExportAsync = (target, _) =>
                 {
                     postExportCalled = true;
