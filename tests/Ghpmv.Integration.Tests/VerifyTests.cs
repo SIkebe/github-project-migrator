@@ -8,7 +8,7 @@ using Ghpmv.Core.Verify;
 namespace Ghpmv.Integration.Tests;
 
 /// <summary>
-/// M5 integration tests: exports the fixture project, imports it into ghpmv-target and
+/// M5 integration tests: exports the fixture project, imports it into gpm-target and
 /// verifies that <see cref="ProjectVerifier"/> reports no differences beyond the
 /// views/workflows that only the browser module migrates (errors since M6/M7; this
 /// test imports via the API only). Then drifts the target on purpose — deletes one
@@ -48,7 +48,7 @@ public class VerifyTests
 
         // Guard against silent null==null passes: the enriched fixture must actually carry
         // the elements this test claims to verify end-to-end.
-        Assert.Equal("ghpmv fixture project", source.Project.ShortDescription);
+        Assert.Equal("gpm fixture project", source.Project.ShortDescription);
         Assert.False(string.IsNullOrWhiteSpace(source.Project.Readme));
         Assert.Contains(
             source.Fields.Single(f => f.Name == "Fixture Sprint").IterationConfiguration!.CompletedIterations,

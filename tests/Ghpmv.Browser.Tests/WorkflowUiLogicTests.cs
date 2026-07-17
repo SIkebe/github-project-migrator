@@ -75,7 +75,7 @@ public class WorkflowUiLogicTests
     {
         var mapping = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
-            ["ghpmv-source/fixture-repo"] = "ghpmv-target/renamed-repo",
+            ["gpm-source/fixture-repo"] = "gpm-target/renamed-repo",
         };
 
         Assert.Equal("renamed-repo", WorkflowUiImporter.ResolveRepositoryName("fixture-repo", mapping));

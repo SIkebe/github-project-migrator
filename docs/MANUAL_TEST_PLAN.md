@@ -83,8 +83,8 @@
 
 | 用途 | 例 | 要件 |
 |---|---|---|
-| Source org | `ghpmv-source` | Project と fixture repository を作れること。 |
-| Target org | `ghpmv-target` | GEI の migration target にでき、Project を作れること。 |
+| Source org | `gpm-source` | Project と fixture repository を作れること。 |
+| Target org | `gpm-target` | GEI の migration target にでき、Project を作れること。 |
 | Source browser profile | `source` | source Project と source repo を読めるアカウントで `ghpmv login`。 |
 | Target browser profile | `target` | target Project を編集できるアカウントで `ghpmv login`。 |
 
@@ -96,14 +96,14 @@ EMU / SAML / OIDC backed organization の場合は、PAT と browser session の
 
 - Source repository: `fixture-repo`
 - Target repository: `fixture-repo-gei-target` または衝突しない任意名
-- Source Project: `ghpmv-fixture`
+- Source Project: `gpm-fixture`
 
 `ghpmv setup --fixture` は source org に以下を作成します。
 
 - private repository `fixture-repo`
 - Issue 2 件
 - open Pull Request 1 件
-- Project `ghpmv-fixture`
+- Project `gpm-fixture`
 - custom fields(Text / Number / Date / Single-select / Iteration)
 - draft items、Issue item、PR item、archived draft、assigned draft
 - linked repository
@@ -146,8 +146,8 @@ gh extension upgrade github/gh-gei
 | `GHPMV_SOURCE_TOKEN` | `ghpmv export` と GEI source 用。 |
 | `GHPMV_TARGET_TOKEN` | `ghpmv import` / `ghpmv verify` と GEI target 用。 |
 | `GHPMV_TEST_TOKEN` | 既存 integration / browser E2E tests を手動で回す場合。 |
-| `GHPMV_TEST_ORG` | integration / browser E2E tests の source organization login。未指定時は `GHPMV_SOURCE_ORG`、それも無ければ `ghpmv-source`。CI repo variable でも指定。 |
-| `GHPMV_TEST_TARGET_ORG` | integration tests の target organization login。未指定時は `GHPMV_TARGET_ORG`、それも無ければ `ghpmv-target`。CI repo variable でも指定。 |
+| `GHPMV_TEST_ORG` | integration / browser E2E tests の source organization login。未指定時は `GHPMV_SOURCE_ORG`、それも無ければ `gpm-source`。CI repo variable でも指定。 |
+| `GHPMV_TEST_TARGET_ORG` | integration tests の target organization login。未指定時は `GHPMV_TARGET_ORG`、それも無ければ `gpm-target`。CI repo variable でも指定。 |
 | `GHPMV_TEST_PROJECT_NUMBER` | integration tests が export 元として使う fixture Project number。未指定時は現在の shared fixture `89`。CI repo variable でも指定。 |
 | `GHPMV_TEST_FIXTURE_REPO` | integration tests が期待する source fixture repository short name。未指定時は `GHPMV_FIXTURE_REPO`、それも無ければ現在の shared fixture repo `fixture-repo2`。CI repo variable でも指定。 |
 | `GHPMV_TEST_TARGET_FIXTURE_REPO` | integration tests が linked repository remap 先として期待する target fixture repository short name。未指定時は `fixture-repo`。CI repo variable でも指定。 |
@@ -209,7 +209,7 @@ dotnet run --project src/Ghpmv.Cli -- login --profile target --base-url https://
 dotnet run --project src/Ghpmv.Cli -- setup `
   --fixture `
   --fixture-org $env:GHPMV_SOURCE_ORG `
-  --fixture-title ghpmv-fixture `
+  --fixture-title gpm-fixture `
   --fixture-repo $env:GHPMV_FIXTURE_REPO `
   --token $env:GHPMV_SOURCE_TOKEN
 ```
@@ -242,7 +242,7 @@ dotnet run --project src/Ghpmv.Cli -- setup `
   --fixture `
   --fixture-ui `
   --fixture-org $env:GHPMV_SOURCE_ORG `
-  --fixture-title ghpmv-fixture `
+  --fixture-title gpm-fixture `
   --fixture-repo $env:GHPMV_FIXTURE_REPO `
   --token $env:GHPMV_SOURCE_TOKEN `
   --browser-profile source
@@ -380,7 +380,7 @@ dotnet run --project src/Ghpmv.Cli -- export `
 
 ```csv
 source,target
-ghpmv-source/fixture-repo,ghpmv-target/fixture-repo-gei-target
+gpm-source/fixture-repo,gpm-target/fixture-repo-gei-target
 ```
 
 PowerShell で簡易生成する場合:
@@ -407,7 +407,7 @@ dotnet run --project src/Ghpmv.Cli -- import `
   --user-mapping "$env:GHPMV_SNAPSHOT_DIR/user-mappings.csv" `
   --enable-browser-automation `
   --browser-profile target `
-  --project-title "ghpmv-fixture migrated $(Get-Date -Format yyyyMMdd-HHmmss)" `
+  --project-title "gpm-fixture migrated $(Get-Date -Format yyyyMMdd-HHmmss)" `
   --no-update-check
 ```
 

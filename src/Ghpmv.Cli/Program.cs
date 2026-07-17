@@ -750,7 +750,7 @@ var fixtureProjectOption = new Option<int?>("--fixture-project")
 var fixtureTitleOption = new Option<string>("--fixture-title")
 {
     Description = "Project title used with --fixture.",
-    DefaultValueFactory = _ => "ghpmv-fixture",
+    DefaultValueFactory = _ => "gpm-fixture",
 };
 var fixtureRepoOption = new Option<string>("--fixture-repo")
 {
@@ -907,7 +907,7 @@ setupCommand.SetAction(async (parseResult, cancellationToken) =>
         {
             var result = await builder.CreateAsync(
                 parseResult.GetValue(fixtureOrgOption)!,
-                parseResult.GetValue(fixtureTitleOption) ?? "ghpmv-fixture",
+                parseResult.GetValue(fixtureTitleOption) ?? "gpm-fixture",
                 parseResult.GetValue(fixtureRepoOption) ?? "fixture-repo",
                 cancellationToken);
             Console.WriteLine(result.Url);

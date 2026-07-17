@@ -224,7 +224,7 @@ public class GitHubGraphQLClientTests
         var titles = new List<string?>();
         await foreach (var node in client.QueryPaginatedAsync(
             "query($login: String!, $after: String) { organization(login: $login) { projectsV2(first: 2, after: $after) { nodes { title } pageInfo { hasNextPage endCursor } } } }",
-            new { login = "ghpmv-source" },
+            new { login = "gpm-source" },
             "organization.projectsV2",
             cancellationToken: TestContext.Current.CancellationToken))
         {
@@ -237,7 +237,7 @@ public class GitHubGraphQLClientTests
         // First request sends a null cursor; second one carries the endCursor of page 1.
         using var first = JsonDocument.Parse(handler.RequestBodies[0]);
         Assert.Equal(JsonValueKind.Null, first.RootElement.GetProperty("variables").GetProperty("after").ValueKind);
-        Assert.Equal("ghpmv-source", first.RootElement.GetProperty("variables").GetProperty("login").GetString());
+        Assert.Equal("gpm-source", first.RootElement.GetProperty("variables").GetProperty("login").GetString());
 
         using var second = JsonDocument.Parse(handler.RequestBodies[1]);
         Assert.Equal("CURSOR-1", second.RootElement.GetProperty("variables").GetProperty("after").GetString());

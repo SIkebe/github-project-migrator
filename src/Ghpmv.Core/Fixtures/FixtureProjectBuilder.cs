@@ -28,7 +28,7 @@ public sealed class FixtureProjectBuilder
 
     public async Task<FixtureProjectSetupResult> CreateAsync(
         string organization,
-        string title = "ghpmv-fixture",
+        string title = "gpm-fixture",
         string repositoryName = "fixture-repo",
         CancellationToken cancellationToken = default)
     {
@@ -283,7 +283,7 @@ public sealed class FixtureProjectBuilder
             Project = new ProjectInfoSnapshot
             {
                 Title = title,
-                ShortDescription = "ghpmv fixture project",
+                ShortDescription = "gpm fixture project",
                 Readme = "# ghpmv fixture 📦\n\nPermanent fixture project for ghpmv integration tests.\n\n- All custom field types (Text / Number / Date / Single-select / Iteration)\n- Drafts with 日本語 values, an Issue, a PR, an archived item and an assigned item\n- Views and workflows can be created by running `ghpmv setup --fixture-ui` (C# browser module) 🚀",
                 Public = false,
                 Closed = false,

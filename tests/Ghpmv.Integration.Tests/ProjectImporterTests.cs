@@ -6,8 +6,8 @@ using Ghpmv.Core.Snapshot;
 namespace Ghpmv.Integration.Tests;
 
 /// <summary>
-/// M3 integration tests: imports snapshots into the target org (ghpmv-target) via the real
-/// GraphQL API. The round-trip test exports the fixture project (ghpmv-source #3), imports it
+/// M3 integration tests: imports snapshots into the target org (gpm-target) via the real
+/// GraphQL API. The round-trip test exports the fixture project (gpm-source #3), imports it
 /// under a unique title, reads it back with <see cref="ProjectExporter"/> and compares fields.
 /// Every created project is deleted in a finally block.
 /// Requires the GHPMV_TEST_TOKEN environment variable (SSO-authorized for the test orgs).

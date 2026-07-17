@@ -248,7 +248,7 @@ GEI で repository / Issue / Pull Request を移行してから `ghpmv` の Proj
 2. Projects UI の View 設定 DOM の安定性(`data-testid` の有無)→ M6 着手時に Playwright codegen で調査
 3. Windows ARM64 での Playwright Chromium ネイティブ対応 → M6 で確認、不可ならブラウザー機能は win-x64/linux のみサポートと明記
 4. GHEC with data residency テナントでの動作確認(GraphQL エンドポイント `https://api.{tenant}.ghe.com/graphql`、Projects UI の DOM が GitHub.com と同一か、storageState のドメイン分離)→ DR テナントを利用できる段階で検証。それまでは「設計上対応・未検証」と README に明記
-4b. クロスアカウント移行(Non-EMU ソース → EMU ターゲット、without DR)の実地検証 → 現テスト環境(ghpmv-source/ghpmv-target は EMU 配下)+ Non-EMU アカウント(SIkebe)の組み合わせで検証可能。ブラウザープロファイル分離(§2.1)の E2E を含める
+4b. クロスアカウント移行(Non-EMU ソース → EMU ターゲット、without DR)の実地検証 → 現テスト環境(gpm-source/gpm-target は EMU 配下)+ Non-EMU アカウント(SIkebe)の組み合わせで検証可能。ブラウザープロファイル分離(§2.1)の E2E を含める
 5. Self-contained publish 時に Playwright ドライバー(.playwright フォルダー)が正しく成果物に含まれるか → M0 の publish 検証に含める
 
 ## 8. スコープとロードマップ(v1 対象外と将来対応)

@@ -20,7 +20,7 @@ public static class FixtureUiSnapshotFactory
             SchemaVersion = ProjectSnapshot.CurrentSchemaVersion,
             Project = new ProjectInfoSnapshot
             {
-                Title = "ghpmv-fixture-ui",
+                Title = "gpm-fixture-ui",
                 ShortDescription = "UI fixture settings for ghpmv integration tests",
                 Readme = null,
                 Public = false,

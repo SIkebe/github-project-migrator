@@ -7,7 +7,7 @@ using Ghpmv.Core.Snapshot;
 namespace Ghpmv.Integration.Tests;
 
 /// <summary>
-/// M4 integration tests: imports snapshot items into the target org (ghpmv-target) via the
+/// M4 integration tests: imports snapshot items into the target org (gpm-target) via the
 /// real GraphQL API. Covers the full round-trip (drafts with titles, Status values and
 /// order), resume through <c>import-log.json</c>, repository-mapped Issue items and the
 /// unmapped-repository warning path. Every created project is deleted in a finally block.

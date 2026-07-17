@@ -76,7 +76,7 @@ public class SnapshotTests
                 Type = "ISSUE",
                 Position = 0,
                 IsArchived = false,
-                Repository = "ghpmv-source/fixture-repo",
+                Repository = "gpm-source/fixture-repo",
                 Number = 1,
                 FieldValues =
                 [
@@ -101,7 +101,7 @@ public class SnapshotTests
             new CollaboratorSnapshot { Type = "USER", Login = "octocat", Role = "WRITER" },
             new CollaboratorSnapshot { Type = "TEAM", Login = "fixture-team", Role = "READER" },
         ],
-        LinkedRepositories = ["ghpmv-source/fixture-repo"],
+        LinkedRepositories = ["gpm-source/fixture-repo"],
     };
 
     [Fact]
@@ -142,7 +142,7 @@ public class SnapshotTests
 
         Assert.Equal(2, restored.Items.Count);
         var issue = restored.Items[0];
-        Assert.Equal("ghpmv-source/fixture-repo", issue.Repository);
+        Assert.Equal("gpm-source/fixture-repo", issue.Repository);
         Assert.Equal(1, issue.Number);
         Assert.Equal(original.Items[0].FieldValues, issue.FieldValues);
         var draftItem = restored.Items[1];
@@ -155,7 +155,7 @@ public class SnapshotTests
         Assert.Equal(2, restored.Collaborators.Count);
         Assert.Equal(new CollaboratorSnapshot { Type = "USER", Login = "octocat", Role = "WRITER" }, restored.Collaborators[0]);
         Assert.Equal(new CollaboratorSnapshot { Type = "TEAM", Login = "fixture-team", Role = "READER" }, restored.Collaborators[1]);
-        Assert.Equal(["ghpmv-source/fixture-repo"], restored.LinkedRepositories);
+        Assert.Equal(["gpm-source/fixture-repo"], restored.LinkedRepositories);
     }
 
     [Fact]

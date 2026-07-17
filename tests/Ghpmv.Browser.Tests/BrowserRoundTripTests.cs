@@ -9,7 +9,7 @@ using System.Text.Json;
 namespace Ghpmv.Browser.Tests;
 
 /// <summary>
-/// M6 E2E: exports the fixture project (ghpmv-source #3) including browser-scraped UI
+/// M6 E2E: exports the fixture project (gpm-source #3) including browser-scraped UI
 /// settings, imports it into the target org (project + fields via GraphQL, views via
 /// browser automation), re-exports the target and asserts the views round-trip
 /// (name / layout / UI settings). Requires GHPMV_BROWSER_STATE (a storage-state file
@@ -22,9 +22,9 @@ public class BrowserRoundTripTests
     private const int FixtureProjectNumber = 3;
     private const string ExplicitCollaboratorLogin = "ravel-maurice-uo_sde";
 
-    private static string SourceOrg => Environment.GetEnvironmentVariable("GHPMV_TEST_ORG") ?? "ghpmv-source";
+    private static string SourceOrg => Environment.GetEnvironmentVariable("GHPMV_TEST_ORG") ?? "gpm-source";
 
-    private static string TargetOrg => Environment.GetEnvironmentVariable("GHPMV_TEST_TARGET_ORG") ?? "ghpmv-target";
+    private static string TargetOrg => Environment.GetEnvironmentVariable("GHPMV_TEST_TARGET_ORG") ?? "gpm-target";
 
     private static string CreateOperationLogDirectory()
         => Path.Combine(Path.GetTempPath(), $"ghpmv-browser-project-import-{Guid.NewGuid():N}");

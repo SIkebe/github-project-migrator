@@ -6,11 +6,11 @@ internal static class IntegrationTestSettings
 {
     public static string SourceOrg => Environment.GetEnvironmentVariable("GHPMV_TEST_ORG")
         ?? Environment.GetEnvironmentVariable("GHPMV_SOURCE_ORG")
-        ?? "ghpmv-source";
+        ?? "gpm-source";
 
     public static string TargetOrg => Environment.GetEnvironmentVariable("GHPMV_TEST_TARGET_ORG")
         ?? Environment.GetEnvironmentVariable("GHPMV_TARGET_ORG")
-        ?? "ghpmv-target";
+        ?? "gpm-target";
 
     public static string FixtureRepositoryName => Environment.GetEnvironmentVariable("GHPMV_TEST_FIXTURE_REPO")
         ?? Environment.GetEnvironmentVariable("GHPMV_FIXTURE_REPO")

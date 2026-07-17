@@ -5,7 +5,7 @@ using Ghpmv.Core.Snapshot;
 namespace Ghpmv.Integration.Tests;
 
 /// <summary>
-/// M2 integration tests: exports the fixture project (ghpmv-source #3) via the real
+/// M2 integration tests: exports the fixture project (gpm-source #3) via the real
 /// GraphQL API and verifies the snapshot contents against the known fixture state.
 /// Requires the GHPMV_TEST_TOKEN environment variable (SSO-authorized for the test orgs).
 /// Skipped when the variable is not set (e.g. fork PRs without secrets).
@@ -89,7 +89,7 @@ public class ProjectExporterTests
         Assert.False(snapshot.Project.Closed);
 
         // Enriched fixture metadata: short description and a multiline README with emoji.
-        Assert.Equal("ghpmv fixture project", snapshot.Project.ShortDescription);
+        Assert.Equal("gpm fixture project", snapshot.Project.ShortDescription);
         Assert.NotNull(snapshot.Project.Readme);
         Assert.Contains("\n", snapshot.Project.Readme, StringComparison.Ordinal);
         Assert.Contains("\uD83D\uDCE6", snapshot.Project.Readme, StringComparison.Ordinal); // 📦

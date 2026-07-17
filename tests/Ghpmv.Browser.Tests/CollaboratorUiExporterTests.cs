@@ -20,7 +20,7 @@ public class CollaboratorUiExporterTests
         - button "Remove"
         """;
 
-        var collaborator = Assert.Single(CollaboratorUiExporter.ParseAccessSnapshot(snapshot, "ghpmv-source"));
+        var collaborator = Assert.Single(CollaboratorUiExporter.ParseAccessSnapshot(snapshot, "gpm-source"));
 
         Assert.Equal("USER", collaborator.Type);
         Assert.Equal("ravel-maurice-uo_sde", collaborator.Login);
@@ -34,12 +34,12 @@ public class CollaboratorUiExporterTests
         - heading "Manage access" [level=3]
         - checkbox "Select Roadmap Team"
         - link "Roadmap Team":
-          - /url: /orgs/ghpmv-source/teams/roadmap-team
+          - /url: /orgs/gpm-source/teams/roadmap-team
         - text: Roadmap Team
         - 'button "Role: Admin"'
         """;
 
-        var collaborator = Assert.Single(CollaboratorUiExporter.ParseAccessSnapshot(snapshot, "ghpmv-source"));
+        var collaborator = Assert.Single(CollaboratorUiExporter.ParseAccessSnapshot(snapshot, "gpm-source"));
 
         Assert.Equal("TEAM", collaborator.Type);
         Assert.Equal("roadmap-team", collaborator.Login);
@@ -55,6 +55,6 @@ public class CollaboratorUiExporterTests
         - heading "You don't have any collaborators yet." [level=3]
         """;
 
-        Assert.Empty(CollaboratorUiExporter.ParseAccessSnapshot(snapshot, "ghpmv-source"));
+        Assert.Empty(CollaboratorUiExporter.ParseAccessSnapshot(snapshot, "gpm-source"));
     }
 }
