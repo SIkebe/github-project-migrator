@@ -45,8 +45,8 @@ internal static class IntegrationFixtureSnapshot
         CancellationToken cancellationToken)
     {
         var expectedKeys = expected.Items.Select(ItemKey).ToHashSet(StringComparer.OrdinalIgnoreCase);
-        HashSet<string> observedKeys = [];
-        for (var attempt = 0; attempt < 7; attempt++)
+        HashSet<string> unexpectedKeys = [];
+        for (var attempt = 0; attempt < 8; attempt++)
         {
             var data = await client.QueryAsync(
                 """
@@ -74,13 +74,18 @@ internal static class IntegrationFixtureSnapshot
             var project = data.GetProperty("organization").GetProperty("projectV2");
             var projectId = project.GetProperty("id").GetString()!;
             var nodes = project.GetProperty("items").GetProperty("nodes").EnumerateArray().ToArray();
-            observedKeys = nodes.Select(ItemKey).ToHashSet(StringComparer.OrdinalIgnoreCase);
-            if (observedKeys.SetEquals(expectedKeys))
+            var unexpectedNodes = nodes
+                .Where(node => !expectedKeys.Contains(ItemKey(node)))
+                .ToArray();
+            unexpectedKeys = unexpectedNodes
+                .Select(ItemKey)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            if (attempt == 7 && unexpectedNodes.Length == 0)
             {
                 return;
             }
 
-            foreach (var node in nodes.Where(node => !expectedKeys.Contains(ItemKey(node))))
+            foreach (var node in unexpectedNodes)
             {
                 await client.QueryAsync(
                     """
@@ -98,7 +103,7 @@ internal static class IntegrationFixtureSnapshot
         }
 
         throw new InvalidOperationException(
-            $"Project #{projectNumber} items did not stabilize. Expected [{string.Join(", ", expectedKeys)}], observed [{string.Join(", ", observedKeys)}].");
+            $"Project #{projectNumber} kept adding unexpected items: [{string.Join(", ", unexpectedKeys)}].");
     }
 
     private static string ItemKey(ItemSnapshot item) => item.Type == "DRAFT_ISSUE"

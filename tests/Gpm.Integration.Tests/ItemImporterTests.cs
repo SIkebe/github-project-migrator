@@ -245,7 +245,7 @@ public class ItemImporterTests
         CancellationToken cancellationToken)
     {
         ProjectSnapshot snapshot = null!;
-        for (var attempt = 0; attempt < 7; attempt++)
+        for (var attempt = 0; attempt < 12; attempt++)
         {
             snapshot = await exporter.ExportAsync(org, projectNumber, cancellationToken);
             if (predicate(snapshot))
@@ -256,7 +256,7 @@ public class ItemImporterTests
             await Task.Delay(TimeSpan.FromSeconds(5), cancellationToken);
         }
 
-        return snapshot;
+        throw new InvalidOperationException($"Project #{projectNumber} did not reach the expected item state.");
     }
 
     private static async Task<string> GetOrganizationIdAsync(GitHubGraphQLClient client, string login, CancellationToken cancellationToken)
