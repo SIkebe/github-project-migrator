@@ -385,8 +385,18 @@ public class ProjectVerifierTests
     public void Duplicate_view_names_are_compared_as_setting_multisets()
     {
         var baseline = BuildSnapshot();
-        var first = baseline.Views[0] with { Number = 1, Filter = "status:Todo" };
-        var second = baseline.Views[0] with { Number = 2, Filter = "status:Done" };
+        var first = baseline.Views[0] with
+        {
+            Number = 1,
+            Filter = "status:Todo",
+            Ui = new ViewUiSnapshot { SliceBy = "Status" },
+        };
+        var second = baseline.Views[0] with
+        {
+            Number = 2,
+            Filter = "status:Done",
+            Ui = new ViewUiSnapshot { SliceBy = "Assignees" },
+        };
         var source = baseline with { Views = [first, second] };
         var reordered = baseline with { Views = [second with { Number = 8 }, first with { Number = 9 }] };
 
@@ -403,6 +413,20 @@ public class ProjectVerifierTests
             difference.Severity == VerifySeverity.Error
             && difference.Category == "View"
             && difference.Message.Contains("API-visible settings", StringComparison.Ordinal));
+
+        var swappedUi = baseline with
+        {
+            Views =
+            [
+                first with { Number = 8, Ui = second.Ui },
+                second with { Number = 9, Ui = first.Ui },
+            ],
+        };
+        var swappedReport = ProjectVerifier.Compare(source, swappedUi);
+        Assert.Contains(swappedReport.Differences, difference =>
+            difference.Severity == VerifySeverity.Error
+            && difference.Category == "View"
+            && difference.Message.Contains("combined API and UI settings", StringComparison.Ordinal));
     }
 
     [Fact]

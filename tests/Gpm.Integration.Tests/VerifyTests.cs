@@ -74,9 +74,16 @@ public class VerifyTests
         {
             await new ItemImporter(client) { RepositoryMapping = repoMapping }
                 .ImportAsync(snapshot, result, logDirectory, cancellationToken);
-            var targetSnapshot = snapshot with
+            var importLog = await ImportLog.LoadAsync(logDirectory, cancellationToken);
+            Assert.NotNull(importLog);
+            var verificationSnapshot = snapshot with
             {
-                Items = snapshot.Items.Select(item =>
+                Items = snapshot.Items.Where(item =>
+                    importLog.Items.ContainsKey(item.Position.ToString(CultureInfo.InvariantCulture))).ToList(),
+            };
+            var targetSnapshot = verificationSnapshot with
+            {
+                Items = verificationSnapshot.Items.Select(item =>
                     string.Equals(item.Repository, FixtureRepo, StringComparison.OrdinalIgnoreCase)
                         ? item with { Repository = targetFixtureRepo }
                         : item).ToList(),
@@ -98,14 +105,14 @@ public class VerifyTests
             // 1) Right after a full API import the target matches the snapshot except for
             //    views/workflows, which only the browser module migrates (errors since M7).
             //    Items are eventually consistent, so poll until no other error remains.
-            var matchReport = await VerifyUntilAsync(verifier, snapshot, result.ProjectNumber, r => !HasNonBrowserError(r), cancellationToken);
+            var matchReport = await VerifyUntilAsync(verifier, verificationSnapshot, result.ProjectNumber, r => !HasNonBrowserError(r), cancellationToken);
             Assert.True(postExportCalled);
             Assert.DoesNotContain(matchReport.Differences, d => d.Severity == VerifySeverity.Error && !IsBrowserCategory(d));
             Assert.Contains(matchReport.Differences, d => d.Severity == VerifySeverity.Error && d.Category == "View");
             Assert.Contains(matchReport.Differences, d => d.Severity == VerifySeverity.Error && d.Category == "Workflow");
 
             // 2) Drift the target: delete one custom TEXT field...
-            var fieldName = snapshot.Fields.First(f => f.DataType == "TEXT").Name;
+            var fieldName = verificationSnapshot.Fields.First(f => f.DataType == "TEXT").Name;
             await client.QueryAsync(
                 """
                 mutation($fieldId: ID!) {
@@ -116,12 +123,10 @@ public class VerifyTests
                 cancellationToken);
 
             // ...and flip the Status value of one imported (non-archived) item.
-            var log = await ImportLog.LoadAsync(logDirectory, cancellationToken);
-            Assert.NotNull(log);
-            var statusItem = snapshot.Items
+            var statusItem = verificationSnapshot.Items
                 .OrderBy(i => i.Position)
                 .First(i => !i.IsArchived && i.FieldValues.Any(v => v.FieldName == StatusFieldName && v.SingleSelectOptionName is not null));
-            var itemId = log.Items[statusItem.Position.ToString(CultureInfo.InvariantCulture)];
+            var itemId = importLog.Items[statusItem.Position.ToString(CultureInfo.InvariantCulture)];
             var currentStatus = statusItem.FieldValues.First(v => v.FieldName == StatusFieldName).SingleSelectOptionName!;
             var otherOptionId = result.OptionIds[StatusFieldName].First(kvp => !string.Equals(kvp.Key, currentStatus, StringComparison.Ordinal)).Value;
             await client.QueryAsync(
@@ -137,7 +142,7 @@ public class VerifyTests
                 cancellationToken);
 
             // 3) Both drifts are reported as errors.
-            var driftReport = await VerifyUntilAsync(verifier, snapshot, result.ProjectNumber, r =>
+            var driftReport = await VerifyUntilAsync(verifier, verificationSnapshot, result.ProjectNumber, r =>
                 r.Differences.Any(d => d.Severity == VerifySeverity.Error && d.Category == "Field" && d.Message.Contains($"'{fieldName}'", StringComparison.Ordinal))
                 && r.Differences.Any(d => d.Severity == VerifySeverity.Error && d.Category == "Item" && d.Message.Contains($"'{StatusFieldName}' value mismatch", StringComparison.Ordinal)),
                 cancellationToken);

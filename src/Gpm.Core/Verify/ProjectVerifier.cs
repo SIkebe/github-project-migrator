@@ -474,12 +474,14 @@ public sealed class ProjectVerifier
                     }
                 }
                 else if (!MultisetEquals(
-                    s.Select(view => view.Ui!).ToList(),
-                    t.Select(view => view.Ui!).ToList(),
-                    ViewUiEquals))
+                    s,
+                    t,
+                    (sourceView, targetView) =>
+                        ViewApiEquals(sourceView, targetView)
+                        && ViewUiEquals(sourceView.Ui!, targetView.Ui!)))
                 {
                     AddError(differences, ViewCategory,
-                        $"views named '{name}': UI settings do not match");
+                        $"views named '{name}': combined API and UI settings do not match");
                 }
             }
         }
