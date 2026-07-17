@@ -456,7 +456,85 @@ public sealed class ProjectVerifier
                     }
                 }
             }
+            else
+            {
+                if (!MultisetEquals(s, t, ViewApiEquals))
+                {
+                    AddError(differences, ViewCategory,
+                        $"views named '{name}': API-visible settings do not match");
+                }
+
+                if (s.Any(view => view.Ui is null) || t.Any(view => view.Ui is null))
+                {
+                    notVerified.Add(ViewCategory);
+                    if (s.All(view => view.Ui is not null) && t.Any(view => view.Ui is null))
+                    {
+                        Add(differences, VerifySeverity.Warning, ViewCategory,
+                            $"views named '{name}': UI settings were captured in the source but could not all be read from the target");
+                    }
+                }
+                else if (!MultisetEquals(
+                    s.Select(view => view.Ui!).ToList(),
+                    t.Select(view => view.Ui!).ToList(),
+                    ViewUiEquals))
+                {
+                    AddError(differences, ViewCategory,
+                        $"views named '{name}': UI settings do not match");
+                }
+            }
         }
+    }
+
+    private static bool ViewApiEquals(ViewSnapshot source, ViewSnapshot target)
+        => string.Equals(source.Layout, target.Layout, StringComparison.Ordinal)
+            && string.Equals(source.Filter, target.Filter, StringComparison.Ordinal)
+            && source.VisibleFields.SequenceEqual(target.VisibleFields, StringComparer.Ordinal)
+            && source.GroupByFields.SequenceEqual(target.GroupByFields, StringComparer.Ordinal)
+            && source.VerticalGroupByFields.SequenceEqual(target.VerticalGroupByFields, StringComparer.Ordinal)
+            && source.SortByFields.Count == target.SortByFields.Count
+            && source.SortByFields.Zip(target.SortByFields).All(pair =>
+                string.Equals(pair.First.Field, pair.Second.Field, StringComparison.Ordinal)
+                && string.Equals(pair.First.Direction, pair.Second.Direction, StringComparison.Ordinal));
+
+    private static bool ViewUiEquals(ViewUiSnapshot source, ViewUiSnapshot target)
+        => string.Equals(source.GroupBy, target.GroupBy, StringComparison.Ordinal)
+            && string.Equals(source.SortBy, target.SortBy, StringComparison.Ordinal)
+            && string.Equals(source.SliceBy, target.SliceBy, StringComparison.Ordinal)
+            && string.Equals(source.Swimlanes, target.Swimlanes, StringComparison.Ordinal)
+            && UiListEquals(source.FieldSum, target.FieldSum)
+            && RoadmapEquals(source.Roadmap, target.Roadmap);
+
+    private static bool RoadmapEquals(RoadmapSettingsSnapshot? source, RoadmapSettingsSnapshot? target)
+        => source is null && target is null
+            || source is not null && target is not null
+            && string.Equals(source.StartField, target.StartField, StringComparison.Ordinal)
+            && string.Equals(source.TargetField, target.TargetField, StringComparison.Ordinal)
+            && string.Equals(source.Zoom, target.Zoom, StringComparison.Ordinal)
+            && UiListEquals(source.Markers, target.Markers);
+
+    private static bool MultisetEquals<T>(
+        IReadOnlyList<T> source,
+        IReadOnlyList<T> target,
+        Func<T, T, bool> equals)
+    {
+        if (source.Count != target.Count)
+        {
+            return false;
+        }
+
+        var unmatched = target.ToList();
+        foreach (var sourceItem in source)
+        {
+            var index = unmatched.FindIndex(targetItem => equals(sourceItem, targetItem));
+            if (index < 0)
+            {
+                return false;
+            }
+
+            unmatched.RemoveAt(index);
+        }
+
+        return true;
     }
 
     private static void CompareViewApi(string name, ViewSnapshot source, ViewSnapshot target, List<VerifyDifference> differences)

@@ -55,6 +55,62 @@ public class BrowserRoundTripTests
                 string.Equals(c.Login, ExplicitCollaboratorLogin, StringComparison.OrdinalIgnoreCase));
             Assert.Equal("USER", collaborator.Type);
             Assert.Equal("WRITER", collaborator.Role);
+
+            var verificationSnapshot = snapshot with
+            {
+                Project = snapshot.Project with { Title = "gpm-browser-collaborator-test-" + Guid.NewGuid().ToString("N") },
+                Views = [],
+                Workflows = [],
+                Items = [],
+                LinkedRepositories = [],
+                Collaborators = [collaborator],
+            };
+            var result = await new ProjectImporter(client).ImportAsync(
+                verificationSnapshot,
+                TargetOrg,
+                cancellationToken);
+            try
+            {
+                var targetViewExporter = new ViewUiExporter(session);
+                var targetWorkflowExporter = new WorkflowUiExporter(session);
+                var targetCollaboratorExporter = new CollaboratorUiExporter(session);
+                var verifier = new ProjectVerifier(client)
+                {
+                    PostExportAsync = async (target, ct) =>
+                    {
+                        target = await targetViewExporter.EnrichAsync(target, TargetOrg, result.ProjectNumber, ct);
+                        target = await targetWorkflowExporter.EnrichAsync(target, TargetOrg, result.ProjectNumber, ct);
+                        return await targetCollaboratorExporter.EnrichAsync(
+                            target,
+                            TargetOrg,
+                            ProjectOwnerType.Organization,
+                            result.ProjectNumber,
+                            ct);
+                    },
+                };
+
+                var matchReport = await verifier.VerifyAsync(
+                    verificationSnapshot,
+                    TargetOrg,
+                    result.ProjectNumber,
+                    cancellationToken);
+                Assert.DoesNotContain(matchReport.Differences, difference => difference.Category == "Collaborator");
+
+                await SetCollaboratorAsync(client, result.ProjectId, userId, "READER", cancellationToken);
+                var driftReport = await verifier.VerifyAsync(
+                    verificationSnapshot,
+                    TargetOrg,
+                    result.ProjectNumber,
+                    cancellationToken);
+                Assert.Contains(driftReport.Differences, difference =>
+                    difference.Severity == VerifySeverity.Error
+                    && difference.Category == "Collaborator"
+                    && difference.Message.Contains("role mismatch", StringComparison.Ordinal));
+            }
+            finally
+            {
+                await DeleteProjectAsync(client, result.ProjectId);
+            }
         }
         finally
         {
@@ -152,13 +208,24 @@ public class BrowserRoundTripTests
                     Assert.Equal(roadmap.Markers ?? [], actual.Ui.Roadmap.Markers ?? []);
                 }
             }
+
+            var driftedSnapshot = snapshot with
+            {
+                Views = snapshot.Views.Select(view =>
+                    view.Name == "View 1"
+                        ? view with { Ui = view.Ui! with { SliceBy = "Status" } }
+                        : view).ToList(),
+            };
+            await viewImporter.ImportAsync(driftedSnapshot, TargetOrg, result.ProjectNumber, cancellationToken);
+            var driftReport = await verifier.VerifyAsync(snapshot, TargetOrg, result.ProjectNumber, cancellationToken);
+            Assert.Contains(driftReport.Differences, difference =>
+                difference.Severity == VerifySeverity.Error
+                && difference.Category == "View"
+                && difference.Message.Contains("slice by mismatch", StringComparison.Ordinal));
         }
         finally
         {
-            await client.QueryAsync(
-                "mutation($projectId: ID!) { deleteProjectV2(input: { projectId: $projectId }) { projectV2 { id } } }",
-                new { projectId = result.ProjectId },
-                CancellationToken.None);
+            await DeleteProjectAsync(client, result.ProjectId);
         }
     }
 
@@ -221,18 +288,27 @@ public class BrowserRoundTripTests
             Assert.Empty(workflowImporter.Warnings);
             Assert.Equal(snapshot.Workflows.Count, workflowImporter.ImportedCount);
 
-            // Re-export the target (GraphQL + UI scrape) and diff the workflows by name.
-            var reExported = await exporter.ExportAsync(TargetOrg, result.ProjectNumber, cancellationToken);
             var reExportUi = new WorkflowUiExporter(session);
-            reExported = await reExportUi.EnrichAsync(reExported, TargetOrg, result.ProjectNumber, cancellationToken);
+            ProjectSnapshot? reExported = null;
+            var verifier = new ProjectVerifier(client)
+            {
+                PostExportAsync = async (target, ct) =>
+                {
+                    reExported = await reExportUi.EnrichAsync(target, TargetOrg, result.ProjectNumber, ct);
+                    return reExported;
+                },
+            };
+            var matchReport = await verifier.VerifyAsync(snapshot, TargetOrg, result.ProjectNumber, cancellationToken);
             Assert.Empty(reExportUi.Warnings);
+            Assert.DoesNotContain(matchReport.Differences, difference => difference.Category == "Workflow");
+            var target = Assert.IsType<ProjectSnapshot>(reExported);
 
             Assert.Equal(
                 snapshot.Workflows.Select(w => w.Name).Order(StringComparer.Ordinal),
-                reExported.Workflows.Select(w => w.Name).Order(StringComparer.Ordinal));
+                target.Workflows.Select(w => w.Name).Order(StringComparer.Ordinal));
             foreach (var expected in snapshot.Workflows)
             {
-                var actual = Assert.Single(reExported.Workflows, w => string.Equals(w.Name, expected.Name, StringComparison.Ordinal));
+                var actual = Assert.Single(target.Workflows, w => string.Equals(w.Name, expected.Name, StringComparison.Ordinal));
                 Assert.Equal(expected.Enabled, actual.Enabled);
 
                 Assert.NotNull(expected.Ui);
@@ -242,14 +318,33 @@ public class BrowserRoundTripTests
                 Assert.Equal(expected.Ui.Filter, actual.Ui.Filter);
                 Assert.Equal(expected.Ui.Repository, actual.Ui.Repository); // short names ("fixture-repo" on both sides)
             }
+
+            var driftedSnapshot = snapshot with
+            {
+                Workflows = snapshot.Workflows.Select(workflow =>
+                    workflow.Name == "Auto-add secondary"
+                        ? workflow with { Ui = workflow.Ui! with { Filter = "is:issue label:documentation" } }
+                        : workflow).ToList(),
+            };
+            await workflowImporter.ImportAsync(driftedSnapshot, TargetOrg, result.ProjectNumber, cancellationToken);
+            var driftReport = await verifier.VerifyAsync(snapshot, TargetOrg, result.ProjectNumber, cancellationToken);
+            Assert.Contains(driftReport.Differences, difference =>
+                difference.Severity == VerifySeverity.Error
+                && difference.Category == "Workflow"
+                && difference.Message.Contains("filter mismatch", StringComparison.Ordinal));
         }
         finally
         {
-            await client.QueryAsync(
-                "mutation($projectId: ID!) { deleteProjectV2(input: { projectId: $projectId }) { projectV2 { id } } }",
-                new { projectId = result.ProjectId },
-                CancellationToken.None);
+            await DeleteProjectAsync(client, result.ProjectId);
         }
+    }
+
+    private static async Task DeleteProjectAsync(GitHubGraphQLClient client, string projectId)
+    {
+        _ = await client.QueryAsync(
+            "mutation($projectId: ID!) { deleteProjectV2(input: { projectId: $projectId }) { projectV2 { id } } }",
+            new { projectId },
+            CancellationToken.None);
     }
 
         private static async Task<(string ProjectId, string UserId)> ResolveProjectAndUserIdsAsync(

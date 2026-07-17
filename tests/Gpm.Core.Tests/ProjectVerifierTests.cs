@@ -382,6 +382,30 @@ public class ProjectVerifierTests
     }
 
     [Fact]
+    public void Duplicate_view_names_are_compared_as_setting_multisets()
+    {
+        var baseline = BuildSnapshot();
+        var first = baseline.Views[0] with { Number = 1, Filter = "status:Todo" };
+        var second = baseline.Views[0] with { Number = 2, Filter = "status:Done" };
+        var source = baseline with { Views = [first, second] };
+        var reordered = baseline with { Views = [second with { Number = 8 }, first with { Number = 9 }] };
+
+        Assert.DoesNotContain(ProjectVerifier.Compare(source, reordered).Differences, difference =>
+            difference.Category == "View");
+
+        var drifted = baseline with
+        {
+            Views = [second with { Number = 8 }, first with { Number = 9, Filter = "status:In Progress" }],
+        };
+        var report = ProjectVerifier.Compare(source, drifted);
+
+        Assert.Contains(report.Differences, difference =>
+            difference.Severity == VerifySeverity.Error
+            && difference.Category == "View"
+            && difference.Message.Contains("API-visible settings", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void Workflow_ui_differences_are_errors_when_both_sides_carry_ui()
     {
         var ui = new WorkflowUiSnapshot
@@ -707,6 +731,19 @@ public class ProjectVerifierTests
             BuildSnapshot(),
             BuildSnapshot() with { Project = BuildSnapshot().Project with { Public = true } });
         Assert.True(mismatch.ShouldFail(strict: false, failOnWarning: false));
+    }
+
+    [Fact]
+    public void Added_browser_warnings_affect_counts_status_and_exit_policy()
+    {
+        var report = ProjectVerifier.Compare(BuildSnapshot(), BuildSnapshot())
+            .WithWarnings("View", ["view scrape timed out"]);
+
+        Assert.Equal(VerifyStatus.PartialMatch, report.Status);
+        Assert.Equal(1, report.WarningCount);
+        Assert.Contains(report.Differences, difference =>
+            difference.Category == "View" && difference.Message == "view scrape timed out");
+        Assert.True(report.ShouldFail(strict: false, failOnWarning: true));
     }
 
     [Fact]

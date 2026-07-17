@@ -560,11 +560,14 @@ verifyCommand.SetAction(async (parseResult, cancellationToken) =>
 
         var snapshot = await SnapshotFile.LoadAsync(inDirectory, cancellationToken);
         var report = await verifier.VerifyAsync(snapshot, org, projectNumber, cancellationToken);
-        var browserWarnings = (viewExporter?.Warnings ?? [])
-            .Concat(workflowExporter?.Warnings ?? [])
-            .Concat(collaboratorExporter?.Warnings ?? [])
-            .ToList();
-        foreach (var warning in browserWarnings)
+        var viewWarnings = viewExporter?.Warnings ?? [];
+        var workflowWarnings = workflowExporter?.Warnings ?? [];
+        var collaboratorWarnings = collaboratorExporter?.Warnings ?? [];
+        report = report
+            .WithWarnings("View", viewWarnings)
+            .WithWarnings("Workflow", workflowWarnings)
+            .WithWarnings("Collaborator", collaboratorWarnings);
+        foreach (var warning in viewWarnings.Concat(workflowWarnings).Concat(collaboratorWarnings))
         {
             Console.Error.WriteLine($"warning: {warning}");
         }

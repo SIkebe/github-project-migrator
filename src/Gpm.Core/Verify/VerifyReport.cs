@@ -83,4 +83,31 @@ public sealed record VerifyReport
         => ErrorCount > 0
             || (strict && NotVerifiedCount > 0)
             || (failOnWarning && WarningCount > 0);
+
+    public VerifyReport WithWarnings(string category, IEnumerable<string> warnings)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(category);
+        ArgumentNullException.ThrowIfNull(warnings);
+
+        var warningDifferences = warnings.Select(message => new VerifyDifference
+        {
+            Severity = VerifySeverity.Warning,
+            Category = category,
+            Message = message,
+        }).ToList();
+        if (warningDifferences.Count == 0)
+        {
+            return this;
+        }
+
+        return this with
+        {
+            Differences = [.. Differences, .. warningDifferences],
+            Categories = Categories.Select(result =>
+                string.Equals(result.Category, category, StringComparison.Ordinal)
+                && result.Status == VerifyStatus.Match
+                    ? result with { Status = VerifyStatus.PartialMatch }
+                    : result).ToList(),
+        };
+    }
 }
