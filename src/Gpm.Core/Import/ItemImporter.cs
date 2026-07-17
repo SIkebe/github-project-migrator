@@ -78,7 +78,19 @@ public sealed class ItemImporter
             }
 
             OnProgress?.Invoke($"{prefix} Importing {label}...");
-            var resumedPendingOperation = log.PendingDrafts.ContainsKey(key) || log.PendingContents.ContainsKey(key);
+            var hasPendingDraft = log.PendingDrafts.ContainsKey(key);
+            var hasPendingContent = log.PendingContents.ContainsKey(key);
+            var expectsDraft = item is { Type: "DRAFT_ISSUE", Draft: not null };
+            var expectsContent = item.Type is "ISSUE" or "PULL_REQUEST";
+            if ((hasPendingDraft && !expectsDraft)
+                || (hasPendingContent && !expectsContent)
+                || (hasPendingDraft && hasPendingContent))
+            {
+                throw new InvalidOperationException(
+                    $"Pending operation at item position {key} does not match the current snapshot item type '{item.Type}'. Restore the original snapshot or reconcile the target manually.");
+            }
+
+            var resumedPendingOperation = hasPendingDraft || hasPendingContent;
             try
             {
                 string? itemId = null;

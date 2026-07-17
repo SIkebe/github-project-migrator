@@ -199,6 +199,28 @@ public class GitHubGraphQLClientTests
         Assert.InRange(delay, TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(30));
     }
 
+    [Fact]
+    public async Task Successful_create_returns_before_primary_rate_limit_wait()
+    {
+        var response = JsonResponse(HttpStatusCode.OK, """{"data":{"createThing":{"thing":{"id":"created"}}}}""");
+        response.Headers.Add("X-RateLimit-Remaining", "0");
+        response.Headers.Add(
+            "X-RateLimit-Reset",
+            DateTimeOffset.UtcNow.AddMinutes(1).ToUnixTimeSeconds().ToString(System.Globalization.CultureInfo.InvariantCulture));
+        using var handler = new StubHandler(response);
+        var delays = new List<TimeSpan>();
+        using var client = CreateClient(handler, delays);
+
+        var data = await client.MutationAsync(
+            "createThing",
+            "mutation($clientMutationId: String!) { createThing(input: { clientMutationId: $clientMutationId }) { thing { id } } }",
+            requiredResultPath: "thing.id",
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Equal("created", data.GetProperty("createThing").GetProperty("thing").GetProperty("id").GetString());
+        Assert.Empty(delays);
+    }
+
     private static GitHubGraphQLClient CreateClient(StubHandler handler, List<TimeSpan> delays)
         => new("dummy-token", baseUrl: null, handler, (delay, _) =>
         {

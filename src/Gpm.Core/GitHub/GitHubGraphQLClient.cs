@@ -316,7 +316,13 @@ public sealed class GitHubGraphQLClient : IDisposable
 
             if (response.IsSuccessStatusCode)
             {
-                await WaitForPrimaryRateLimitResetAsync(response, cancellationToken).ConfigureAwait(false);
+                // A create has a definitive response now. Do not make returning that
+                // result depend on a cancellable wait after the side effect completed.
+                if (mutation is not { RetryPolicy: MutationRetryPolicy.Create })
+                {
+                    await WaitForPrimaryRateLimitResetAsync(response, cancellationToken).ConfigureAwait(false);
+                }
+
                 try
                 {
                     return JsonDocument.Parse(body);

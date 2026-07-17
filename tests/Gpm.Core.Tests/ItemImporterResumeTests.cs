@@ -86,6 +86,36 @@ public class ItemImporterResumeTests
         }
     }
 
+    [Fact]
+    public async Task Resume_rejects_pending_operation_for_different_item_kind()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var directory = Directory.CreateTempSubdirectory("gpm-resume-").FullName;
+        try
+        {
+            using var handler = new ResumeHandler(draft: true, directory);
+            using var client = new GitHubGraphQLClient("token", baseUrl: null, handler, (_, _) => Task.CompletedTask);
+            var importer = CreateImporter(client);
+
+            await Assert.ThrowsAsync<AmbiguousMutationResultException>(
+                () => importer.ImportAsync(CreateSnapshot(draft: true, assignedDraft: false), Target, directory, cancellationToken));
+            var mutationCount = handler.CreateMutationCount;
+
+            await Assert.ThrowsAsync<InvalidOperationException>(
+                () => importer.ImportAsync(CreateSnapshot(draft: false, assignedDraft: false), Target, directory, cancellationToken));
+
+            var log = await ImportLog.LoadAsync(directory, cancellationToken);
+            Assert.NotNull(log);
+            Assert.Single(log.PendingDrafts);
+            Assert.Empty(log.PendingContents);
+            Assert.Equal(mutationCount, handler.CreateMutationCount);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
     private static ItemImporter CreateImporter(GitHubGraphQLClient client) => new(client)
     {
         RepositoryMapping = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
