@@ -64,6 +64,14 @@ public class ItemImporterLogicTests
             var log = new ImportLog { ProjectId = "PVT_abc123" };
             log.Items["0"] = "PVTI_item0";
             log.Items["2"] = "PVTI_item2";
+            log.PendingDrafts["3"] = new PendingDraftOperation
+            {
+                OperationId = "operation-3",
+                AttemptedAt = DateTimeOffset.Parse("2026-07-17T05:00:00Z", System.Globalization.CultureInfo.InvariantCulture),
+                Title = "Pending draft",
+                Body = "Pending body",
+                ExistingItemIds = ["PVTI_existing"],
+            };
             await log.SaveAsync(directory, cancellationToken);
 
             var loaded = await ImportLog.LoadAsync(directory, cancellationToken);
@@ -73,11 +81,52 @@ public class ItemImporterLogicTests
             Assert.Equal(2, loaded.Items.Count);
             Assert.Equal("PVTI_item0", loaded.Items["0"]);
             Assert.Equal("PVTI_item2", loaded.Items["2"]);
+            var pending = Assert.Single(loaded.PendingDrafts);
+            Assert.Equal("3", pending.Key);
+            Assert.Equal("operation-3", pending.Value.OperationId);
+            Assert.Equal(["PVTI_existing"], pending.Value.ExistingItemIds);
         }
         finally
         {
             Directory.Delete(directory, recursive: true);
         }
+    }
+
+    [Fact]
+    public void SelectReconciledDraftItemId_returns_only_new_unimported_match()
+    {
+        var result = ItemImporter.SelectReconciledDraftItemId(
+            "operation",
+            ["before", "already-imported", "created"],
+            ["before"],
+            ["already-imported"]);
+
+        Assert.Equal("created", result);
+    }
+
+    [Fact]
+    public void SelectReconciledDraftItemId_returns_null_when_create_did_not_happen()
+    {
+        var result = ItemImporter.SelectReconciledDraftItemId(
+            "operation",
+            ["before"],
+            ["before"],
+            []);
+
+        Assert.Null(result);
+    }
+
+    [Fact]
+    public void SelectReconciledDraftItemId_rejects_multiple_new_matches()
+    {
+        var exception = Assert.Throws<InvalidOperationException>(
+            () => ItemImporter.SelectReconciledDraftItemId(
+                "operation",
+                ["created-1", "created-2"],
+                [],
+                []));
+
+        Assert.Contains("multiple new target items", exception.Message, StringComparison.Ordinal);
     }
 
     [Fact]

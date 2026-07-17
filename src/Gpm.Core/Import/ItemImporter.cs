@@ -78,7 +78,62 @@ public sealed class ItemImporter
             }
 
             OnProgress?.Invoke($"{prefix} Importing {label}...");
-            var itemId = await CreateItemAsync(item, target.ProjectId, label, warnings, cancellationToken).ConfigureAwait(false);
+            string? itemId = null;
+            PendingDraftOperation? pendingDraft = null;
+            if (item is { Type: "DRAFT_ISSUE", Draft: not null })
+            {
+                var body = BuildDraftBody(item.Draft);
+                if (log.PendingDrafts.TryGetValue(key, out pendingDraft))
+                {
+                    if (!string.Equals(pendingDraft.Title, item.Draft.Title, StringComparison.Ordinal)
+                        || !string.Equals(NormalizeDraftBody(pendingDraft.Body), NormalizeDraftBody(body), StringComparison.Ordinal))
+                    {
+                        throw new InvalidOperationException(
+                            $"Pending draft operation '{pendingDraft.OperationId}' no longer matches {label}. Restore the original snapshot or reconcile the target manually.");
+                    }
+
+                    var matchingIds = await FindMatchingDraftItemIdsAsync(
+                        target.ProjectId,
+                        pendingDraft.Title,
+                        pendingDraft.Body,
+                        cancellationToken).ConfigureAwait(false);
+                    itemId = SelectReconciledDraftItemId(
+                        pendingDraft.OperationId,
+                        matchingIds,
+                        pendingDraft.ExistingItemIds,
+                        log.Items.Values);
+                    if (itemId is not null)
+                    {
+                        OnProgress?.Invoke($"{prefix} {label}: reconciled the pending create operation to target item '{itemId}'.");
+                    }
+                }
+                else
+                {
+                    var existingIds = await FindMatchingDraftItemIdsAsync(
+                        target.ProjectId,
+                        item.Draft.Title,
+                        body,
+                        cancellationToken).ConfigureAwait(false);
+                    pendingDraft = new PendingDraftOperation
+                    {
+                        OperationId = Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture),
+                        AttemptedAt = DateTimeOffset.UtcNow,
+                        Title = item.Draft.Title,
+                        Body = body,
+                        ExistingItemIds = [.. existingIds],
+                    };
+                    log.PendingDrafts[key] = pendingDraft;
+                    await log.SaveAsync(logDirectory, cancellationToken).ConfigureAwait(false);
+                }
+            }
+
+            itemId ??= await CreateItemAsync(
+                item,
+                target.ProjectId,
+                label,
+                warnings,
+                pendingDraft?.OperationId,
+                cancellationToken).ConfigureAwait(false);
             if (itemId is null)
             {
                 skipped++;
@@ -87,6 +142,7 @@ public sealed class ItemImporter
 
             // Persist the mapping immediately so an interrupted run never duplicates this item.
             log.Items[key] = itemId;
+            log.PendingDrafts.Remove(key);
             await log.SaveAsync(logDirectory, cancellationToken).ConfigureAwait(false);
 
             await ApplyFieldValuesAsync(item, itemId, target, label, warnings, cancellationToken).ConfigureAwait(false);
@@ -125,7 +181,13 @@ public sealed class ItemImporter
         return string.IsNullOrEmpty(draft.Body) ? note : note + "\n\n" + draft.Body;
     }
 
-    private async Task<string?> CreateItemAsync(ItemSnapshot item, string projectId, string label, List<string> warnings, CancellationToken cancellationToken)
+    private async Task<string?> CreateItemAsync(
+        ItemSnapshot item,
+        string projectId,
+        string label,
+        List<string> warnings,
+        string? clientMutationId,
+        CancellationToken cancellationToken)
     {
         switch (item.Type)
         {
@@ -133,7 +195,7 @@ public sealed class ItemImporter
                 return await CreateContentItemAsync(item, projectId, label, warnings, cancellationToken).ConfigureAwait(false);
 
             case "DRAFT_ISSUE" when item.Draft is not null:
-                return await CreateDraftItemAsync(item.Draft, projectId, warnings, cancellationToken).ConfigureAwait(false);
+                return await CreateDraftItemAsync(item.Draft, projectId, warnings, clientMutationId, cancellationToken).ConfigureAwait(false);
 
             default:
                 Warn(warnings, $"{label}: unsupported or incomplete item (type '{item.Type}'); skipping.");
@@ -188,7 +250,12 @@ public sealed class ItemImporter
         return data.GetProperty("addProjectV2ItemById").GetProperty("item").GetProperty("id").GetString();
     }
 
-    private async Task<string?> CreateDraftItemAsync(DraftIssueSnapshot draft, string projectId, List<string> warnings, CancellationToken cancellationToken)
+    private async Task<string?> CreateDraftItemAsync(
+        DraftIssueSnapshot draft,
+        string projectId,
+        List<string> warnings,
+        string? clientMutationId,
+        CancellationToken cancellationToken)
     {
         var assigneeIds = await ResolveAssigneeIdsAsync(draft, warnings, cancellationToken).ConfigureAwait(false);
 
@@ -203,10 +270,80 @@ public sealed class ItemImporter
             """,
             new { projectId, title = draft.Title, body = BuildDraftBody(draft), assigneeIds },
             target: $"{projectId}/{draft.Title}",
+            clientMutationId: clientMutationId,
             cancellationToken: cancellationToken).ConfigureAwait(false);
 
         return data.GetProperty("addProjectV2DraftIssue").GetProperty("projectItem").GetProperty("id").GetString();
     }
+
+    private async Task<IReadOnlyList<string>> FindMatchingDraftItemIdsAsync(
+        string projectId,
+        string title,
+        string? body,
+        CancellationToken cancellationToken)
+    {
+        var ids = new List<string>();
+        await foreach (var node in _client.QueryPaginatedAsync(
+            """
+            query($projectId: ID!, $after: String) {
+              node(id: $projectId) {
+                ... on ProjectV2 {
+                  items(first: 100, after: $after, archivedStates: [ARCHIVED, NOT_ARCHIVED]) {
+                    nodes {
+                      id
+                      type
+                      content { ... on DraftIssue { title body } }
+                    }
+                    pageInfo { hasNextPage endCursor }
+                  }
+                }
+              }
+            }
+            """,
+            new { projectId },
+            "node.items",
+            cancellationToken: cancellationToken).ConfigureAwait(false))
+        {
+            var content = node.GetProperty("content");
+            if (!string.Equals(node.GetProperty("type").GetString(), "DRAFT_ISSUE", StringComparison.Ordinal)
+                || content.ValueKind != JsonValueKind.Object
+                || !string.Equals(content.GetProperty("title").GetString(), title, StringComparison.Ordinal)
+                || !string.Equals(
+                    NormalizeDraftBody(content.GetProperty("body").GetString()),
+                    NormalizeDraftBody(body),
+                    StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            if (node.GetProperty("id").GetString() is { } id)
+            {
+                ids.Add(id);
+            }
+        }
+
+        return ids;
+    }
+
+    internal static string? SelectReconciledDraftItemId(
+        string operationId,
+        IEnumerable<string> matchingIds,
+        IEnumerable<string> existingIds,
+        IEnumerable<string> importedIds)
+    {
+        var excluded = new HashSet<string>(existingIds, StringComparer.Ordinal);
+        excluded.UnionWith(importedIds);
+        var candidates = matchingIds.Where(id => !excluded.Contains(id)).Distinct(StringComparer.Ordinal).ToArray();
+        return candidates.Length switch
+        {
+            0 => null,
+            1 => candidates[0],
+            _ => throw new InvalidOperationException(
+                $"Pending draft operation '{operationId}' matches multiple new target items. Reconcile the target manually before resuming."),
+        };
+    }
+
+    private static string NormalizeDraftBody(string? body) => body ?? string.Empty;
 
     private async Task<string[]> ResolveAssigneeIdsAsync(DraftIssueSnapshot draft, List<string> warnings, CancellationToken cancellationToken)
     {

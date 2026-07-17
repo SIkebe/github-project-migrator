@@ -89,12 +89,13 @@ public sealed class GitHubGraphQLClient : IDisposable
         object? variables = null,
         MutationRetryPolicy retryPolicy = MutationRetryPolicy.Create,
         string? target = null,
+        string? clientMutationId = null,
         CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(operationName);
         ArgumentException.ThrowIfNullOrWhiteSpace(mutation);
 
-        var clientMutationId = Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture);
+        clientMutationId ??= Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture);
         var variableMap = ToVariableMap(variables);
         variableMap["clientMutationId"] = clientMutationId;
         var payload = JsonSerializer.Serialize(new { query = mutation, variables = variableMap });
@@ -115,7 +116,27 @@ public sealed class GitHubGraphQLClient : IDisposable
 
             if (!document.RootElement.TryGetProperty("errors", out var errors))
             {
-                return document.RootElement.GetProperty("data").Clone();
+                if (document.RootElement.TryGetProperty("data", out var data)
+                    && data.ValueKind == JsonValueKind.Object
+                    && (mutation is null
+                        || (data.TryGetProperty(mutation.OperationName, out var result)
+                            && result.ValueKind == JsonValueKind.Object
+                            && result.EnumerateObject().Any())))
+                {
+                    return data.Clone();
+                }
+
+                if (mutation is { RetryPolicy: MutationRetryPolicy.Create })
+                {
+                    throw CreateAmbiguousMutationException(
+                        mutation,
+                        "GitHub returned a success response without the expected mutation result.");
+                }
+
+                throw new GitHubGraphQLException(
+                    mutation is null
+                        ? "GraphQL success response did not contain an object-valued data property."
+                        : $"GraphQL success response did not contain the expected '{mutation.OperationName}' result.");
             }
 
             var errorsJson = errors.GetRawText();

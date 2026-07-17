@@ -16,6 +16,7 @@ public sealed class AmbiguousMutationResultException : GitHubGraphQLException
         : base(
             $"Mutation result is ambiguous. Automatic retry was stopped to avoid duplicates. "
             + $"Operation: {operationName}. Client mutation ID: {clientMutationId}. "
+            + $"Attempted at: {attemptedAt:O}. "
             + $"Target: {target ?? "(not specified)"}. "
             + $"Recovery: inspect the target state, then rerun with the same snapshot and import log. Detail: {detail}",
             innerException!)

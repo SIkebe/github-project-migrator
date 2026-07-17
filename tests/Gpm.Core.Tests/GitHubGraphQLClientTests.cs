@@ -296,6 +296,26 @@ public class GitHubGraphQLClientTests
         Assert.Single(handler.RequestBodies);
     }
 
+    [Theory]
+    [InlineData("""{"data":null}""")]
+    [InlineData("""{"data":{}}""")]
+    [InlineData("""{"data":{"createThing":null}}""")]
+    [InlineData("""{"data":{"createThing":{}}}""")]
+    public async Task Create_mutation_incomplete_success_response_is_ambiguous(string responseBody)
+    {
+        using var handler = new StubHandler(JsonResponse(HttpStatusCode.OK, responseBody));
+        using var client = CreateClient(handler, []);
+
+        var exception = await Assert.ThrowsAsync<AmbiguousMutationResultException>(
+            () => client.MutationAsync(
+                "createThing",
+                "mutation($clientMutationId: String!) { createThing(input: { clientMutationId: $clientMutationId }) { id } }",
+                cancellationToken: TestContext.Current.CancellationToken));
+
+        Assert.Contains(exception.AttemptedAt.ToString("O", System.Globalization.CultureInfo.InvariantCulture), exception.Message, StringComparison.Ordinal);
+        Assert.Single(handler.RequestBodies);
+    }
+
     [Fact]
     public async Task Idempotent_mutation_retries_malformed_success_response()
     {

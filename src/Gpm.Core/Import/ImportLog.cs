@@ -19,6 +19,9 @@ public sealed record ImportLog
     /// <summary>Source item position (as an invariant string) → target item node id.</summary>
     public Dictionary<string, string> Items { get; init; } = new(StringComparer.Ordinal);
 
+    /// <summary>Draft creations persisted before sending so an ambiguous result can be reconciled safely.</summary>
+    public Dictionary<string, PendingDraftOperation> PendingDrafts { get; init; } = new(StringComparer.Ordinal);
+
     /// <summary>Loads the log from <paramref name="directory"/>, or returns null when missing or unreadable.</summary>
     public static async Task<ImportLog?> LoadAsync(string directory, CancellationToken cancellationToken = default)
     {
@@ -60,6 +63,19 @@ public sealed record ImportLog
 
         return path;
     }
+}
+
+public sealed record PendingDraftOperation
+{
+    public required string OperationId { get; init; }
+
+    public required DateTimeOffset AttemptedAt { get; init; }
+
+    public required string Title { get; init; }
+
+    public string? Body { get; init; }
+
+    public required string[] ExistingItemIds { get; init; }
 }
 
 /// <summary>System.Text.Json source-generation context for <see cref="ImportLog"/>.</summary>
