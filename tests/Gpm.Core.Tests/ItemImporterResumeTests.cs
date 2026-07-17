@@ -269,13 +269,14 @@ public class ItemImporterResumeTests
         {
             using var handler = new StageResumeHandler(failedStage: "");
             using var client = new GitHubGraphQLClient("token", baseUrl: null, handler, (_, _) => Task.CompletedTask);
-            var snapshot = CreateStageSnapshot(archived: false, withField: true);
+            var snapshot = CreateStageSnapshot(archived: true, withField: true);
 
             var first = await CreateImporter(client).ImportAsync(snapshot, Target, directory, cancellationToken);
             Assert.Single(first.Warnings);
             var incomplete = await ImportLog.LoadAsync(directory, cancellationToken);
             Assert.True(incomplete!.HasIncompleteItems);
             Assert.NotNull(Assert.Single(incomplete.ItemStates).Value.FieldValuesError);
+            Assert.Equal(0, handler.ArchiveMutationCount);
 
             var targetWithField = Target with
             {
@@ -287,6 +288,7 @@ public class ItemImporterResumeTests
             Assert.Equal(1, resumed.Resumed);
             Assert.Equal(1, handler.CreateMutationCount);
             Assert.Equal(1, handler.FieldMutationCount);
+            Assert.Equal(1, handler.ArchiveMutationCount);
         }
         finally
         {

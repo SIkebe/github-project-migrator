@@ -49,9 +49,20 @@ public sealed class FixtureProjectBuilder
             || itemLog is { PendingContents.Count: > 0 }
             || itemLog is { HasIncompleteItems: true };
 
+        if (itemLog is not null
+            && (existing is null || !string.Equals(existing.Id, itemLog.ProjectId, StringComparison.Ordinal)))
+        {
+            throw new InvalidOperationException(
+                $"{ImportLog.FileName} targets project '{itemLog.ProjectId}', but that fixture project was not found.");
+        }
+
         var viewerLogin = await _graphQl.GetViewerLoginAsync(cancellationToken).ConfigureAwait(false);
         var repositoryFullName = $"{organization}/{repositoryName}";
-        var pullRequestNumber = await EnsureRepositoryAsync(organization, repositoryName, cancellationToken).ConfigureAwait(false);
+        var pullRequestNumber = itemLog is null
+            ? await EnsureRepositoryAsync(organization, repositoryName, cancellationToken).ConfigureAwait(false)
+            : await FindOpenFixturePullRequestNumberAsync(repositoryFullName, cancellationToken).ConfigureAwait(false)
+                ?? throw new InvalidOperationException(
+                    $"The fixture pull request in '{repositoryFullName}' was not found; refusing to mutate fixtures for an existing import log.");
 
         var snapshot = CreateSnapshot(title, repositoryFullName, viewerLogin, pullRequestNumber);
         if (itemLog is not null)
@@ -63,11 +74,6 @@ public sealed class FixtureProjectBuilder
             {
                 throw new InvalidOperationException(
                     $"{ImportLog.FileName} in '{operationDirectory}' belongs to a different fixture snapshot.");
-            }
-            if (existing is null || !string.Equals(existing.Id, itemLog.ProjectId, StringComparison.Ordinal))
-            {
-                throw new InvalidOperationException(
-                    $"{ImportLog.FileName} targets project '{itemLog.ProjectId}', but that fixture project was not found.");
             }
         }
 
@@ -196,13 +202,9 @@ public sealed class FixtureProjectBuilder
     private async Task<int> EnsurePullRequestAsync(string repositoryFullName, CancellationToken cancellationToken)
     {
         var branchName = "fixture-pr-branch";
-        var owner = repositoryFullName[..repositoryFullName.IndexOf('/', StringComparison.Ordinal)];
-        var head = Uri.EscapeDataString($"{owner}:{branchName}");
-        var pulls = await _rest.GetAsync($"repos/{repositoryFullName}/pulls?state=open&head={head}&per_page=1", cancellationToken).ConfigureAwait(false);
-        var firstOpen = pulls?.EnumerateArray().FirstOrDefault();
-        if (firstOpen is { ValueKind: JsonValueKind.Object } openPullRequest)
+        if (await FindOpenFixturePullRequestNumberAsync(repositoryFullName, cancellationToken).ConfigureAwait(false) is { } existingNumber)
         {
-            return openPullRequest.GetProperty("number").GetInt32();
+            return existingNumber;
         }
 
         var repository = await _rest.GetAsync($"repos/{repositoryFullName}", cancellationToken).ConfigureAwait(false)
@@ -244,9 +246,25 @@ public sealed class FixtureProjectBuilder
         return number;
     }
 
+    private async Task<int?> FindOpenFixturePullRequestNumberAsync(
+        string repositoryFullName,
+        CancellationToken cancellationToken)
+    {
+        const string branchName = "fixture-pr-branch";
+        var owner = repositoryFullName[..repositoryFullName.IndexOf('/', StringComparison.Ordinal)];
+        var head = Uri.EscapeDataString($"{owner}:{branchName}");
+        var pulls = await _rest.GetAsync(
+            $"repos/{repositoryFullName}/pulls?state=open&head={head}&per_page=1",
+            cancellationToken).ConfigureAwait(false);
+        var firstOpen = pulls?.EnumerateArray().FirstOrDefault();
+        return firstOpen is { ValueKind: JsonValueKind.Object } openPullRequest
+            ? openPullRequest.GetProperty("number").GetInt32()
+            : null;
+    }
+
     private static ProjectSnapshot CreateSnapshot(string title, string repositoryFullName, string viewerLogin, int pullRequestNumber)
     {
-        var today = DateTime.UtcNow.Date;
+        var today = new DateTime(2026, 1, 1);
         var sprint0Start = today.AddDays(-28).ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
         var sprint1Start = today.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
         var sprint2Start = today.AddDays(14).ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);

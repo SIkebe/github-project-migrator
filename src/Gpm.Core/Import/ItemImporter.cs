@@ -77,9 +77,14 @@ public sealed class ItemImporter
             var item = items[index];
             var key = item.Position.ToString(CultureInfo.InvariantCulture);
             var stateKey = BuildItemStateKey(item);
-            var targetContentIdentity = GetTargetContentIdentity(item);
             var label = DescribeItem(item);
             var prefix = string.Create(CultureInfo.InvariantCulture, $"[{index + 1}/{total}]");
+            IReadOnlyList<string>? draftAssigneeIds = null;
+            if (item is { Type: "DRAFT_ISSUE", Draft: not null })
+            {
+                draftAssigneeIds = await ResolveAssigneeIdsAsync(item.Draft, warnings, cancellationToken).ConfigureAwait(false);
+            }
+            var targetContentIdentity = GetTargetContentIdentity(item, draftAssigneeIds);
 
             if (log.ItemStates.TryGetValue(stateKey, out var existingState)
                 && !string.Equals(existingState.TargetContentIdentity, targetContentIdentity, StringComparison.Ordinal))
@@ -125,7 +130,7 @@ public sealed class ItemImporter
                 if (itemId is null && item is { Type: "DRAFT_ISSUE", Draft: not null })
                 {
                     var body = BuildDraftBody(item.Draft);
-                    var assigneeIds = await ResolveAssigneeIdsAsync(item.Draft, warnings, cancellationToken).ConfigureAwait(false);
+                    var assigneeIds = draftAssigneeIds ?? [];
                     if (log.PendingDrafts.TryGetValue(key, out pendingDraft))
                     {
                         if (!string.Equals(pendingDraft.Title, item.Draft.Title, StringComparison.Ordinal)
@@ -797,7 +802,10 @@ public sealed class ItemImporter
         foreach (var item in items)
         {
             var stateKey = BuildItemStateKey(item);
-            if (!log.ItemStates.TryGetValue(stateKey, out var state) || state.ArchiveApplied)
+            if (!log.ItemStates.TryGetValue(stateKey, out var state)
+                || state.ArchiveApplied
+                || !state.FieldValuesApplied
+                || !state.PositionApplied)
             {
                 continue;
             }
@@ -878,8 +886,13 @@ public sealed class ItemImporter
         return string.Create(CultureInfo.InvariantCulture, $"{identity}:position:{item.Position}");
     }
 
-    private string? GetTargetContentIdentity(ItemSnapshot item)
+    private string? GetTargetContentIdentity(ItemSnapshot item, IReadOnlyList<string>? draftAssigneeIds)
     {
+        if (item.Type == "DRAFT_ISSUE")
+        {
+            return "DRAFT_ISSUE:assignees:" + string.Join(",", draftAssigneeIds ?? []);
+        }
+
         if (item.Type is not ("ISSUE" or "PULL_REQUEST")
             || item.Repository is null
             || item.Number is null)
