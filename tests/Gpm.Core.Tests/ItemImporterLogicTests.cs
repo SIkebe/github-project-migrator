@@ -271,6 +271,14 @@ public class ItemImporterLogicTests
             await File.WriteAllTextAsync(Path.Combine(directory, ImportLog.FileName), "{ not json", cancellationToken);
             await Assert.ThrowsAsync<System.Text.Json.JsonException>(
                 () => ImportLog.LoadAsync(directory, cancellationToken));
+
+            await File.WriteAllTextAsync(
+                Path.Combine(directory, ImportLog.FileName),
+                """{"schemaVersion":2,"projectId":"PVT_target","sourceSnapshotFingerprint":"fingerprint","itemStates":{"item":{"targetItemId":null}}}""",
+                cancellationToken);
+            var malformed = await Assert.ThrowsAsync<InvalidDataException>(
+                () => ImportLog.LoadAsync(directory, cancellationToken));
+            Assert.Contains("malformed item state", malformed.Message, StringComparison.Ordinal);
         }
         finally
         {

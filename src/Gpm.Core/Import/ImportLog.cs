@@ -71,6 +71,17 @@ public sealed record ImportLog
             {
                 throw new InvalidDataException($"{FileName} does not contain a source snapshot fingerprint and cannot be resumed safely.");
             }
+            if (log.Items is null
+                || log.ItemStates is null
+                || log.PendingDrafts is null
+                || log.PendingContents is null
+                || log.ItemStates.Any(pair =>
+                    string.IsNullOrWhiteSpace(pair.Key)
+                    || pair.Value is null
+                    || string.IsNullOrWhiteSpace(pair.Value.TargetItemId)))
+            {
+                throw new InvalidDataException($"{FileName} contains malformed item state and cannot be resumed safely.");
+            }
 
             return log;
         }

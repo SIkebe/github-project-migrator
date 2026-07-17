@@ -170,26 +170,51 @@ public class CliImportTests
     {
         var cancellationToken = TestContext.Current.CancellationToken;
         var directory = Path.Combine(Path.GetTempPath(), "gpm-cli-resume-" + Guid.NewGuid().ToString("N"));
-        var snapshot = MinimalSnapshot();
+        var snapshot = MinimalSnapshot() with
+        {
+            Items =
+            [
+                new ItemSnapshot
+                {
+                    Type = "DRAFT_ISSUE",
+                    Position = 0,
+                    IsArchived = false,
+                    Draft = new DraftIssueSnapshot { Title = "Interrupted", Assignees = [] },
+                    FieldValues = [],
+                },
+            ],
+        };
         await SnapshotFile.SaveAsync(snapshot, directory, cancellationToken);
         var log = new Gpm.Core.Import.ImportLog
         {
             ProjectId = "PVT_existing",
             SourceSnapshotFingerprint = Gpm.Core.Import.ImportLog.ComputeSnapshotFingerprint(snapshot),
         };
-        log.ItemStates["interrupted"] = new Gpm.Core.Import.ImportItemState { TargetItemId = "PVTI_interrupted" };
+        log.Items["0"] = "PVTI_interrupted";
+        log.ItemStates["DRAFT_ISSUE:Interrupted::::position:0"] = new Gpm.Core.Import.ImportItemState
+        {
+            TargetItemId = "PVTI_interrupted",
+            TargetContentIdentity = "DRAFT_ISSUE:assignees:",
+        };
         await log.SaveAsync(directory, cancellationToken);
 
         using var server = new GraphQlStubServer(
             ExistingProjectResponse,
             UpdateProjectResponse,
-            EmptyFieldsResponse);
+            EmptyFieldsResponse,
+            PositionResponse);
         try
         {
             var result = await RunCliAsync(directory, server);
 
             Assert.Equal(0, result.ExitCode);
             Assert.Contains("result=updated project=42", result.Output, StringComparison.Ordinal);
+            Assert.Contains("resumed=1", result.Output, StringComparison.Ordinal);
+            var completed = await Gpm.Core.Import.ImportLog.LoadAsync(directory, cancellationToken);
+            var state = Assert.Single(completed!.ItemStates).Value;
+            Assert.True(state.FieldValuesApplied);
+            Assert.True(state.PositionApplied);
+            Assert.True(state.ArchiveApplied);
         }
         finally
         {
@@ -370,6 +395,9 @@ public class CliImportTests
 
     private const string EmptyFieldsResponse =
         """{"data":{"node":{"fields":{"nodes":[]}}}}""";
+
+    private const string PositionResponse =
+        """{"data":{"updateProjectV2ItemPosition":{"clientMutationId":"position"}}}""";
 
     private const string VerifyProjectResponse =
         """
