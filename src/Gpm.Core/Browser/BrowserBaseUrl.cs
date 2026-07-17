@@ -35,7 +35,7 @@ public static class BrowserBaseUrl
     private static Uri FromApiUrl(Uri apiBaseUrl)
     {
         ArgumentNullException.ThrowIfNull(apiBaseUrl);
-        if (apiBaseUrl.Scheme != Uri.UriSchemeHttps)
+        if (apiBaseUrl.Scheme != Uri.UriSchemeHttps && !apiBaseUrl.IsLoopback)
         {
             throw new ArgumentException(
                 $"API base URL '{apiBaseUrl.AbsoluteUri}' must use HTTPS.",
@@ -44,7 +44,11 @@ public static class BrowserBaseUrl
 
         var host = apiBaseUrl.Host;
         string webHost;
-        if (string.Equals(host, "api.github.com", StringComparison.OrdinalIgnoreCase))
+        if (apiBaseUrl.IsLoopback)
+        {
+            webHost = host;
+        }
+        else if (string.Equals(host, "api.github.com", StringComparison.OrdinalIgnoreCase))
         {
             webHost = "github.com";
         }

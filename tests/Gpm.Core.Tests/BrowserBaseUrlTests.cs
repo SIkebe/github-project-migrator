@@ -52,6 +52,26 @@ public class BrowserBaseUrlTests
     }
 
     [Theory]
+    [InlineData("http://localhost:8080/graphql", null, "http://localhost:8080")]
+    [InlineData("http://127.0.0.1:8080/graphql", "http://127.0.0.1:8080/", "http://127.0.0.1:8080")]
+    public void Resolve_allows_matching_loopback_api_and_browser_origins(
+        string apiUrl,
+        string? browserUrl,
+        string expected)
+    {
+        Assert.Equal(expected, BrowserBaseUrl.Resolve(new Uri(apiUrl), browserUrl));
+    }
+
+    [Fact]
+    public void Resolve_rejects_mismatched_loopback_ports()
+    {
+        Assert.Throws<ArgumentException>(() =>
+            BrowserBaseUrl.Resolve(
+                new Uri("http://localhost:8080/graphql"),
+                "http://localhost:3000"));
+    }
+
+    [Theory]
     [InlineData("https://api.tenant.ghe.com/graphql", "https://other.ghe.com")]
     [InlineData("https://api.github.com/graphql", "https://tenant.ghe.com")]
     public void Resolve_rejects_mismatched_api_and_web_urls(string apiUrl, string webUrl)
