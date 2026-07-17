@@ -112,15 +112,15 @@ public sealed class BrowserSession : IAsyncDisposable
         ArgumentException.ThrowIfNullOrWhiteSpace(url);
         var page = await GetPageAsync(cancellationToken).ConfigureAwait(false);
         await page.GotoAsync(url).ConfigureAwait(false);
-        EnsureSignedIn(page);
         EnsureExpectedHost(page);
+        EnsureSignedIn(page);
 
         if (await Sel.SsoHeading(page).CountAsync().ConfigureAwait(false) > 0)
         {
             await Sel.SsoContinueButton(page).First.ClickAsync().ConfigureAwait(false);
             await page.WaitForURLAsync(url, new() { Timeout = 30_000 }).ConfigureAwait(false);
-            EnsureSignedIn(page);
             EnsureExpectedHost(page);
+            EnsureSignedIn(page);
         }
 
         return page;
