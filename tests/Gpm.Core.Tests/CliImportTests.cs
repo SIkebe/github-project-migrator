@@ -1,12 +1,11 @@
+using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
-using System.Reflection;
 using System.Text;
 using Gpm.Core.Snapshot;
 
 namespace Gpm.Core.Tests;
 
-[Collection("Console")]
 public class CliImportTests
 {
     [Fact]
@@ -93,44 +92,38 @@ public class CliImportTests
         GraphQlStubServer server,
         params string[] additionalArguments)
     {
-        var originalOut = Console.Out;
-        var originalError = Console.Error;
-        using var output = new StringWriter();
-        using var error = new StringWriter();
-
-        try
+        var startInfo = new ProcessStartInfo("dotnet")
         {
-            Console.SetOut(output);
-            Console.SetError(error);
-
-            var arguments = new List<string>
-            {
-                "import",
-                "--org", "target",
-                "--in", directory,
-                "--token", "dummy-token",
-                "--target-base-url", server.GraphQlUrl,
-                "--no-update-check",
-            };
-            arguments.AddRange(additionalArguments);
-
-            var entryPoint = Assembly.Load("gpm").EntryPoint
-                ?? throw new InvalidOperationException("The gpm entry point was not found.");
-            var invocation = entryPoint.Invoke(null, [arguments.ToArray()]);
-            var exitCode = invocation switch
-            {
-                int code => code,
-                Task<int> task => await task,
-                _ => throw new InvalidOperationException("The gpm entry point returned an unexpected result."),
-            };
-
-            return (exitCode, output.ToString(), error.ToString());
-        }
-        finally
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+        };
+        startInfo.ArgumentList.Add(Path.Combine(AppContext.BaseDirectory, "gpm.dll"));
+        foreach (var argument in new[]
         {
-            Console.SetOut(originalOut);
-            Console.SetError(originalError);
+            "import",
+            "--org", "target",
+            "--in", directory,
+            "--token", "dummy-token",
+            "--target-base-url", server.GraphQlUrl,
+            "--no-update-check",
+        })
+        {
+            startInfo.ArgumentList.Add(argument);
         }
+
+        foreach (var argument in additionalArguments)
+        {
+            startInfo.ArgumentList.Add(argument);
+        }
+
+        using var process = Process.Start(startInfo)
+            ?? throw new InvalidOperationException("Failed to start the gpm process.");
+        var output = process.StandardOutput.ReadToEndAsync(TestContext.Current.CancellationToken);
+        var error = process.StandardError.ReadToEndAsync(TestContext.Current.CancellationToken);
+        await process.WaitForExitAsync(TestContext.Current.CancellationToken);
+
+        return (process.ExitCode, await output, await error);
     }
 
     private static ProjectSnapshot MinimalSnapshot() => new()
@@ -279,6 +272,3 @@ public class CliImportTests
         }
     }
 }
-
-[CollectionDefinition("Console", DisableParallelization = true)]
-public sealed class ConsoleTestGroup;
