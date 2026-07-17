@@ -482,6 +482,67 @@ public class ProjectVerifierTests
     }
 
     [Fact]
+    public void Unordered_ui_selections_and_repository_casing_do_not_cause_drift()
+    {
+        var baseline = BuildSnapshot();
+        var source = baseline with
+        {
+            Views =
+            [
+                baseline.Views[0] with
+                {
+                    Ui = new ViewUiSnapshot
+                    {
+                        FieldSum = ["Count", "Estimate"],
+                        Roadmap = new RoadmapSettingsSnapshot { Markers = ["Milestone", "Date"] },
+                    },
+                },
+            ],
+            Workflows =
+            [
+                baseline.Workflows[0] with
+                {
+                    Ui = new WorkflowUiSnapshot
+                    {
+                        ContentTypes = ["ISSUE", "PULL_REQUEST"],
+                        Repository = "TargetOrg/Repo",
+                    },
+                },
+            ],
+        };
+        var target = source with
+        {
+            Views =
+            [
+                source.Views[0] with
+                {
+                    Ui = source.Views[0].Ui! with
+                    {
+                        FieldSum = ["Estimate", "Count"],
+                        Roadmap = source.Views[0].Ui!.Roadmap! with { Markers = ["Date", "Milestone"] },
+                    },
+                },
+            ],
+            Workflows =
+            [
+                source.Workflows[0] with
+                {
+                    Ui = source.Workflows[0].Ui! with
+                    {
+                        ContentTypes = ["PULL_REQUEST", "ISSUE"],
+                        Repository = "targetorg/repo",
+                    },
+                },
+            ],
+        };
+
+        var report = ProjectVerifier.Compare(source, target);
+
+        Assert.DoesNotContain(report.Differences, difference =>
+            difference.Category is "View" or "Workflow");
+    }
+
+    [Fact]
     public void Duplicate_workflow_names_are_compared_as_setting_multisets()
     {
         var baseline = BuildSnapshot();

@@ -625,7 +625,8 @@ public sealed class ProjectVerifier
     }
 
     private static bool UiListEquals(IReadOnlyList<string>? source, IReadOnlyList<string>? target)
-        => (source ?? []).SequenceEqual(target ?? [], StringComparer.Ordinal);
+        => (source ?? []).Order(StringComparer.Ordinal)
+            .SequenceEqual((target ?? []).Order(StringComparer.Ordinal), StringComparer.Ordinal);
 
     private static string JoinUi(IReadOnlyList<string>? values) => string.Join(", ", values ?? []);
 
@@ -701,7 +702,7 @@ public sealed class ProjectVerifier
             && UiListEquals(source.Ui.ContentTypes, target.Ui.ContentTypes)
             && string.Equals(source.Ui.StatusValue, target.Ui.StatusValue, StringComparison.Ordinal)
             && string.Equals(source.Ui.Filter, target.Ui.Filter, StringComparison.Ordinal)
-            && string.Equals(source.Ui.Repository, target.Ui.Repository, StringComparison.Ordinal);
+            && string.Equals(source.Ui.Repository, target.Ui.Repository, StringComparison.OrdinalIgnoreCase);
 
     private static void CompareWorkflowUi(string name, WorkflowUiSnapshot source, WorkflowUiSnapshot target, List<VerifyDifference> differences)
     {
@@ -713,7 +714,11 @@ public sealed class ProjectVerifier
 
         CompareWorkflowUiValue(differences, name, "status value", source.StatusValue, target.StatusValue);
         CompareWorkflowUiValue(differences, name, "filter", source.Filter, target.Filter);
-        CompareWorkflowUiValue(differences, name, "repository", source.Repository, target.Repository);
+        if (!string.Equals(source.Repository, target.Repository, StringComparison.OrdinalIgnoreCase))
+        {
+            AddError(differences, WorkflowCategory,
+                $"workflow '{name}': repository mismatch (source '{source.Repository ?? "none"}', target '{target.Repository ?? "none"}')");
+        }
     }
 
     private static void CompareWorkflowUiValue(List<VerifyDifference> differences, string workflowName, string setting, string? source, string? target)
