@@ -74,6 +74,7 @@ public class CollaboratorImportTests
         var importer = new ProjectImporter(client)
         {
             UserMapping = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase) { ["source-owner"] = viewerLogin },
+            OperationLogDirectory = IntegrationTestSettings.CreateOperationLogDirectory(),
         };
 
         string? projectId = null;

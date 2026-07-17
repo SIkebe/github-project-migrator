@@ -89,7 +89,11 @@ public class UserProjectTests
             sourceProjectId = null;
 
             // Import the snapshot back as a user project and read it back.
-            var importer = new ProjectImporter(client) { OwnerType = ProjectOwnerType.User };
+            var importer = new ProjectImporter(client)
+            {
+                OwnerType = ProjectOwnerType.User,
+                OperationLogDirectory = IntegrationTestSettings.CreateOperationLogDirectory(),
+            };
             var result = await importer.ImportAsync(snapshot, viewerLogin, cancellationToken);
             importedProjectId = result.ProjectId;
 

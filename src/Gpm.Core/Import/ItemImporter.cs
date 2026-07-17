@@ -51,6 +51,12 @@ public sealed class ItemImporter
         var log = await ImportLog.LoadAsync(logDirectory, cancellationToken).ConfigureAwait(false);
         if (log is not null && !string.Equals(log.ProjectId, target.ProjectId, StringComparison.Ordinal))
         {
+            if (log.PendingDrafts.Count > 0 || log.PendingContents.Count > 0)
+            {
+                throw new InvalidOperationException(
+                    $"{ImportLog.FileName} in '{logDirectory}' contains pending operations for project '{log.ProjectId}'. Resume that project or reconcile it manually before importing into project '{target.ProjectId}'.");
+            }
+
             OnProgress?.Invoke($"warning: {ImportLog.FileName} in '{logDirectory}' belongs to a different project; starting a fresh log.");
             log = null;
         }
@@ -78,19 +84,105 @@ public sealed class ItemImporter
             }
 
             OnProgress?.Invoke($"{prefix} Importing {label}...");
-            var itemId = await CreateItemAsync(item, target.ProjectId, label, warnings, cancellationToken).ConfigureAwait(false);
-            if (itemId is null)
+            var hasPendingDraft = log.PendingDrafts.ContainsKey(key);
+            var hasPendingContent = log.PendingContents.ContainsKey(key);
+            var expectsDraft = item is { Type: "DRAFT_ISSUE", Draft: not null };
+            var expectsContent = item.Type is "ISSUE" or "PULL_REQUEST";
+            if ((hasPendingDraft && !expectsDraft)
+                || (hasPendingContent && !expectsContent)
+                || (hasPendingDraft && hasPendingContent))
             {
-                skipped++;
-                continue;
+                throw new InvalidOperationException(
+                    $"Pending operation at item position {key} does not match the current snapshot item type '{item.Type}'. Restore the original snapshot or reconcile the target manually.");
             }
 
-            // Persist the mapping immediately so an interrupted run never duplicates this item.
-            log.Items[key] = itemId;
-            await log.SaveAsync(logDirectory, cancellationToken).ConfigureAwait(false);
+            var resumedPendingOperation = hasPendingDraft || hasPendingContent;
+            try
+            {
+                string? itemId = null;
+                PendingDraftOperation? pendingDraft = null;
+                if (item is { Type: "DRAFT_ISSUE", Draft: not null })
+                {
+                    var body = BuildDraftBody(item.Draft);
+                    var assigneeIds = await ResolveAssigneeIdsAsync(item.Draft, warnings, cancellationToken).ConfigureAwait(false);
+                    if (log.PendingDrafts.TryGetValue(key, out pendingDraft))
+                    {
+                        if (!string.Equals(pendingDraft.Title, item.Draft.Title, StringComparison.Ordinal)
+                            || !string.Equals(NormalizeDraftBody(pendingDraft.Body), NormalizeDraftBody(body), StringComparison.Ordinal)
+                            || pendingDraft.AssigneeIds is null
+                            || !pendingDraft.AssigneeIds.SequenceEqual(assigneeIds, StringComparer.Ordinal))
+                        {
+                            throw new InvalidOperationException(
+                                $"Pending draft operation '{pendingDraft.OperationId}' no longer matches {label}. Restore the original snapshot or reconcile the target manually.");
+                        }
 
-            await ApplyFieldValuesAsync(item, itemId, target, label, warnings, cancellationToken).ConfigureAwait(false);
-            created++;
+                        itemId = await ReconcilePendingDraftAsync(
+                            target.ProjectId,
+                            pendingDraft,
+                            log.Items.Values,
+                            cancellationToken).ConfigureAwait(false);
+                        OnProgress?.Invoke($"{prefix} {label}: reconciled the pending create operation to target item '{itemId}'.");
+                    }
+                    else
+                    {
+                        var existingIds = await FindMatchingDraftItemIdsAsync(
+                            target.ProjectId,
+                            item.Draft.Title,
+                            body,
+                            cancellationToken).ConfigureAwait(false);
+                        pendingDraft = new PendingDraftOperation
+                        {
+                            OperationId = Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture),
+                            AttemptedAt = DateTimeOffset.UtcNow,
+                            Title = item.Draft.Title,
+                            Body = body,
+                            AssigneeIds = [.. assigneeIds],
+                            ExistingItemIds = [.. existingIds],
+                        };
+                        log.PendingDrafts[key] = pendingDraft;
+                        await log.SaveAsync(logDirectory, cancellationToken).ConfigureAwait(false);
+                    }
+                }
+
+                itemId ??= await CreateItemAsync(
+                    item,
+                    target.ProjectId,
+                    label,
+                    warnings,
+                    pendingDraft?.OperationId,
+                    pendingDraft?.AssigneeIds,
+                    log,
+                    key,
+                    logDirectory,
+                    cancellationToken).ConfigureAwait(false);
+                if (itemId is null)
+                {
+                    skipped++;
+                    continue;
+                }
+
+                // Persist the mapping immediately so an interrupted run never duplicates this item.
+                log.Items[key] = itemId;
+                log.PendingDrafts.Remove(key);
+                log.PendingContents.Remove(key);
+                await log.SaveAsync(logDirectory, cancellationToken).ConfigureAwait(false);
+
+                await ApplyFieldValuesAsync(item, itemId, target, label, warnings, cancellationToken).ConfigureAwait(false);
+                created++;
+            }
+            catch (AmbiguousMutationResultException)
+            {
+                throw;
+            }
+            catch when (!resumedPendingOperation)
+            {
+                if (log.PendingDrafts.Remove(key) | log.PendingContents.Remove(key))
+                {
+                    await log.SaveAsync(logDirectory, CancellationToken.None).ConfigureAwait(false);
+                }
+
+                throw;
+            }
         }
 
         await ApplyPositionsAsync(items, target.ProjectId, log, cancellationToken).ConfigureAwait(false);
@@ -125,15 +217,33 @@ public sealed class ItemImporter
         return string.IsNullOrEmpty(draft.Body) ? note : note + "\n\n" + draft.Body;
     }
 
-    private async Task<string?> CreateItemAsync(ItemSnapshot item, string projectId, string label, List<string> warnings, CancellationToken cancellationToken)
+    private async Task<string?> CreateItemAsync(
+        ItemSnapshot item,
+        string projectId,
+        string label,
+        List<string> warnings,
+        string? clientMutationId,
+        IReadOnlyList<string>? draftAssigneeIds,
+        ImportLog log,
+        string key,
+        string logDirectory,
+        CancellationToken cancellationToken)
     {
         switch (item.Type)
         {
             case "ISSUE" or "PULL_REQUEST":
-                return await CreateContentItemAsync(item, projectId, label, warnings, cancellationToken).ConfigureAwait(false);
+                return await CreateContentItemAsync(
+                    item,
+                    projectId,
+                    label,
+                    warnings,
+                    log,
+                    key,
+                    logDirectory,
+                    cancellationToken).ConfigureAwait(false);
 
             case "DRAFT_ISSUE" when item.Draft is not null:
-                return await CreateDraftItemAsync(item.Draft, projectId, warnings, cancellationToken).ConfigureAwait(false);
+                return await CreateDraftItemAsync(item.Draft, projectId, draftAssigneeIds ?? [], clientMutationId, cancellationToken).ConfigureAwait(false);
 
             default:
                 Warn(warnings, $"{label}: unsupported or incomplete item (type '{item.Type}'); skipping.");
@@ -141,16 +251,37 @@ public sealed class ItemImporter
         }
     }
 
-    private async Task<string?> CreateContentItemAsync(ItemSnapshot item, string projectId, string label, List<string> warnings, CancellationToken cancellationToken)
+    private async Task<string?> CreateContentItemAsync(
+        ItemSnapshot item,
+        string projectId,
+        string label,
+        List<string> warnings,
+        ImportLog log,
+        string key,
+        string logDirectory,
+        CancellationToken cancellationToken)
     {
+        var hasPendingOperation = log.PendingContents.TryGetValue(key, out var existingPending);
         if (item.Repository is null || item.Number is null)
         {
+            if (hasPendingOperation)
+            {
+                throw new InvalidOperationException(
+                    $"Pending content operation '{existingPending!.OperationId}' no longer has a repository and item number in the snapshot. Restore the original snapshot or reconcile the target manually.");
+            }
+
             Warn(warnings, $"{label}: snapshot is missing the repository or number; skipping.");
             return null;
         }
 
         if (!RepositoryMapping.TryGetValue(item.Repository, out var targetRepository))
         {
+            if (hasPendingOperation)
+            {
+                throw new InvalidOperationException(
+                    $"Pending content operation '{existingPending!.OperationId}' can no longer resolve repository mapping for '{item.Repository}'. Restore the original mapping or reconcile the target manually.");
+            }
+
             Warn(warnings, $"{label}: no repository mapping for '{item.Repository}'; skipping.");
             return null;
         }
@@ -158,6 +289,12 @@ public sealed class ItemImporter
         var separator = targetRepository.IndexOf('/', StringComparison.Ordinal);
         if (separator <= 0 || separator == targetRepository.Length - 1)
         {
+            if (hasPendingOperation)
+            {
+                throw new InvalidOperationException(
+                    $"Pending content operation '{existingPending!.OperationId}' has invalid repository mapping '{targetRepository}'. Restore the original mapping or reconcile the target manually.");
+            }
+
             Warn(warnings, $"{label}: mapped repository '{targetRepository}' is not in 'owner/name' form; skipping.");
             return null;
         }
@@ -167,42 +304,264 @@ public sealed class ItemImporter
         var contentId = await ResolveIssueOrPullRequestIdAsync(owner, name, item.Number.Value, cancellationToken).ConfigureAwait(false);
         if (contentId is null)
         {
+            if (hasPendingOperation)
+            {
+                throw new InvalidOperationException(
+                    $"Pending content operation '{existingPending!.OperationId}' can no longer resolve '{targetRepository}#{item.Number.Value}'. Restore the original target content or reconcile the target manually.");
+            }
+
             Warn(warnings, string.Create(CultureInfo.InvariantCulture,
                 $"{label}: '{targetRepository}#{item.Number.Value}' was not found in the target; skipping."));
             return null;
         }
 
-        var data = await _client.QueryAsync(
+        PendingContentOperation pending;
+        if (hasPendingOperation)
+        {
+            pending = existingPending!;
+            if (!string.Equals(pending.ContentId, contentId, StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    $"Pending content operation '{pending.OperationId}' no longer matches {label}. Restore the original snapshot or reconcile the target manually.");
+            }
+
+            return await ReconcilePendingContentAsync(
+                projectId,
+                pending,
+                log.Items.Values,
+                cancellationToken).ConfigureAwait(false);
+        }
+
+        var existingIds = await FindContentItemIdsAsync(projectId, contentId, cancellationToken).ConfigureAwait(false);
+        pending = new PendingContentOperation
+        {
+            OperationId = Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture),
+            AttemptedAt = DateTimeOffset.UtcNow,
+            ContentId = contentId,
+            ExistingItemIds = [.. existingIds],
+        };
+        log.PendingContents[key] = pending;
+        await log.SaveAsync(logDirectory, cancellationToken).ConfigureAwait(false);
+
+        var data = await _client.MutationAsync(
+            "addProjectV2ItemById",
             """
-            mutation($projectId: ID!, $contentId: ID!) {
-              addProjectV2ItemById(input: { projectId: $projectId, contentId: $contentId }) {
+            mutation($projectId: ID!, $contentId: ID!, $clientMutationId: String!) {
+              addProjectV2ItemById(input: { projectId: $projectId, contentId: $contentId, clientMutationId: $clientMutationId }) {
                 item { id }
               }
             }
             """,
             new { projectId, contentId },
-            cancellationToken).ConfigureAwait(false);
+            target: $"{projectId}/{contentId}",
+            clientMutationId: pending.OperationId,
+            requiredResultPath: "item.id",
+            cancellationToken: cancellationToken).ConfigureAwait(false);
 
         return data.GetProperty("addProjectV2ItemById").GetProperty("item").GetProperty("id").GetString();
     }
 
-    private async Task<string?> CreateDraftItemAsync(DraftIssueSnapshot draft, string projectId, List<string> warnings, CancellationToken cancellationToken)
+    private async Task<string?> CreateDraftItemAsync(
+        DraftIssueSnapshot draft,
+        string projectId,
+        IReadOnlyList<string> assigneeIds,
+        string? clientMutationId,
+        CancellationToken cancellationToken)
     {
-        var assigneeIds = await ResolveAssigneeIdsAsync(draft, warnings, cancellationToken).ConfigureAwait(false);
-
-        var data = await _client.QueryAsync(
+        var data = await _client.MutationAsync(
+            "addProjectV2DraftIssue",
             """
-            mutation($projectId: ID!, $title: String!, $body: String, $assigneeIds: [ID!]) {
-              addProjectV2DraftIssue(input: { projectId: $projectId, title: $title, body: $body, assigneeIds: $assigneeIds }) {
+            mutation($projectId: ID!, $title: String!, $body: String, $assigneeIds: [ID!], $clientMutationId: String!) {
+              addProjectV2DraftIssue(input: { projectId: $projectId, title: $title, body: $body, assigneeIds: $assigneeIds, clientMutationId: $clientMutationId }) {
                 projectItem { id }
               }
             }
             """,
             new { projectId, title = draft.Title, body = BuildDraftBody(draft), assigneeIds },
-            cancellationToken).ConfigureAwait(false);
+            target: projectId,
+            clientMutationId: clientMutationId,
+            requiredResultPath: "projectItem.id",
+            cancellationToken: cancellationToken).ConfigureAwait(false);
 
         return data.GetProperty("addProjectV2DraftIssue").GetProperty("projectItem").GetProperty("id").GetString();
     }
+
+    private async Task<IReadOnlyList<string>> FindMatchingDraftItemIdsAsync(
+        string projectId,
+        string title,
+        string? body,
+        CancellationToken cancellationToken)
+    {
+        var ids = new List<string>();
+        await foreach (var node in _client.QueryPaginatedAsync(
+            """
+            query($projectId: ID!, $after: String) {
+              node(id: $projectId) {
+                ... on ProjectV2 {
+                  items(first: 100, after: $after, archivedStates: [ARCHIVED, NOT_ARCHIVED]) {
+                    nodes {
+                      id
+                      type
+                      content { ... on DraftIssue { title body } }
+                    }
+                    pageInfo { hasNextPage endCursor }
+                  }
+                }
+              }
+            }
+            """,
+            new { projectId },
+            "node.items",
+            cancellationToken: cancellationToken).ConfigureAwait(false))
+        {
+            var content = node.GetProperty("content");
+            if (!string.Equals(node.GetProperty("type").GetString(), "DRAFT_ISSUE", StringComparison.Ordinal)
+                || content.ValueKind != JsonValueKind.Object
+                || !string.Equals(content.GetProperty("title").GetString(), title, StringComparison.Ordinal)
+                || !string.Equals(
+                    NormalizeDraftBody(content.GetProperty("body").GetString()),
+                    NormalizeDraftBody(body),
+                    StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            if (node.GetProperty("id").GetString() is { } id)
+            {
+                ids.Add(id);
+            }
+        }
+
+        return ids;
+    }
+
+    private async Task<string> ReconcilePendingDraftAsync(
+        string projectId,
+        PendingDraftOperation pending,
+        IEnumerable<string> importedIds,
+        CancellationToken cancellationToken)
+    {
+        for (var attempt = 0; attempt < 3; attempt++)
+        {
+            var matchingIds = await FindMatchingDraftItemIdsAsync(
+                projectId,
+                pending.Title,
+                pending.Body,
+                cancellationToken).ConfigureAwait(false);
+            var itemId = SelectReconciledDraftItemId(
+                pending.OperationId,
+                matchingIds,
+                pending.ExistingItemIds,
+                importedIds);
+            if (itemId is not null)
+            {
+                return itemId;
+            }
+
+            if (attempt < 2)
+            {
+                await Task.Delay(TimeSpan.FromSeconds(Math.Pow(2, attempt)), cancellationToken).ConfigureAwait(false);
+            }
+        }
+
+        throw new InvalidOperationException(
+            $"Pending draft operation '{pending.OperationId}' is not visible in the target after reconciliation polling. Do not resend it until the target state has been reconciled manually.");
+    }
+
+    private async Task<IReadOnlyList<string>> FindContentItemIdsAsync(
+        string projectId,
+        string contentId,
+        CancellationToken cancellationToken)
+    {
+        var ids = new List<string>();
+        await foreach (var node in _client.QueryPaginatedAsync(
+            """
+            query($projectId: ID!, $after: String) {
+              node(id: $projectId) {
+                ... on ProjectV2 {
+                  items(first: 100, after: $after, archivedStates: [ARCHIVED, NOT_ARCHIVED]) {
+                    nodes {
+                      id
+                      content {
+                        ... on Issue { id }
+                        ... on PullRequest { id }
+                      }
+                    }
+                    pageInfo { hasNextPage endCursor }
+                  }
+                }
+              }
+            }
+            """,
+            new { projectId },
+            "node.items",
+            cancellationToken: cancellationToken).ConfigureAwait(false))
+        {
+            var content = node.GetProperty("content");
+            if (content.ValueKind == JsonValueKind.Object
+                && content.TryGetProperty("id", out var targetContentId)
+                && string.Equals(targetContentId.GetString(), contentId, StringComparison.Ordinal)
+                && node.GetProperty("id").GetString() is { } id)
+            {
+                ids.Add(id);
+            }
+        }
+
+        return ids;
+    }
+
+    private async Task<string> ReconcilePendingContentAsync(
+        string projectId,
+        PendingContentOperation pending,
+        IEnumerable<string> importedIds,
+        CancellationToken cancellationToken)
+    {
+        for (var attempt = 0; attempt < 3; attempt++)
+        {
+            var matchingIds = await FindContentItemIdsAsync(projectId, pending.ContentId, cancellationToken).ConfigureAwait(false);
+            var excluded = new HashSet<string>(pending.ExistingItemIds, StringComparer.Ordinal);
+            excluded.UnionWith(importedIds);
+            var candidates = matchingIds.Where(id => !excluded.Contains(id)).Distinct(StringComparer.Ordinal).ToArray();
+            if (candidates.Length == 1)
+            {
+                return candidates[0];
+            }
+
+            if (candidates.Length > 1)
+            {
+                throw new InvalidOperationException(
+                    $"Pending content operation '{pending.OperationId}' matches multiple new target items. Reconcile the target manually before resuming.");
+            }
+
+            if (attempt < 2)
+            {
+                await Task.Delay(TimeSpan.FromSeconds(Math.Pow(2, attempt)), cancellationToken).ConfigureAwait(false);
+            }
+        }
+
+        throw new InvalidOperationException(
+            $"Pending content operation '{pending.OperationId}' is not visible in the target after reconciliation polling. Do not resend it until the target state has been reconciled manually.");
+    }
+
+    internal static string? SelectReconciledDraftItemId(
+        string operationId,
+        IEnumerable<string> matchingIds,
+        IEnumerable<string> existingIds,
+        IEnumerable<string> importedIds)
+    {
+        var excluded = new HashSet<string>(existingIds, StringComparer.Ordinal);
+        excluded.UnionWith(importedIds);
+        var candidates = matchingIds.Where(id => !excluded.Contains(id)).Distinct(StringComparer.Ordinal).ToArray();
+        return candidates.Length switch
+        {
+            0 => null,
+            1 => candidates[0],
+            _ => throw new InvalidOperationException(
+                $"Pending draft operation '{operationId}' matches multiple new target items. Reconcile the target manually before resuming."),
+        };
+    }
+
+    private static string NormalizeDraftBody(string? body) => body ?? string.Empty;
 
     private async Task<string[]> ResolveAssigneeIdsAsync(DraftIssueSnapshot draft, List<string> warnings, CancellationToken cancellationToken)
     {
@@ -283,16 +642,20 @@ public sealed class ItemImporter
                 continue; // Empty value: nothing to set.
             }
 
-            await _client.QueryAsync(
+            await _client.MutationAsync(
+                "updateProjectV2ItemFieldValue",
                 """
-                mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $value: ProjectV2FieldValue!) {
-                  updateProjectV2ItemFieldValue(input: { projectId: $projectId, itemId: $itemId, fieldId: $fieldId, value: $value }) {
+                mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $value: ProjectV2FieldValue!, $clientMutationId: String!) {
+                  updateProjectV2ItemFieldValue(input: { projectId: $projectId, itemId: $itemId, fieldId: $fieldId, value: $value, clientMutationId: $clientMutationId }) {
                     projectV2Item { id }
                   }
                 }
                 """,
                 new { projectId = target.ProjectId, itemId, fieldId, value = valueInput },
-                cancellationToken).ConfigureAwait(false);
+                MutationRetryPolicy.Idempotent,
+                target: itemId,
+                requiredResultPath: "projectV2Item.id",
+                cancellationToken: cancellationToken).ConfigureAwait(false);
         }
     }
 
@@ -309,16 +672,20 @@ public sealed class ItemImporter
                 continue;
             }
 
-            await _client.QueryAsync(
+            await _client.MutationAsync(
+                "updateProjectV2ItemPosition",
                 """
-                mutation($projectId: ID!, $itemId: ID!, $afterId: ID) {
-                  updateProjectV2ItemPosition(input: { projectId: $projectId, itemId: $itemId, afterId: $afterId }) {
+                mutation($projectId: ID!, $itemId: ID!, $afterId: ID, $clientMutationId: String!) {
+                  updateProjectV2ItemPosition(input: { projectId: $projectId, itemId: $itemId, afterId: $afterId, clientMutationId: $clientMutationId }) {
                     clientMutationId
                   }
                 }
                 """,
                 new { projectId, itemId, afterId },
-                cancellationToken).ConfigureAwait(false);
+                MutationRetryPolicy.Idempotent,
+                target: itemId,
+                requiredResultPath: "clientMutationId",
+                cancellationToken: cancellationToken).ConfigureAwait(false);
 
             afterId = itemId;
         }
@@ -336,16 +703,20 @@ public sealed class ItemImporter
 
             try
             {
-                await _client.QueryAsync(
+                await _client.MutationAsync(
+                    "archiveProjectV2Item",
                     """
-                    mutation($projectId: ID!, $itemId: ID!) {
-                      archiveProjectV2Item(input: { projectId: $projectId, itemId: $itemId }) {
+                    mutation($projectId: ID!, $itemId: ID!, $clientMutationId: String!) {
+                      archiveProjectV2Item(input: { projectId: $projectId, itemId: $itemId, clientMutationId: $clientMutationId }) {
                         item { id }
                       }
                     }
                     """,
                     new { projectId, itemId },
-                    cancellationToken).ConfigureAwait(false);
+                    MutationRetryPolicy.Idempotent,
+                    target: itemId,
+                    requiredResultPath: "item.id",
+                    cancellationToken: cancellationToken).ConfigureAwait(false);
             }
             catch (GitHubGraphQLException exception)
             {

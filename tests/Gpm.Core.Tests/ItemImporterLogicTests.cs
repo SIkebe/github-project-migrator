@@ -1,3 +1,4 @@
+using Gpm.Core.GitHub;
 using Gpm.Core.Import;
 using Gpm.Core.Snapshot;
 
@@ -64,6 +65,21 @@ public class ItemImporterLogicTests
             var log = new ImportLog { ProjectId = "PVT_abc123" };
             log.Items["0"] = "PVTI_item0";
             log.Items["2"] = "PVTI_item2";
+            log.PendingDrafts["3"] = new PendingDraftOperation
+            {
+                OperationId = "operation-3",
+                AttemptedAt = DateTimeOffset.Parse("2026-07-17T05:00:00Z", System.Globalization.CultureInfo.InvariantCulture),
+                Title = "Pending draft",
+                Body = "Pending body",
+                ExistingItemIds = ["PVTI_existing"],
+            };
+            log.PendingContents["4"] = new PendingContentOperation
+            {
+                OperationId = "operation-4",
+                AttemptedAt = DateTimeOffset.Parse("2026-07-17T05:01:00Z", System.Globalization.CultureInfo.InvariantCulture),
+                ContentId = "I_issue",
+                ExistingItemIds = [],
+            };
             await log.SaveAsync(directory, cancellationToken);
 
             var loaded = await ImportLog.LoadAsync(directory, cancellationToken);
@@ -73,6 +89,12 @@ public class ItemImporterLogicTests
             Assert.Equal(2, loaded.Items.Count);
             Assert.Equal("PVTI_item0", loaded.Items["0"]);
             Assert.Equal("PVTI_item2", loaded.Items["2"]);
+            var pending = Assert.Single(loaded.PendingDrafts);
+            Assert.Equal("3", pending.Key);
+            Assert.Equal("operation-3", pending.Value.OperationId);
+            Assert.Equal(["PVTI_existing"], pending.Value.ExistingItemIds);
+            Assert.Equal("I_issue", Assert.Single(loaded.PendingContents).Value.ContentId);
+            Assert.Empty(Directory.GetFiles(directory, "*.tmp"));
         }
         finally
         {
@@ -81,7 +103,101 @@ public class ItemImporterLogicTests
     }
 
     [Fact]
-    public async Task ImportLog_load_returns_null_when_missing_or_corrupt()
+    public async Task Import_rejects_target_switch_when_log_has_pending_operations()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var directory = Directory.CreateTempSubdirectory("gpm-importlog-switch-").FullName;
+        try
+        {
+            var log = new ImportLog { ProjectId = "PVT_original" };
+            log.PendingDrafts["0"] = new PendingDraftOperation
+            {
+                OperationId = "operation-0",
+                AttemptedAt = DateTimeOffset.UtcNow,
+                Title = "Pending draft",
+                ExistingItemIds = [],
+            };
+            await log.SaveAsync(directory, cancellationToken);
+            using var client = new GitHubGraphQLClient("dummy-token");
+            var importer = new ItemImporter(client);
+            var snapshot = new ProjectSnapshot
+            {
+                SchemaVersion = ProjectSnapshot.CurrentSchemaVersion,
+                Project = new ProjectInfoSnapshot
+                {
+                    Title = "Snapshot",
+                    Public = false,
+                    Closed = false,
+                },
+                Fields = [],
+                Views = [],
+                Workflows = [],
+                Items = [],
+            };
+            var target = new ImportResult
+            {
+                ProjectId = "PVT_different",
+                ProjectNumber = 1,
+                Url = "https://example.test/project/1",
+                Outcome = ProjectImportOutcome.Created,
+                FieldIds = new Dictionary<string, string>(),
+                OptionIds = new Dictionary<string, IReadOnlyDictionary<string, string>>(),
+                IterationIds = new Dictionary<string, IReadOnlyDictionary<string, string>>(),
+            };
+
+            var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+                () => importer.ImportAsync(snapshot, target, directory, cancellationToken));
+
+            Assert.Contains("pending operations", exception.Message, StringComparison.Ordinal);
+            var preserved = await ImportLog.LoadAsync(directory, cancellationToken);
+            Assert.Equal("PVT_original", preserved!.ProjectId);
+            Assert.Single(preserved.PendingDrafts);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void SelectReconciledDraftItemId_returns_only_new_unimported_match()
+    {
+        var result = ItemImporter.SelectReconciledDraftItemId(
+            "operation",
+            ["before", "already-imported", "created"],
+            ["before"],
+            ["already-imported"]);
+
+        Assert.Equal("created", result);
+    }
+
+    [Fact]
+    public void SelectReconciledDraftItemId_returns_null_when_create_did_not_happen()
+    {
+        var result = ItemImporter.SelectReconciledDraftItemId(
+            "operation",
+            ["before"],
+            ["before"],
+            []);
+
+        Assert.Null(result);
+    }
+
+    [Fact]
+    public void SelectReconciledDraftItemId_rejects_multiple_new_matches()
+    {
+        var exception = Assert.Throws<InvalidOperationException>(
+            () => ItemImporter.SelectReconciledDraftItemId(
+                "operation",
+                ["created-1", "created-2"],
+                [],
+                []));
+
+        Assert.Contains("multiple new target items", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task ImportLog_load_returns_null_when_missing_and_rejects_corrupt_content()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
         var directory = Directory.CreateTempSubdirectory("gpm-importlog-").FullName;
@@ -90,7 +206,8 @@ public class ItemImporterLogicTests
             Assert.Null(await ImportLog.LoadAsync(directory, cancellationToken));
 
             await File.WriteAllTextAsync(Path.Combine(directory, ImportLog.FileName), "{ not json", cancellationToken);
-            Assert.Null(await ImportLog.LoadAsync(directory, cancellationToken));
+            await Assert.ThrowsAsync<System.Text.Json.JsonException>(
+                () => ImportLog.LoadAsync(directory, cancellationToken));
         }
         finally
         {

@@ -24,6 +24,7 @@ public sealed class ProjectImporter
 
     private readonly GitHubGraphQLClient _client;
     private readonly List<string> _warnings = [];
+    private ProjectImportLog? _operationLog;
 
     public ProjectImporter(GitHubGraphQLClient client)
     {
@@ -52,18 +53,46 @@ public sealed class ProjectImporter
     /// <summary>Invoked after conflict resolution and immediately before the first mutation.</summary>
     public Func<CancellationToken, Task>? BeforeWriteAsync { get; set; }
 
+    /// <summary>Directory for durable project and field creation operation state.</summary>
+    public required string OperationLogDirectory { get; init; }
+
+    /// <summary>Target project required by pending item operations loaded before project-stage writes.</summary>
+    public string? PendingItemProjectId { get; init; }
+
     /// <summary>Imports the snapshot into <paramref name="ownerLogin"/> and returns the target project identity and field mappings.</summary>
     public async Task<ImportResult> ImportAsync(ProjectSnapshot snapshot, string ownerLogin, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(snapshot);
         ArgumentException.ThrowIfNullOrWhiteSpace(ownerLogin);
+        await LoadOperationLogAsync(cancellationToken).ConfigureAwait(false);
 
         var title = snapshot.Project.Title;
         OnProgress?.Invoke($"Checking {OwnerDescription} '{ownerLogin}' for an existing project titled '{title}'...");
-        var existing = await FindProjectByTitleAsync(ownerLogin, title, cancellationToken).ConfigureAwait(false);
+        var matches = await FindProjectsByTitleAsync(ownerLogin, title, cancellationToken).ConfigureAwait(false);
+        ProjectRef? existing;
+        if (_operationLog?.PendingProject is { } pendingProject)
+        {
+            if (!string.Equals(pendingProject.OwnerLogin, ownerLogin, StringComparison.Ordinal)
+                || !string.Equals(pendingProject.Title, title, StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    $"Pending project operation '{pendingProject.OperationId}' does not match the current import target.");
+            }
+
+            existing = await ReconcilePendingProjectAsync(pendingProject, matches, cancellationToken).ConfigureAwait(false);
+            _operationLog.PendingProject = null;
+            await SaveOperationLogAsync(cancellationToken).ConfigureAwait(false);
+            ValidatePendingItemProject(existing.Id);
+            ValidatePendingFieldOperations(snapshot, existing.Id);
+            await InvokeBeforeWriteAsync(cancellationToken).ConfigureAwait(false);
+            return await ApplySnapshotAsync(snapshot, ownerLogin, existing, ProjectImportOutcome.Created, cancellationToken).ConfigureAwait(false);
+        }
+
+        existing = matches.FirstOrDefault();
 
         if (existing is not null)
         {
+            ValidatePendingItemProject(existing.Id);
             switch (OnConflict)
             {
                 case ConflictAction.Fail:
@@ -77,6 +106,7 @@ public sealed class ProjectImporter
                     return BuildSkippedResult(existing);
 
                 case ConflictAction.Update:
+                    ValidatePendingFieldOperations(snapshot, existing.Id);
                     OnProgress?.Invoke(string.Create(CultureInfo.InvariantCulture,
                         $"Project '{title}' already exists (#{existing.Number}); applying snapshot to it (on-conflict=update)."));
                     await InvokeBeforeWriteAsync(cancellationToken).ConfigureAwait(false);
@@ -84,10 +114,51 @@ public sealed class ProjectImporter
             }
         }
 
+        ValidatePendingItemProject(projectId: null);
+        ValidatePendingFieldOperations(snapshot, projectId: null);
         var ownerId = await GetOwnerIdAsync(ownerLogin, cancellationToken).ConfigureAwait(false);
         await InvokeBeforeWriteAsync(cancellationToken).ConfigureAwait(false);
         OnProgress?.Invoke($"Creating project '{title}' in '{ownerLogin}'...");
-        var project = await CreateProjectAsync(ownerId, title, cancellationToken).ConfigureAwait(false);
+        var operationId = Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture);
+        if (_operationLog is not null)
+        {
+            _operationLog.PendingProject = new PendingProjectOperation
+            {
+                OperationId = operationId,
+                OwnerLogin = ownerLogin,
+                Title = title,
+                ExistingProjectIds = [.. matches.Select(project => project.Id)],
+            };
+            await SaveOperationLogAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        JsonElement createData;
+        try
+        {
+            createData = await CreateProjectAsync(ownerId, title, operationId, cancellationToken).ConfigureAwait(false);
+        }
+        catch (AmbiguousMutationResultException)
+        {
+            throw;
+        }
+        catch
+        {
+            if (_operationLog is not null)
+            {
+                _operationLog.PendingProject = null;
+                await SaveOperationLogAsync(CancellationToken.None).ConfigureAwait(false);
+            }
+
+            throw;
+        }
+
+        var project = ParseProjectRef(createData.GetProperty("createProjectV2").GetProperty("projectV2"));
+        if (_operationLog is not null)
+        {
+            _operationLog.PendingProject = null;
+            await SaveOperationLogAsync(cancellationToken).ConfigureAwait(false);
+        }
+
         return await ApplySnapshotAsync(snapshot, ownerLogin, project, ProjectImportOutcome.Created, cancellationToken).ConfigureAwait(false);
     }
 
@@ -100,6 +171,7 @@ public sealed class ProjectImporter
     {
         ArgumentNullException.ThrowIfNull(snapshot);
         ArgumentException.ThrowIfNullOrWhiteSpace(ownerLogin);
+        await LoadOperationLogAsync(cancellationToken).ConfigureAwait(false);
 
         OnProgress?.Invoke(string.Create(CultureInfo.InvariantCulture,
             $"Looking up project #{projectNumber} in {OwnerDescription} '{ownerLogin}'..."));
@@ -107,6 +179,14 @@ public sealed class ProjectImporter
             ?? throw new InvalidOperationException(string.Create(CultureInfo.InvariantCulture,
                 $"Project #{projectNumber} was not found in {OwnerDescription} '{ownerLogin}'."));
 
+        if (_operationLog?.PendingProject is { } pendingProject)
+        {
+            throw new InvalidOperationException(
+                $"Pending project operation '{pendingProject.OperationId}' must be resumed by project title before importing into project #{projectNumber}.");
+        }
+
+        ValidatePendingItemProject(project.Id);
+        ValidatePendingFieldOperations(snapshot, project.Id);
         OnProgress?.Invoke(string.Create(CultureInfo.InvariantCulture,
             $"Applying snapshot to existing project #{project.Number}..."));
         await InvokeBeforeWriteAsync(cancellationToken).ConfigureAwait(false);
@@ -115,6 +195,38 @@ public sealed class ProjectImporter
 
     private Task InvokeBeforeWriteAsync(CancellationToken cancellationToken)
         => BeforeWriteAsync?.Invoke(cancellationToken) ?? Task.CompletedTask;
+
+    private void ValidatePendingItemProject(string? projectId)
+    {
+        if (PendingItemProjectId is not null
+            && !string.Equals(PendingItemProjectId, projectId, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"{ImportLog.FileName} contains pending operations for project '{PendingItemProjectId}'. Resume that project or reconcile it manually before writing project '{projectId ?? "(new project)"}'.");
+        }
+    }
+
+    private void ValidatePendingFieldOperations(ProjectSnapshot snapshot, string? projectId)
+    {
+        if (_operationLog is null || _operationLog.PendingFields.Count == 0)
+        {
+            return;
+        }
+
+        var snapshotFields = snapshot.Fields.ToDictionary(field => field.Name, StringComparer.Ordinal);
+        foreach (var (name, pending) in _operationLog.PendingFields)
+        {
+            if (projectId is null
+                || !string.Equals(pending.ProjectId, projectId, StringComparison.Ordinal)
+                || !snapshotFields.TryGetValue(name, out var field)
+                || !string.Equals(pending.Name, field.Name, StringComparison.Ordinal)
+                || !string.Equals(pending.DataType, field.DataType, StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    $"Pending field operation '{pending.OperationId}' does not match the selected project and snapshot. Resume the original import or reconcile it manually.");
+            }
+        }
+    }
 
     /// <summary>Applies metadata, custom fields and Status options to the target project and builds the result.</summary>
     private async Task<ImportResult> ApplySnapshotAsync(
@@ -129,13 +241,52 @@ public sealed class ProjectImporter
         await UpdateProjectMetadataAsync(project.Id, snapshot.Project, cancellationToken).ConfigureAwait(false);
 
         var maps = new FieldMaps();
-        var existingFields = await FetchFieldsAsync(project.Id, maps, cancellationToken).ConfigureAwait(false);
+        var existingFieldList = await FetchFieldListAsync(project.Id, maps, cancellationToken).ConfigureAwait(false);
+        var existingFields = new Dictionary<string, TargetField>(StringComparer.Ordinal);
+        foreach (var existingField in existingFieldList)
+        {
+            existingFields[existingField.Name] = existingField;
+        }
 
         foreach (var field in snapshot.Fields)
         {
             if (!CreatableDataTypes.Contains(field.DataType))
             {
                 continue; // Built-in field (Title, Assignees, Labels, Repository, Milestone, Reviewers, ...).
+            }
+
+            if (_operationLog?.PendingFields.TryGetValue(field.Name, out var pendingField) == true)
+            {
+                if (!string.Equals(pendingField.ProjectId, project.Id, StringComparison.Ordinal)
+                    || !string.Equals(pendingField.DataType, field.DataType, StringComparison.Ordinal))
+                {
+                    throw new InvalidOperationException(
+                        $"Pending field operation '{pendingField.OperationId}' does not match field '{field.Name}'.");
+                }
+
+                var candidates = existingFieldList.Where(candidate =>
+                    string.Equals(candidate.Name, field.Name, StringComparison.Ordinal)
+                    && string.Equals(candidate.DataType, pendingField.DataType, StringComparison.Ordinal)
+                    && !pendingField.ExistingFieldIds.Contains(candidate.Id, StringComparer.Ordinal)).ToArray();
+                TargetField reconciled;
+                if (candidates.Length > 1)
+                {
+                    throw new InvalidOperationException(
+                        $"Pending field operation '{pendingField.OperationId}' matches multiple new fields. Reconcile the target manually.");
+                }
+
+                if (candidates.Length == 1)
+                {
+                    reconciled = candidates[0];
+                }
+                else
+                {
+                    reconciled = await ReconcilePendingFieldAsync(project.Id, field, maps, pendingField, cancellationToken).ConfigureAwait(false);
+                }
+
+                existingFields[field.Name] = reconciled;
+                _operationLog.PendingFields.Remove(field.Name);
+                await SaveOperationLogAsync(cancellationToken).ConfigureAwait(false);
             }
 
             if (existingFields.TryGetValue(field.Name, out var target))
@@ -162,7 +313,48 @@ public sealed class ProjectImporter
             else
             {
                 OnProgress?.Invoke($"Creating {field.DataType} field '{field.Name}'...");
-                await CreateFieldAsync(project.Id, field, maps, cancellationToken).ConfigureAwait(false);
+                var operationId = Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture);
+                if (_operationLog is not null)
+                {
+                    _operationLog.PendingFields[field.Name] = new PendingFieldOperation
+                    {
+                        OperationId = operationId,
+                        ProjectId = project.Id,
+                        Name = field.Name,
+                        DataType = field.DataType,
+                        ExistingFieldIds = [],
+                    };
+                    await SaveOperationLogAsync(cancellationToken).ConfigureAwait(false);
+                }
+
+                JsonElement createData;
+                try
+                {
+                    createData = await CreateFieldAsync(project.Id, field, operationId, cancellationToken).ConfigureAwait(false);
+                }
+                catch (AmbiguousMutationResultException)
+                {
+                    throw;
+                }
+                catch
+                {
+                    if (_operationLog is not null)
+                    {
+                        _operationLog.PendingFields.Remove(field.Name);
+                        await SaveOperationLogAsync(CancellationToken.None).ConfigureAwait(false);
+                    }
+
+                    throw;
+                }
+
+                var createdField = maps.Register(createData.GetProperty("createProjectV2Field").GetProperty("projectV2Field"));
+                existingFieldList.Add(createdField);
+                existingFields[createdField.Name] = createdField;
+                if (_operationLog is not null)
+                {
+                    _operationLog.PendingFields.Remove(field.Name);
+                    await SaveOperationLogAsync(cancellationToken).ConfigureAwait(false);
+                }
             }
         }
 
@@ -234,16 +426,20 @@ public sealed class ProjectImporter
 
         OnProgress?.Invoke(string.Create(CultureInfo.InvariantCulture,
             $"Applying {inputs.Count} project collaborators..."));
-        await _client.QueryAsync(
+        await _client.MutationAsync(
+            "updateProjectV2Collaborators",
             """
-            mutation($projectId: ID!, $collaborators: [ProjectV2Collaborator!]!) {
-              updateProjectV2Collaborators(input: { projectId: $projectId, collaborators: $collaborators }) {
+            mutation($projectId: ID!, $collaborators: [ProjectV2Collaborator!]!, $clientMutationId: String!) {
+              updateProjectV2Collaborators(input: { projectId: $projectId, collaborators: $collaborators, clientMutationId: $clientMutationId }) {
                 collaborators(first: 100) { nodes { __typename } }
               }
             }
             """,
             new { projectId, collaborators = inputs.ToArray() },
-            cancellationToken).ConfigureAwait(false);
+            MutationRetryPolicy.Idempotent,
+            target: projectId,
+            requiredResultPath: "collaborators.nodes",
+            cancellationToken: cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -279,16 +475,20 @@ public sealed class ProjectImporter
 
             try
             {
-                await _client.QueryAsync(
+                await _client.MutationAsync(
+                    "linkProjectV2ToRepository",
                     """
-                    mutation($projectId: ID!, $repositoryId: ID!) {
-                      linkProjectV2ToRepository(input: { projectId: $projectId, repositoryId: $repositoryId }) {
+                    mutation($projectId: ID!, $repositoryId: ID!, $clientMutationId: String!) {
+                      linkProjectV2ToRepository(input: { projectId: $projectId, repositoryId: $repositoryId, clientMutationId: $clientMutationId }) {
                         repository { nameWithOwner }
                       }
                     }
                     """,
                     new { projectId, repositoryId },
-                    cancellationToken).ConfigureAwait(false);
+                    MutationRetryPolicy.Idempotent,
+                    target: projectId,
+                    requiredResultPath: "repository.nameWithOwner",
+                    cancellationToken: cancellationToken).ConfigureAwait(false);
                 OnProgress?.Invoke($"Linked repository '{mapped}'.");
             }
             catch (GitHubGraphQLException exception)
@@ -391,8 +591,9 @@ public sealed class ProjectImporter
             ?? throw new GitHubGraphQLException($"{(OwnerType == ProjectOwnerType.User ? "User" : "Organization")} '{ownerLogin}' was not found.");
     }
 
-    private async Task<ProjectRef?> FindProjectByTitleAsync(string ownerLogin, string title, CancellationToken cancellationToken)
+    private async Task<List<ProjectRef>> FindProjectsByTitleAsync(string ownerLogin, string title, CancellationToken cancellationToken)
     {
+        var projects = new List<ProjectRef>();
         await foreach (var node in _client.QueryPaginatedAsync(
             FindProjectQueryTemplate.Replace("__OWNER__", OwnerField, StringComparison.Ordinal),
             new { login = ownerLogin, first = 50 },
@@ -401,11 +602,11 @@ public sealed class ProjectImporter
         {
             if (string.Equals(node.GetProperty("title").GetString(), title, StringComparison.Ordinal))
             {
-                return ParseProjectRef(node);
+                projects.Add(ParseProjectRef(node));
             }
         }
 
-        return null;
+        return projects;
     }
 
     private async Task<ProjectRef?> FindProjectByNumberAsync(string ownerLogin, int projectNumber, CancellationToken cancellationToken)
@@ -426,28 +627,35 @@ public sealed class ProjectImporter
         }
     }
 
-    private async Task<ProjectRef> CreateProjectAsync(string ownerId, string title, CancellationToken cancellationToken)
+    private async Task<JsonElement> CreateProjectAsync(
+        string ownerId,
+        string title,
+        string clientMutationId,
+        CancellationToken cancellationToken)
     {
-        var data = await _client.QueryAsync(
+        return await _client.MutationAsync(
+            "createProjectV2",
             """
-            mutation($ownerId: ID!, $title: String!) {
-              createProjectV2(input: { ownerId: $ownerId, title: $title }) {
+            mutation($ownerId: ID!, $title: String!, $clientMutationId: String!) {
+              createProjectV2(input: { ownerId: $ownerId, title: $title, clientMutationId: $clientMutationId }) {
                 projectV2 { id number title url }
               }
             }
             """,
             new { ownerId, title },
-            cancellationToken).ConfigureAwait(false);
-
-        return ParseProjectRef(data.GetProperty("createProjectV2").GetProperty("projectV2"));
+            target: ownerId,
+            clientMutationId: clientMutationId,
+            requiredResultPath: "projectV2.id",
+            cancellationToken: cancellationToken).ConfigureAwait(false);
     }
 
     private async Task UpdateProjectMetadataAsync(string projectId, ProjectInfoSnapshot info, CancellationToken cancellationToken)
     {
-        await _client.QueryAsync(
+        await _client.MutationAsync(
+            "updateProjectV2",
             """
-            mutation($projectId: ID!, $shortDescription: String, $readme: String, $public: Boolean, $closed: Boolean) {
-              updateProjectV2(input: { projectId: $projectId, shortDescription: $shortDescription, readme: $readme, public: $public, closed: $closed }) {
+            mutation($projectId: ID!, $shortDescription: String, $readme: String, $public: Boolean, $closed: Boolean, $clientMutationId: String!) {
+              updateProjectV2(input: { projectId: $projectId, shortDescription: $shortDescription, readme: $readme, public: $public, closed: $closed, clientMutationId: $clientMutationId }) {
                 projectV2 { id }
               }
             }
@@ -460,27 +668,26 @@ public sealed class ProjectImporter
                 @public = info.Public,
                 closed = info.Closed,
             },
-            cancellationToken).ConfigureAwait(false);
+            MutationRetryPolicy.Idempotent,
+            target: projectId,
+            requiredResultPath: "projectV2.id",
+            cancellationToken: cancellationToken).ConfigureAwait(false);
     }
 
-    /// <summary>Fetches the target project's fields, registers them in the maps and returns them by name.</summary>
-    private async Task<Dictionary<string, TargetField>> FetchFieldsAsync(string projectId, FieldMaps maps, CancellationToken cancellationToken)
+    private async Task<List<TargetField>> FetchFieldListAsync(string projectId, FieldMaps maps, CancellationToken cancellationToken)
     {
         var data = await _client.QueryAsync(FieldsQuery, new { id = projectId }, cancellationToken).ConfigureAwait(false);
-
-        var fields = new Dictionary<string, TargetField>(StringComparer.Ordinal);
-        foreach (var node in data.GetProperty("node").GetProperty("fields").GetProperty("nodes").EnumerateArray())
-        {
-            var field = maps.Register(node);
-            fields[field.Name] = field;
-        }
-
-        return fields;
+        return [.. data.GetProperty("node").GetProperty("fields").GetProperty("nodes").EnumerateArray().Select(maps.Register)];
     }
 
-    private async Task CreateFieldAsync(string projectId, FieldSnapshot field, FieldMaps maps, CancellationToken cancellationToken)
+    private async Task<JsonElement> CreateFieldAsync(
+        string projectId,
+        FieldSnapshot field,
+        string clientMutationId,
+        CancellationToken cancellationToken)
     {
-        var data = await _client.QueryAsync(
+        return await _client.MutationAsync(
+            "createProjectV2Field",
             CreateFieldMutation,
             new
             {
@@ -492,17 +699,97 @@ public sealed class ProjectImporter
                     ? BuildIterationConfigurationInput(field.Name, configuration)
                     : null,
             },
-            cancellationToken).ConfigureAwait(false);
+            target: projectId,
+            clientMutationId: clientMutationId,
+            requiredResultPath: "projectV2Field.id",
+            cancellationToken: cancellationToken).ConfigureAwait(false);
+    }
 
-        maps.Register(data.GetProperty("createProjectV2Field").GetProperty("projectV2Field"));
+    private async Task LoadOperationLogAsync(CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(OperationLogDirectory);
+        _operationLog = await ProjectImportLog.LoadAsync(OperationLogDirectory, cancellationToken).ConfigureAwait(false);
+    }
+
+    private Task SaveOperationLogAsync(CancellationToken cancellationToken)
+        => _operationLog is not null
+            ? _operationLog.SaveAsync(OperationLogDirectory, cancellationToken)
+            : Task.CompletedTask;
+
+    private async Task<ProjectRef> ReconcilePendingProjectAsync(
+        PendingProjectOperation pending,
+        IReadOnlyList<ProjectRef> initialMatches,
+        CancellationToken cancellationToken)
+    {
+        IReadOnlyList<ProjectRef> matches = initialMatches;
+        for (var attempt = 0; attempt < 3; attempt++)
+        {
+            var baseline = new HashSet<string>(pending.ExistingProjectIds, StringComparer.Ordinal);
+            var candidates = matches.Where(project => !baseline.Contains(project.Id)).ToArray();
+            if (candidates.Length == 1)
+            {
+                return candidates[0];
+            }
+
+            if (candidates.Length > 1)
+            {
+                throw new InvalidOperationException(
+                    $"Pending project operation '{pending.OperationId}' matches multiple new projects. Reconcile the target manually.");
+            }
+
+            if (attempt < 2)
+            {
+                await Task.Delay(TimeSpan.FromSeconds(Math.Pow(2, attempt)), cancellationToken).ConfigureAwait(false);
+                matches = await FindProjectsByTitleAsync(pending.OwnerLogin, pending.Title, cancellationToken).ConfigureAwait(false);
+            }
+        }
+
+        throw new InvalidOperationException(
+            $"Pending project operation '{pending.OperationId}' is not visible after reconciliation polling. Do not resend it until the target is reconciled manually.");
+    }
+
+    private async Task<TargetField> ReconcilePendingFieldAsync(
+        string projectId,
+        FieldSnapshot field,
+        FieldMaps maps,
+        PendingFieldOperation pending,
+        CancellationToken cancellationToken)
+    {
+        for (var attempt = 0; attempt < 3; attempt++)
+        {
+            if (attempt > 0)
+            {
+                await Task.Delay(TimeSpan.FromSeconds(Math.Pow(2, attempt - 1)), cancellationToken).ConfigureAwait(false);
+            }
+
+            var fields = await FetchFieldListAsync(projectId, maps, cancellationToken).ConfigureAwait(false);
+            var candidates = fields.Where(candidate =>
+                string.Equals(candidate.Name, field.Name, StringComparison.Ordinal)
+                && string.Equals(candidate.DataType, field.DataType, StringComparison.Ordinal)
+                && !pending.ExistingFieldIds.Contains(candidate.Id, StringComparer.Ordinal)).ToArray();
+            if (candidates.Length == 1)
+            {
+                return candidates[0];
+            }
+
+            if (candidates.Length > 1)
+            {
+                throw new InvalidOperationException(
+                    $"Pending field operation '{pending.OperationId}' matches multiple new fields. Reconcile the target manually.");
+            }
+        }
+
+        throw new InvalidOperationException(
+            $"Pending field operation '{pending.OperationId}' is not visible after reconciliation polling. Do not resend it until the target is reconciled manually.");
     }
 
     private async Task UpdateSingleSelectOptionsAsync(string fieldId, IReadOnlyList<SingleSelectOptionSnapshot> options, FieldMaps maps, CancellationToken cancellationToken)
     {
-        var data = await _client.QueryAsync(
+        var data = await _client.MutationAsync(
+            "updateProjectV2Field",
             """
-            mutation($fieldId: ID!, $options: [ProjectV2SingleSelectFieldOptionInput!]!) {
-              updateProjectV2Field(input: { fieldId: $fieldId, singleSelectOptions: $options }) {
+            mutation($fieldId: ID!, $options: [ProjectV2SingleSelectFieldOptionInput!]!, $clientMutationId: String!) {
+              updateProjectV2Field(input: { fieldId: $fieldId, singleSelectOptions: $options, clientMutationId: $clientMutationId }) {
                 projectV2Field {
                   ... on ProjectV2FieldCommon { id name dataType }
                   ... on ProjectV2SingleSelectField { options { id name } }
@@ -511,7 +798,10 @@ public sealed class ProjectImporter
             }
             """,
             new { fieldId, options = BuildOptionInputs(options) },
-            cancellationToken).ConfigureAwait(false);
+            MutationRetryPolicy.Idempotent,
+            target: fieldId,
+            requiredResultPath: "projectV2Field.id",
+            cancellationToken: cancellationToken).ConfigureAwait(false);
 
         maps.Register(data.GetProperty("updateProjectV2Field").GetProperty("projectV2Field"));
     }
@@ -663,8 +953,8 @@ public sealed class ProjectImporter
 
     private const string CreateFieldMutation =
         """
-        mutation($projectId: ID!, $name: String!, $dataType: ProjectV2CustomFieldType!, $options: [ProjectV2SingleSelectFieldOptionInput!], $iterationConfiguration: ProjectV2IterationFieldConfigurationInput) {
-          createProjectV2Field(input: { projectId: $projectId, name: $name, dataType: $dataType, singleSelectOptions: $options, iterationConfiguration: $iterationConfiguration }) {
+        mutation($projectId: ID!, $name: String!, $dataType: ProjectV2CustomFieldType!, $options: [ProjectV2SingleSelectFieldOptionInput!], $iterationConfiguration: ProjectV2IterationFieldConfigurationInput, $clientMutationId: String!) {
+          createProjectV2Field(input: { projectId: $projectId, name: $name, dataType: $dataType, singleSelectOptions: $options, iterationConfiguration: $iterationConfiguration, clientMutationId: $clientMutationId }) {
             projectV2Field {
               ... on ProjectV2FieldCommon { id name dataType }
               ... on ProjectV2SingleSelectField { options { id name } }

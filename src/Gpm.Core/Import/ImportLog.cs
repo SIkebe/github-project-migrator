@@ -19,7 +19,13 @@ public sealed record ImportLog
     /// <summary>Source item position (as an invariant string) → target item node id.</summary>
     public Dictionary<string, string> Items { get; init; } = new(StringComparer.Ordinal);
 
-    /// <summary>Loads the log from <paramref name="directory"/>, or returns null when missing or unreadable.</summary>
+    /// <summary>Draft creations persisted before sending so an ambiguous result can be reconciled safely.</summary>
+    public Dictionary<string, PendingDraftOperation> PendingDrafts { get; init; } = new(StringComparer.Ordinal);
+
+    /// <summary>Issue/PR additions persisted before sending so an ambiguous result can be reconciled safely.</summary>
+    public Dictionary<string, PendingContentOperation> PendingContents { get; init; } = new(StringComparer.Ordinal);
+
+    /// <summary>Loads the log from <paramref name="directory"/>, or returns null when missing.</summary>
     public static async Task<ImportLog?> LoadAsync(string directory, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(directory);
@@ -30,17 +36,11 @@ public sealed record ImportLog
             return null;
         }
 
-        try
+        var stream = File.OpenRead(path);
+        await using (stream.ConfigureAwait(false))
         {
-            var stream = File.OpenRead(path);
-            await using (stream.ConfigureAwait(false))
-            {
-                return await JsonSerializer.DeserializeAsync(stream, ImportLogJsonContext.Default.ImportLog, cancellationToken).ConfigureAwait(false);
-            }
-        }
-        catch (JsonException)
-        {
-            return null; // Corrupt log: start fresh rather than fail the import.
+            return await JsonSerializer.DeserializeAsync(stream, ImportLogJsonContext.Default.ImportLog, cancellationToken).ConfigureAwait(false)
+                ?? throw new JsonException($"{FileName} contained null.");
         }
     }
 
@@ -52,14 +52,56 @@ public sealed record ImportLog
         Directory.CreateDirectory(directory);
         var path = Path.Combine(directory, FileName);
 
-        var stream = File.Create(path);
-        await using (stream.ConfigureAwait(false))
+        var temporaryPath = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
+        try
         {
-            await JsonSerializer.SerializeAsync(stream, this, ImportLogJsonContext.Default.ImportLog, cancellationToken).ConfigureAwait(false);
+            await using (var stream = new FileStream(
+                temporaryPath,
+                FileMode.CreateNew,
+                FileAccess.Write,
+                FileShare.None,
+                bufferSize: 4096,
+                FileOptions.Asynchronous | FileOptions.WriteThrough))
+            {
+                await JsonSerializer.SerializeAsync(stream, this, ImportLogJsonContext.Default.ImportLog, cancellationToken).ConfigureAwait(false);
+                await stream.FlushAsync(cancellationToken).ConfigureAwait(false);
+            }
+
+            File.Move(temporaryPath, path, overwrite: true);
+        }
+        finally
+        {
+            File.Delete(temporaryPath);
         }
 
         return path;
     }
+}
+
+public sealed record PendingDraftOperation
+{
+    public required string OperationId { get; init; }
+
+    public required DateTimeOffset AttemptedAt { get; init; }
+
+    public required string Title { get; init; }
+
+    public string? Body { get; init; }
+
+    public string[]? AssigneeIds { get; init; }
+
+    public required string[] ExistingItemIds { get; init; }
+}
+
+public sealed record PendingContentOperation
+{
+    public required string OperationId { get; init; }
+
+    public required DateTimeOffset AttemptedAt { get; init; }
+
+    public required string ContentId { get; init; }
+
+    public required string[] ExistingItemIds { get; init; }
 }
 
 /// <summary>System.Text.Json source-generation context for <see cref="ImportLog"/>.</summary>

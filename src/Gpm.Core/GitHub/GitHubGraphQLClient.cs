@@ -76,18 +76,90 @@ public sealed class GitHubGraphQLClient : IDisposable
         ArgumentException.ThrowIfNullOrWhiteSpace(query);
 
         var payload = JsonSerializer.Serialize(new { query, variables });
+        return await ExecuteOperationAsync(payload, mutation: null, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Executes a GraphQL mutation. Create operations stop on ambiguous transport or
+    /// server failures; only callers that guarantee idempotency may enable retries.
+    /// </summary>
+    public async Task<JsonElement> MutationAsync(
+        string operationName,
+        string mutation,
+        object? variables = null,
+        MutationRetryPolicy retryPolicy = MutationRetryPolicy.Create,
+        string? target = null,
+        string? clientMutationId = null,
+        string? requiredResultPath = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(operationName);
+        ArgumentException.ThrowIfNullOrWhiteSpace(mutation);
+        ArgumentException.ThrowIfNullOrWhiteSpace(requiredResultPath);
+
+        clientMutationId ??= Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture);
+        var variableMap = ToVariableMap(variables);
+        variableMap["clientMutationId"] = clientMutationId;
+        var payload = JsonSerializer.Serialize(new { query = mutation, variables = variableMap });
+        var context = new MutationContext(operationName, clientMutationId, DateTimeOffset.UtcNow, target, retryPolicy, requiredResultPath);
+        return await ExecuteOperationAsync(payload, context, cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task<JsonElement> ExecuteOperationAsync(
+        string payload,
+        MutationContext? mutation,
+        CancellationToken cancellationToken)
+    {
         var temporaryConflictRetries = 0;
+        var incompleteResultRetries = 0;
 
         while (true)
         {
-            using var document = await ExecuteAsync(payload, cancellationToken).ConfigureAwait(false);
+            using var document = await ExecuteAsync(payload, mutation, cancellationToken).ConfigureAwait(false);
 
             if (!document.RootElement.TryGetProperty("errors", out var errors))
             {
-                return document.RootElement.GetProperty("data").Clone();
+                if (document.RootElement.TryGetProperty("data", out var data)
+                    && data.ValueKind == JsonValueKind.Object
+                    && (mutation is null || HasExpectedMutationResult(data, mutation)))
+                {
+                    return data.Clone();
+                }
+
+                if (mutation is { RetryPolicy: MutationRetryPolicy.Create })
+                {
+                    throw CreateAmbiguousMutationException(
+                        mutation,
+                        "GitHub returned a success response without the expected mutation result.");
+                }
+
+                if (mutation is { RetryPolicy: MutationRetryPolicy.Idempotent }
+                    && incompleteResultRetries < MaxServerErrorRetries)
+                {
+                    var backoff = GetBackoff(incompleteResultRetries);
+                    incompleteResultRetries++;
+                    await NotifyAndDelayAsync(
+                        string.Create(CultureInfo.InvariantCulture, $"Incomplete mutation result; backing off {backoff.TotalSeconds:0}s (attempt {incompleteResultRetries}/{MaxServerErrorRetries})."),
+                        backoff,
+                        cancellationToken).ConfigureAwait(false);
+                    continue;
+                }
+
+                throw new GitHubGraphQLException(
+                    mutation is null
+                        ? "GraphQL success response did not contain an object-valued data property."
+                        : $"GraphQL success response did not contain the expected '{mutation.OperationName}' result.");
             }
 
             var errorsJson = errors.GetRawText();
+
+            if (mutation is { RetryPolicy: MutationRetryPolicy.Create }
+                && HasMutationPayload(document.RootElement, mutation.OperationName))
+            {
+                throw CreateAmbiguousMutationException(
+                    mutation,
+                    "GitHub returned a GraphQL error that may have occurred after the create side effect.");
+            }
 
             // Projects V2 mutations occasionally fail with UNPROCESSABLE
             // "…temporary conflict. Please try again." — the API explicitly asks
@@ -102,6 +174,14 @@ public sealed class GitHubGraphQLClient : IDisposable
                     backoff,
                     cancellationToken).ConfigureAwait(false);
                 continue;
+            }
+
+            if (mutation is { RetryPolicy: MutationRetryPolicy.Create }
+                && !ContainsOnlyKnownPreSideEffectErrors(errors))
+            {
+                throw CreateAmbiguousMutationException(
+                    mutation,
+                    "GitHub returned a GraphQL error that may have occurred after the create side effect.");
             }
 
             string? errorType = null;
@@ -177,7 +257,10 @@ public sealed class GitHubGraphQLClient : IDisposable
     public void Dispose() => _httpClient.Dispose();
 
     /// <summary>Sends the payload with the full retry/rate-limit policy and returns the parsed body.</summary>
-    private async Task<JsonDocument> ExecuteAsync(string payload, CancellationToken cancellationToken)
+    private async Task<JsonDocument> ExecuteAsync(
+        string payload,
+        MutationContext? mutation,
+        CancellationToken cancellationToken)
     {
         var secondaryRateLimitRetries = 0;
         var serverErrorRetries = 0;
@@ -202,9 +285,12 @@ public sealed class GitHubGraphQLClient : IDisposable
             }
             catch (HttpRequestException exception)
             {
-                // Transient transport failures (connection reset, "response ended
-                // prematurely", DNS blips) get the same backoff budget as 5xx.
                 response?.Dispose();
+                if (mutation is { RetryPolicy: MutationRetryPolicy.Create })
+                {
+                    throw CreateAmbiguousMutationException(mutation, exception.Message, exception);
+                }
+
                 if (serverErrorRetries >= MaxServerErrorRetries)
                 {
                     throw new GitHubGraphQLException(
@@ -219,13 +305,70 @@ public sealed class GitHubGraphQLClient : IDisposable
                     cancellationToken).ConfigureAwait(false);
                 continue;
             }
+            catch (OperationCanceledException exception) when (mutation is { RetryPolicy: MutationRetryPolicy.Create })
+            {
+                response?.Dispose();
+                throw CreateAmbiguousMutationException(mutation, exception.Message, exception);
+            }
+            catch (OperationCanceledException exception) when (!cancellationToken.IsCancellationRequested)
+            {
+                response?.Dispose();
+                if (serverErrorRetries >= MaxServerErrorRetries)
+                {
+                    throw new GitHubGraphQLException(
+                        $"Request timeout persisted after {MaxServerErrorRetries} retries: {exception.Message}",
+                        exception);
+                }
+
+                var timeoutBackoff = GetBackoff(serverErrorRetries);
+                serverErrorRetries++;
+                await NotifyAndDelayAsync(
+                    string.Create(CultureInfo.InvariantCulture, $"Request timed out; backing off {timeoutBackoff.TotalSeconds:0}s (attempt {serverErrorRetries}/{MaxServerErrorRetries})."),
+                    timeoutBackoff,
+                    cancellationToken).ConfigureAwait(false);
+                continue;
+            }
 
             using var _ = response;
 
             if (response.IsSuccessStatusCode)
             {
-                await WaitForPrimaryRateLimitResetAsync(response, cancellationToken).ConfigureAwait(false);
-                return JsonDocument.Parse(body);
+                // A create has a definitive response now. Do not make returning that
+                // result depend on a cancellable wait after the side effect completed.
+                if (mutation is not { RetryPolicy: MutationRetryPolicy.Create })
+                {
+                    await WaitForPrimaryRateLimitResetAsync(response, cancellationToken).ConfigureAwait(false);
+                }
+
+                try
+                {
+                    return JsonDocument.Parse(body);
+                }
+                catch (JsonException exception)
+                {
+                    if (mutation is { RetryPolicy: MutationRetryPolicy.Create })
+                    {
+                        throw CreateAmbiguousMutationException(
+                            mutation,
+                            "GitHub returned an incomplete or malformed success response.",
+                            exception);
+                    }
+
+                    if (serverErrorRetries >= MaxServerErrorRetries)
+                    {
+                        throw new GitHubGraphQLException(
+                            $"Malformed success response persisted after {MaxServerErrorRetries} retries.",
+                            exception);
+                    }
+
+                    var malformedResponseBackoff = GetBackoff(serverErrorRetries);
+                    serverErrorRetries++;
+                    await NotifyAndDelayAsync(
+                        string.Create(CultureInfo.InvariantCulture, $"Malformed success response; backing off {malformedResponseBackoff.TotalSeconds:0}s (attempt {serverErrorRetries}/{MaxServerErrorRetries})."),
+                        malformedResponseBackoff,
+                        cancellationToken).ConfigureAwait(false);
+                    continue;
+                }
             }
 
             // (a) 403/429 with an explicit Retry-After header.
@@ -263,6 +406,14 @@ public sealed class GitHubGraphQLClient : IDisposable
             // (c) Transient server errors: exponential backoff, up to 3 retries.
             if ((int)status >= 500)
             {
+                if (mutation is { RetryPolicy: MutationRetryPolicy.Create })
+                {
+                    throw CreateAmbiguousMutationException(
+                        mutation,
+                        string.Create(CultureInfo.InvariantCulture, $"GitHub returned HTTP {(int)status} ({status})."),
+                        statusCode: status);
+                }
+
                 if (serverErrorRetries >= MaxServerErrorRetries)
                 {
                     throw new GitHubGraphQLException($"Server error {(int)status} persisted after {MaxServerErrorRetries} retries.")
@@ -360,6 +511,76 @@ public sealed class GitHubGraphQLClient : IDisposable
         return false;
     }
 
+    private static AmbiguousMutationResultException CreateAmbiguousMutationException(
+        MutationContext mutation,
+        string detail,
+        Exception? innerException = null,
+        HttpStatusCode? statusCode = null)
+        => new(
+            mutation.OperationName,
+            mutation.ClientMutationId,
+            mutation.AttemptedAt,
+            mutation.Target,
+            detail,
+            innerException)
+        {
+            StatusCode = statusCode,
+        };
+
+    private static bool HasExpectedMutationResult(JsonElement data, MutationContext mutation)
+    {
+        if (!data.TryGetProperty(mutation.OperationName, out var current)
+            || current.ValueKind != JsonValueKind.Object
+            || !current.EnumerateObject().Any())
+        {
+            return false;
+        }
+
+        foreach (var segment in mutation.RequiredResultPath!.Split('.'))
+        {
+            if (current.ValueKind != JsonValueKind.Object || !current.TryGetProperty(segment, out current))
+            {
+                return false;
+            }
+        }
+
+        return current.ValueKind switch
+        {
+            JsonValueKind.String => !string.IsNullOrWhiteSpace(current.GetString()),
+            JsonValueKind.Object => current.EnumerateObject().Any(),
+            JsonValueKind.Null or JsonValueKind.Undefined => false,
+            _ => true,
+        };
+    }
+
+    private static bool ContainsOnlyKnownPreSideEffectErrors(JsonElement errors)
+    {
+        if (errors.ValueKind != JsonValueKind.Array || errors.GetArrayLength() == 0)
+        {
+            return false;
+        }
+
+        foreach (var error in errors.EnumerateArray())
+        {
+            if (!error.TryGetProperty("type", out var type) || type.ValueKind != JsonValueKind.String)
+            {
+                return false;
+            }
+
+            if (type.GetString() is not ("BAD_USER_INPUT" or "FORBIDDEN" or "INSUFFICIENT_SCOPES" or "NOT_FOUND" or "UNAUTHORIZED"))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static bool HasMutationPayload(JsonElement root, string operationName)
+        => root.TryGetProperty("data", out var data)
+            && data.ValueKind == JsonValueKind.Object
+            && data.TryGetProperty(operationName, out _);
+
     /// <summary>Converts an arbitrary variables object into a mutable map so the cursor can be injected.</summary>
     private static Dictionary<string, object?> ToVariableMap(object? variables)
     {
@@ -399,4 +620,12 @@ public sealed class GitHubGraphQLClient : IDisposable
 
         return current;
     }
+
+    private sealed record MutationContext(
+        string OperationName,
+        string ClientMutationId,
+        DateTimeOffset AttemptedAt,
+        string? Target,
+        MutationRetryPolicy RetryPolicy,
+        string? RequiredResultPath);
 }

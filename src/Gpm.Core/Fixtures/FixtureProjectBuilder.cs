@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using Gpm.Core.GitHub;
@@ -23,6 +24,8 @@ public sealed class FixtureProjectBuilder
 
     public Action<string>? OnProgress { get; set; }
 
+    public required string OperationLogDirectory { get; init; }
+
     public async Task<FixtureProjectSetupResult> CreateAsync(
         string organization,
         string title = "gpm-fixture",
@@ -33,8 +36,18 @@ public sealed class FixtureProjectBuilder
         ArgumentException.ThrowIfNullOrWhiteSpace(title);
         ArgumentException.ThrowIfNullOrWhiteSpace(repositoryName);
 
+        var operationKey = Convert.ToHexString(
+            SHA256.HashData(Encoding.UTF8.GetBytes($"{organization}\n{title}\n{repositoryName}")))[..16]
+            .ToLowerInvariant();
+        var operationDirectory = Path.Combine(OperationLogDirectory, operationKey);
         var existing = await FindProjectByTitleAsync(organization, title, cancellationToken).ConfigureAwait(false);
-        if (existing is not null)
+        var projectLog = await ProjectImportLog.LoadAsync(operationDirectory, cancellationToken).ConfigureAwait(false);
+        var itemLog = await ImportLog.LoadAsync(operationDirectory, cancellationToken).ConfigureAwait(false);
+        var hasPendingOperations = projectLog.PendingProject is not null
+            || projectLog.PendingFields.Count > 0
+            || itemLog is { PendingDrafts.Count: > 0 }
+            || itemLog is { PendingContents.Count: > 0 };
+        if (existing is not null && !hasPendingOperations)
         {
             OnProgress?.Invoke(string.Create(CultureInfo.InvariantCulture,
                 $"Fixture project already exists: {existing.Url}"));
@@ -49,6 +62,12 @@ public sealed class FixtureProjectBuilder
         var projectImporter = new ProjectImporter(_graphQl)
         {
             OnProgress = OnProgress,
+            OnConflict = existing is null ? ConflictAction.Fail : ConflictAction.Update,
+            OperationLogDirectory = operationDirectory,
+            PendingItemProjectId = itemLog is { PendingDrafts.Count: > 0 }
+                || itemLog is { PendingContents.Count: > 0 }
+                    ? itemLog.ProjectId
+                    : null,
             RepositoryMapping = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
             {
                 [repositoryFullName] = repositoryFullName,
@@ -68,32 +87,13 @@ public sealed class FixtureProjectBuilder
                 [viewerLogin] = viewerLogin,
             },
         };
-        var logDirectory = Path.Combine(Path.GetTempPath(), $"gpm-fixture-{Guid.NewGuid():N}");
-        try
+        var itemResult = await itemImporter.ImportAsync(snapshot, project, operationDirectory, cancellationToken).ConfigureAwait(false);
+        foreach (var warning in itemResult.Warnings)
         {
-            var itemResult = await itemImporter.ImportAsync(snapshot, project, logDirectory, cancellationToken).ConfigureAwait(false);
-            foreach (var warning in itemResult.Warnings)
-            {
-                OnProgress?.Invoke("warning: " + warning);
-            }
-        }
-        finally
-        {
-            try
-            {
-                Directory.Delete(logDirectory, recursive: true);
-            }
-            catch (IOException)
-            {
-                // Best effort cleanup only.
-            }
-            catch (UnauthorizedAccessException)
-            {
-                // Best effort cleanup only.
-            }
+            OnProgress?.Invoke("warning: " + warning);
         }
 
-        return new FixtureProjectSetupResult(project.ProjectNumber, project.Url, Created: true);
+        return new FixtureProjectSetupResult(project.ProjectNumber, project.Url, Created: existing is null);
     }
 
     private async Task<int> EnsureRepositoryAsync(string organization, string repositoryName, CancellationToken cancellationToken)

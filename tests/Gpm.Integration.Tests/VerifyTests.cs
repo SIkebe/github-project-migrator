@@ -75,7 +75,11 @@ public class VerifyTests
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToDictionary(login => login, login => login, StringComparer.OrdinalIgnoreCase);
 
-        var result = await new ProjectImporter(client) { RepositoryMapping = repoMapping }
+        var result = await new ProjectImporter(client)
+        {
+            RepositoryMapping = repoMapping,
+            OperationLogDirectory = IntegrationTestSettings.CreateOperationLogDirectory(),
+        }
             .ImportAsync(snapshot, TargetOrg, cancellationToken);
         var logDirectory = Directory.CreateTempSubdirectory("gpm-m5-").FullName;
         try

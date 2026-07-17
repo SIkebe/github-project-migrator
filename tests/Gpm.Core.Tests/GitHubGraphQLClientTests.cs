@@ -141,6 +141,69 @@ public class GitHubGraphQLClientTests
     }
 
     [Fact]
+    public async Task Create_graphql_error_with_possible_side_effect_is_ambiguous()
+    {
+        const string body = """{"data":{"createThing":{"thing":null}},"errors":[{"type":"INTERNAL","message":"Child field failed"}]}""";
+        using var handler = new StubHandler(JsonResponse(HttpStatusCode.OK, body));
+        using var client = CreateClient(handler, []);
+
+        await Assert.ThrowsAsync<AmbiguousMutationResultException>(
+            () => client.MutationAsync(
+                "createThing",
+                "mutation($clientMutationId: String!) { createThing(input: { clientMutationId: $clientMutationId }) { thing { id } } }",
+                requiredResultPath: "thing.id",
+                cancellationToken: TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
+    public async Task Create_known_pre_side_effect_validation_error_is_definitive()
+    {
+        const string body = """{"data":null,"errors":[{"type":"BAD_USER_INPUT","message":"Invalid input"}]}""";
+        using var handler = new StubHandler(JsonResponse(HttpStatusCode.OK, body));
+        using var client = CreateClient(handler, []);
+
+        var exception = await Assert.ThrowsAsync<GitHubGraphQLException>(
+            () => client.MutationAsync(
+                "createThing",
+                "mutation($clientMutationId: String!) { createThing(input: { clientMutationId: $clientMutationId }) { thing { id } } }",
+                requiredResultPath: "thing.id",
+                cancellationToken: TestContext.Current.CancellationToken));
+
+        Assert.IsNotType<AmbiguousMutationResultException>(exception);
+        Assert.Equal("BAD_USER_INPUT", exception.ErrorType);
+    }
+
+    [Fact]
+    public async Task Create_partial_payload_with_known_error_type_is_ambiguous()
+    {
+        const string body = """{"data":{"createThing":{"thing":null}},"errors":[{"type":"FORBIDDEN","message":"Child field forbidden"}]}""";
+        using var handler = new StubHandler(JsonResponse(HttpStatusCode.OK, body));
+        using var client = CreateClient(handler, []);
+
+        await Assert.ThrowsAsync<AmbiguousMutationResultException>(
+            () => client.MutationAsync(
+                "createThing",
+                "mutation($clientMutationId: String!) { createThing(input: { clientMutationId: $clientMutationId }) { thing { id } } }",
+                requiredResultPath: "thing.id",
+                cancellationToken: TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
+    public async Task Create_null_operation_payload_with_known_error_type_is_ambiguous()
+    {
+        const string body = """{"data":{"createThing":null},"errors":[{"type":"FORBIDDEN","message":"Child field forbidden"}]}""";
+        using var handler = new StubHandler(JsonResponse(HttpStatusCode.OK, body));
+        using var client = CreateClient(handler, []);
+
+        await Assert.ThrowsAsync<AmbiguousMutationResultException>(
+            () => client.MutationAsync(
+                "createThing",
+                "mutation($clientMutationId: String!) { createThing(input: { clientMutationId: $clientMutationId }) { thing { id } } }",
+                requiredResultPath: "thing.id",
+                cancellationToken: TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
     public async Task QueryPaginatedAsync_enumerates_all_nodes_across_pages()
     {
         var page1 = """
@@ -199,12 +262,50 @@ public class GitHubGraphQLClientTests
         Assert.InRange(delay, TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(30));
     }
 
+    [Fact]
+    public async Task Successful_create_returns_before_primary_rate_limit_wait()
+    {
+        var response = JsonResponse(HttpStatusCode.OK, """{"data":{"createThing":{"thing":{"id":"created"}}}}""");
+        response.Headers.Add("X-RateLimit-Remaining", "0");
+        response.Headers.Add(
+            "X-RateLimit-Reset",
+            DateTimeOffset.UtcNow.AddMinutes(1).ToUnixTimeSeconds().ToString(System.Globalization.CultureInfo.InvariantCulture));
+        using var handler = new StubHandler(response);
+        var delays = new List<TimeSpan>();
+        using var client = CreateClient(handler, delays);
+
+        var data = await client.MutationAsync(
+            "createThing",
+            "mutation($clientMutationId: String!) { createThing(input: { clientMutationId: $clientMutationId }) { thing { id } } }",
+            requiredResultPath: "thing.id",
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Equal("created", data.GetProperty("createThing").GetProperty("thing").GetProperty("id").GetString());
+        Assert.Empty(delays);
+    }
+
     private static GitHubGraphQLClient CreateClient(StubHandler handler, List<TimeSpan> delays)
         => new("dummy-token", baseUrl: null, handler, (delay, _) =>
         {
             delays.Add(delay);
             return Task.CompletedTask;
         });
+
+    [Fact]
+    public async Task Mutation_without_required_result_path_is_rejected_before_sending()
+    {
+        using var handler = new StubHandler(JsonResponse(HttpStatusCode.OK, """{"data":{"updateThing":{"id":"updated"}}}"""));
+        using var client = CreateClient(handler, []);
+
+        await Assert.ThrowsAsync<ArgumentNullException>(
+            () => client.MutationAsync(
+                "updateThing",
+                "mutation($clientMutationId: String!) { updateThing(input: { clientMutationId: $clientMutationId }) { id } }",
+                retryPolicy: MutationRetryPolicy.Idempotent,
+                cancellationToken: TestContext.Current.CancellationToken));
+
+        Assert.Empty(handler.RequestBodies);
+    }
 
     [Fact]
     public async Task Temporary_conflict_errors_are_retried()
@@ -220,6 +321,232 @@ public class GitHubGraphQLClientTests
 
         Assert.Equal("octocat", login);
         Assert.Equal([TimeSpan.FromSeconds(1)], delays);
+    }
+
+    [Fact]
+    public async Task Create_temporary_conflict_with_mutation_payload_is_ambiguous()
+    {
+        const string conflict = """{"data":{"createThing":{"thing":null}},"errors":[{"type":"UNPROCESSABLE","message":"A child field created a temporary conflict. Please try again."}]}""";
+        using var handler = new StubHandler(
+            JsonResponse(HttpStatusCode.OK, conflict),
+            JsonResponse(HttpStatusCode.OK, """{"data":{"createThing":{"thing":{"id":"duplicate"}}}}"""));
+        var delays = new List<TimeSpan>();
+        using var client = CreateClient(handler, delays);
+
+        await Assert.ThrowsAsync<AmbiguousMutationResultException>(
+            () => client.MutationAsync(
+                "createThing",
+                "mutation($clientMutationId: String!) { createThing(input: { clientMutationId: $clientMutationId }) { thing { id } } }",
+                requiredResultPath: "thing.id",
+                cancellationToken: TestContext.Current.CancellationToken));
+
+        Assert.Single(handler.RequestBodies);
+        Assert.Empty(delays);
+    }
+
+    [Fact]
+    public async Task Create_mutation_transport_failure_is_not_retried()
+    {
+        using var handler = new FlakyHandler(
+            failuresBeforeSuccess: int.MaxValue,
+            () => JsonResponse(HttpStatusCode.OK, """{"data":{"createThing":{"id":"created"}}}"""));
+        using var client = new GitHubGraphQLClient("dummy-token", baseUrl: null, handler, (_, _) => Task.CompletedTask);
+
+        var exception = await Assert.ThrowsAsync<AmbiguousMutationResultException>(
+            () => client.MutationAsync(
+                "createThing",
+                "mutation($name: String!, $clientMutationId: String!) { createThing(input: { name: $name, clientMutationId: $clientMutationId }) { id } }",
+                new { name = "secret-name" },
+                target: "target-project",
+                requiredResultPath: "id",
+                cancellationToken: TestContext.Current.CancellationToken));
+
+        Assert.Equal(1, handler.Attempts);
+        Assert.Equal("createThing", exception.OperationName);
+        Assert.Equal("target-project", exception.Target);
+        Assert.NotEmpty(exception.ClientMutationId);
+        Assert.Null(exception.StatusCode);
+        Assert.DoesNotContain("secret-name", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Create_mutation_server_error_is_not_retried()
+    {
+        using var handler = new StubHandler(
+            JsonResponse(HttpStatusCode.BadGateway, "bad gateway"),
+            JsonResponse(HttpStatusCode.OK, """{"data":{"createThing":{"id":"duplicate"}}}"""));
+        using var client = CreateClient(handler, []);
+
+        var exception = await Assert.ThrowsAsync<AmbiguousMutationResultException>(
+            () => client.MutationAsync(
+                "createThing",
+                "mutation($clientMutationId: String!) { createThing(input: { clientMutationId: $clientMutationId }) { id } }",
+                requiredResultPath: "id",
+                cancellationToken: TestContext.Current.CancellationToken));
+
+        Assert.Equal(HttpStatusCode.BadGateway, exception.StatusCode);
+        Assert.Single(handler.RequestBodies);
+    }
+
+    [Fact]
+    public async Task Create_mutation_timeout_is_ambiguous_and_not_retried()
+    {
+        using var handler = new TimeoutHandler();
+        using var client = new GitHubGraphQLClient("dummy-token", baseUrl: null, handler, (_, _) => Task.CompletedTask);
+
+        await Assert.ThrowsAsync<AmbiguousMutationResultException>(
+            () => client.MutationAsync(
+                "createThing",
+                "mutation($clientMutationId: String!) { createThing(input: { clientMutationId: $clientMutationId }) { id } }",
+                requiredResultPath: "id",
+                cancellationToken: TestContext.Current.CancellationToken));
+
+        Assert.Equal(1, handler.Attempts);
+    }
+
+    [Fact]
+    public async Task Create_mutation_malformed_success_response_is_ambiguous_and_not_retried()
+    {
+        using var handler = new StubHandler(
+            JsonResponse(HttpStatusCode.OK, """{"data":"""),
+            JsonResponse(HttpStatusCode.OK, """{"data":{"createThing":{"id":"duplicate"}}}"""));
+        using var client = CreateClient(handler, []);
+
+        await Assert.ThrowsAsync<AmbiguousMutationResultException>(
+            () => client.MutationAsync(
+                "createThing",
+                "mutation($clientMutationId: String!) { createThing(input: { clientMutationId: $clientMutationId }) { id } }",
+                requiredResultPath: "id",
+                cancellationToken: TestContext.Current.CancellationToken));
+
+        Assert.Single(handler.RequestBodies);
+    }
+
+    [Theory]
+    [InlineData("""{"data":null}""")]
+    [InlineData("""{"data":{}}""")]
+    [InlineData("""{"data":{"createThing":null}}""")]
+    [InlineData("""{"data":{"createThing":{}}}""")]
+    public async Task Create_mutation_incomplete_success_response_is_ambiguous(string responseBody)
+    {
+        using var handler = new StubHandler(JsonResponse(HttpStatusCode.OK, responseBody));
+        using var client = CreateClient(handler, []);
+
+        var exception = await Assert.ThrowsAsync<AmbiguousMutationResultException>(
+            () => client.MutationAsync(
+                "createThing",
+                "mutation($clientMutationId: String!) { createThing(input: { clientMutationId: $clientMutationId }) { id } }",
+                requiredResultPath: "id",
+                cancellationToken: TestContext.Current.CancellationToken));
+
+        Assert.Contains(exception.AttemptedAt.ToString("O", System.Globalization.CultureInfo.InvariantCulture), exception.Message, StringComparison.Ordinal);
+        Assert.Single(handler.RequestBodies);
+    }
+
+    [Fact]
+    public async Task Create_mutation_missing_required_nested_result_is_ambiguous()
+    {
+        using var handler = new StubHandler(
+            JsonResponse(HttpStatusCode.OK, """{"data":{"createThing":{"thing":null}}}"""));
+        using var client = CreateClient(handler, []);
+
+        await Assert.ThrowsAsync<AmbiguousMutationResultException>(
+            () => client.MutationAsync(
+                "createThing",
+                "mutation($clientMutationId: String!) { createThing(input: { clientMutationId: $clientMutationId }) { thing { id } } }",
+                requiredResultPath: "thing.id",
+                cancellationToken: TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
+    public async Task Idempotent_mutation_retries_malformed_success_response()
+    {
+        using var handler = new StubHandler(
+            JsonResponse(HttpStatusCode.OK, """{"data":"""),
+            JsonResponse(HttpStatusCode.OK, """{"data":{"updateThing":{"id":"updated"}}}"""));
+        var delays = new List<TimeSpan>();
+        using var client = CreateClient(handler, delays);
+
+        var data = await client.MutationAsync(
+            "updateThing",
+            "mutation($clientMutationId: String!) { updateThing(input: { clientMutationId: $clientMutationId }) { id } }",
+            retryPolicy: MutationRetryPolicy.Idempotent,
+            requiredResultPath: "id",
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Equal("updated", data.GetProperty("updateThing").GetProperty("id").GetString());
+        Assert.Equal([TimeSpan.FromSeconds(1)], delays);
+        Assert.Equal(2, handler.RequestBodies.Count);
+    }
+
+    [Fact]
+    public async Task Idempotent_mutation_retries_structurally_incomplete_success_response()
+    {
+        using var handler = new StubHandler(
+            JsonResponse(HttpStatusCode.OK, """{"data":{"updateThing":{"thing":null}}}"""),
+            JsonResponse(HttpStatusCode.OK, """{"data":{"updateThing":{"thing":{"id":"updated"}}}}"""));
+        var delays = new List<TimeSpan>();
+        using var client = CreateClient(handler, delays);
+
+        var data = await client.MutationAsync(
+            "updateThing",
+            "mutation($clientMutationId: String!) { updateThing(input: { clientMutationId: $clientMutationId }) { thing { id } } }",
+            retryPolicy: MutationRetryPolicy.Idempotent,
+            requiredResultPath: "thing.id",
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Equal("updated", data.GetProperty("updateThing").GetProperty("thing").GetProperty("id").GetString());
+        Assert.Equal([TimeSpan.FromSeconds(1)], delays);
+        Assert.Equal(2, handler.RequestBodies.Count);
+    }
+
+    [Fact]
+    public async Task Idempotent_mutation_retries_transport_failures()
+    {
+        using var handler = new FlakyHandler(
+            failuresBeforeSuccess: 2,
+            () => JsonResponse(HttpStatusCode.OK, """{"data":{"updateThing":{"id":"updated"}}}"""));
+        var delays = new List<TimeSpan>();
+        using var client = new GitHubGraphQLClient("dummy-token", baseUrl: null, handler, (delay, _) =>
+        {
+            delays.Add(delay);
+            return Task.CompletedTask;
+        });
+
+        var data = await client.MutationAsync(
+            "updateThing",
+            "mutation($clientMutationId: String!) { updateThing(input: { clientMutationId: $clientMutationId }) { id } }",
+            retryPolicy: MutationRetryPolicy.Idempotent,
+            requiredResultPath: "id",
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Equal("updated", data.GetProperty("updateThing").GetProperty("id").GetString());
+        Assert.Equal(3, handler.Attempts);
+        Assert.Equal([TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(2)], delays);
+    }
+
+    [Fact]
+    public async Task Create_mutation_retries_explicit_temporary_conflict_with_same_client_mutation_id()
+    {
+        const string conflict = """{"data":null,"errors":[{"type":"UNPROCESSABLE","message":"Temporary conflict. Please try again."}]}""";
+        using var handler = new StubHandler(
+            JsonResponse(HttpStatusCode.OK, conflict),
+            JsonResponse(HttpStatusCode.OK, """{"data":{"createThing":{"id":"created"}}}"""));
+        using var client = CreateClient(handler, []);
+
+        var data = await client.MutationAsync(
+            "createThing",
+            "mutation($clientMutationId: String!) { createThing(input: { clientMutationId: $clientMutationId }) { id } }",
+            requiredResultPath: "id",
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Equal("created", data.GetProperty("createThing").GetProperty("id").GetString());
+        Assert.Equal(2, handler.RequestBodies.Count);
+        using var first = JsonDocument.Parse(handler.RequestBodies[0]);
+        using var second = JsonDocument.Parse(handler.RequestBodies[1]);
+        Assert.Equal(
+            first.RootElement.GetProperty("variables").GetProperty("clientMutationId").GetString(),
+            second.RootElement.GetProperty("variables").GetProperty("clientMutationId").GetString());
     }
 
     [Fact]
@@ -263,12 +590,25 @@ public class GitHubGraphQLClientTests
     {
         private int _attempts;
 
+        public int Attempts => _attempts;
+
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             _attempts++;
             return _attempts <= failuresBeforeSuccess
                 ? Task.FromException<HttpResponseMessage>(new HttpRequestException("The response ended prematurely."))
                 : Task.FromResult(onSuccess());
+        }
+    }
+
+    private sealed class TimeoutHandler : HttpMessageHandler
+    {
+        public int Attempts { get; private set; }
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            Attempts++;
+            return Task.FromException<HttpResponseMessage>(new TaskCanceledException("The request timed out."));
         }
     }
 
