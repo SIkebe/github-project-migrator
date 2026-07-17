@@ -625,6 +625,7 @@ public sealed class ItemImporter
                 new { projectId = target.ProjectId, itemId, fieldId, value = valueInput },
                 MutationRetryPolicy.Idempotent,
                 target: itemId,
+                requiredResultPath: "projectV2Item.id",
                 cancellationToken: cancellationToken).ConfigureAwait(false);
         }
     }
@@ -654,6 +655,7 @@ public sealed class ItemImporter
                 new { projectId, itemId, afterId },
                 MutationRetryPolicy.Idempotent,
                 target: itemId,
+                requiredResultPath: "clientMutationId",
                 cancellationToken: cancellationToken).ConfigureAwait(false);
 
             afterId = itemId;
@@ -684,6 +686,7 @@ public sealed class ItemImporter
                     new { projectId, itemId },
                     MutationRetryPolicy.Idempotent,
                     target: itemId,
+                    requiredResultPath: "item.id",
                     cancellationToken: cancellationToken).ConfigureAwait(false);
             }
             catch (GitHubGraphQLException exception)

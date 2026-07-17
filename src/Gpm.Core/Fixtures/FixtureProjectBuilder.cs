@@ -36,7 +36,13 @@ public sealed class FixtureProjectBuilder
         ArgumentException.ThrowIfNullOrWhiteSpace(repositoryName);
 
         var existing = await FindProjectByTitleAsync(organization, title, cancellationToken).ConfigureAwait(false);
-        if (existing is not null)
+        var projectLog = await ProjectImportLog.LoadAsync(OperationLogDirectory, cancellationToken).ConfigureAwait(false);
+        var itemLog = await ImportLog.LoadAsync(OperationLogDirectory, cancellationToken).ConfigureAwait(false);
+        var hasPendingOperations = projectLog.PendingProject is not null
+            || projectLog.PendingFields.Count > 0
+            || itemLog is { PendingDrafts.Count: > 0 }
+            || itemLog is { PendingContents.Count: > 0 };
+        if (existing is not null && !hasPendingOperations)
         {
             OnProgress?.Invoke(string.Create(CultureInfo.InvariantCulture,
                 $"Fixture project already exists: {existing.Url}"));
@@ -51,6 +57,7 @@ public sealed class FixtureProjectBuilder
         var projectImporter = new ProjectImporter(_graphQl)
         {
             OnProgress = OnProgress,
+            OnConflict = existing is null ? ConflictAction.Fail : ConflictAction.Update,
             OperationLogDirectory = OperationLogDirectory,
             RepositoryMapping = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
             {
@@ -77,7 +84,7 @@ public sealed class FixtureProjectBuilder
             OnProgress?.Invoke("warning: " + warning);
         }
 
-        return new FixtureProjectSetupResult(project.ProjectNumber, project.Url, Created: true);
+        return new FixtureProjectSetupResult(project.ProjectNumber, project.Url, Created: existing is null);
     }
 
     private async Task<int> EnsureRepositoryAsync(string organization, string repositoryName, CancellationToken cancellationToken)

@@ -95,6 +95,7 @@ public sealed class GitHubGraphQLClient : IDisposable
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(operationName);
         ArgumentException.ThrowIfNullOrWhiteSpace(mutation);
+        ArgumentException.ThrowIfNullOrWhiteSpace(requiredResultPath);
 
         clientMutationId ??= Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture);
         var variableMap = ToVariableMap(variables);
@@ -535,12 +536,7 @@ public sealed class GitHubGraphQLClient : IDisposable
             return false;
         }
 
-        if (string.IsNullOrWhiteSpace(mutation.RequiredResultPath))
-        {
-            return true;
-        }
-
-        foreach (var segment in mutation.RequiredResultPath.Split('.'))
+        foreach (var segment in mutation.RequiredResultPath!.Split('.'))
         {
             if (current.ValueKind != JsonValueKind.Object || !current.TryGetProperty(segment, out current))
             {

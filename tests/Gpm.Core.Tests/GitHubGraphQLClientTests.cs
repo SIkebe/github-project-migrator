@@ -277,6 +277,22 @@ public class GitHubGraphQLClientTests
         });
 
     [Fact]
+    public async Task Mutation_without_required_result_path_is_rejected_before_sending()
+    {
+        using var handler = new StubHandler(JsonResponse(HttpStatusCode.OK, """{"data":{"updateThing":{"id":"updated"}}}"""));
+        using var client = CreateClient(handler, []);
+
+        await Assert.ThrowsAsync<ArgumentNullException>(
+            () => client.MutationAsync(
+                "updateThing",
+                "mutation($clientMutationId: String!) { updateThing(input: { clientMutationId: $clientMutationId }) { id } }",
+                retryPolicy: MutationRetryPolicy.Idempotent,
+                cancellationToken: TestContext.Current.CancellationToken));
+
+        Assert.Empty(handler.RequestBodies);
+    }
+
+    [Fact]
     public async Task Temporary_conflict_errors_are_retried()
     {
         const string conflict = """{"data":null,"errors":[{"type":"UNPROCESSABLE","message":"Your attempt to move this item created a temporary conflict. Please try again."}]}""";
@@ -327,6 +343,7 @@ public class GitHubGraphQLClientTests
                 "mutation($name: String!, $clientMutationId: String!) { createThing(input: { name: $name, clientMutationId: $clientMutationId }) { id } }",
                 new { name = "secret-name" },
                 target: "target-project",
+                requiredResultPath: "id",
                 cancellationToken: TestContext.Current.CancellationToken));
 
         Assert.Equal(1, handler.Attempts);
@@ -349,6 +366,7 @@ public class GitHubGraphQLClientTests
             () => client.MutationAsync(
                 "createThing",
                 "mutation($clientMutationId: String!) { createThing(input: { clientMutationId: $clientMutationId }) { id } }",
+                requiredResultPath: "id",
                 cancellationToken: TestContext.Current.CancellationToken));
 
         Assert.Equal(HttpStatusCode.BadGateway, exception.StatusCode);
@@ -365,6 +383,7 @@ public class GitHubGraphQLClientTests
             () => client.MutationAsync(
                 "createThing",
                 "mutation($clientMutationId: String!) { createThing(input: { clientMutationId: $clientMutationId }) { id } }",
+                requiredResultPath: "id",
                 cancellationToken: TestContext.Current.CancellationToken));
 
         Assert.Equal(1, handler.Attempts);
@@ -382,6 +401,7 @@ public class GitHubGraphQLClientTests
             () => client.MutationAsync(
                 "createThing",
                 "mutation($clientMutationId: String!) { createThing(input: { clientMutationId: $clientMutationId }) { id } }",
+                requiredResultPath: "id",
                 cancellationToken: TestContext.Current.CancellationToken));
 
         Assert.Single(handler.RequestBodies);
@@ -401,6 +421,7 @@ public class GitHubGraphQLClientTests
             () => client.MutationAsync(
                 "createThing",
                 "mutation($clientMutationId: String!) { createThing(input: { clientMutationId: $clientMutationId }) { id } }",
+                requiredResultPath: "id",
                 cancellationToken: TestContext.Current.CancellationToken));
 
         Assert.Contains(exception.AttemptedAt.ToString("O", System.Globalization.CultureInfo.InvariantCulture), exception.Message, StringComparison.Ordinal);
@@ -435,6 +456,7 @@ public class GitHubGraphQLClientTests
             "updateThing",
             "mutation($clientMutationId: String!) { updateThing(input: { clientMutationId: $clientMutationId }) { id } }",
             retryPolicy: MutationRetryPolicy.Idempotent,
+            requiredResultPath: "id",
             cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal("updated", data.GetProperty("updateThing").GetProperty("id").GetString());
@@ -480,6 +502,7 @@ public class GitHubGraphQLClientTests
             "updateThing",
             "mutation($clientMutationId: String!) { updateThing(input: { clientMutationId: $clientMutationId }) { id } }",
             retryPolicy: MutationRetryPolicy.Idempotent,
+            requiredResultPath: "id",
             cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal("updated", data.GetProperty("updateThing").GetProperty("id").GetString());
@@ -499,6 +522,7 @@ public class GitHubGraphQLClientTests
         var data = await client.MutationAsync(
             "createThing",
             "mutation($clientMutationId: String!) { createThing(input: { clientMutationId: $clientMutationId }) { id } }",
+            requiredResultPath: "id",
             cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal("created", data.GetProperty("createThing").GetProperty("id").GetString());

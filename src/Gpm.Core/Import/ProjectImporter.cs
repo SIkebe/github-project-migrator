@@ -79,6 +79,7 @@ public sealed class ProjectImporter
             existing = await ReconcilePendingProjectAsync(pendingProject, matches, cancellationToken).ConfigureAwait(false);
             _operationLog.PendingProject = null;
             await SaveOperationLogAsync(cancellationToken).ConfigureAwait(false);
+            ValidatePendingFieldOperations(snapshot, existing.Id);
             return await ApplySnapshotAsync(snapshot, ownerLogin, existing, ProjectImportOutcome.Created, cancellationToken).ConfigureAwait(false);
         }
 
@@ -99,6 +100,7 @@ public sealed class ProjectImporter
                     return BuildSkippedResult(existing);
 
                 case ConflictAction.Update:
+                    ValidatePendingFieldOperations(snapshot, existing.Id);
                     OnProgress?.Invoke(string.Create(CultureInfo.InvariantCulture,
                         $"Project '{title}' already exists (#{existing.Number}); applying snapshot to it (on-conflict=update)."));
                     await InvokeBeforeWriteAsync(cancellationToken).ConfigureAwait(false);
@@ -106,6 +108,7 @@ public sealed class ProjectImporter
             }
         }
 
+        ValidatePendingFieldOperations(snapshot, projectId: null);
         var ownerId = await GetOwnerIdAsync(ownerLogin, cancellationToken).ConfigureAwait(false);
         await InvokeBeforeWriteAsync(cancellationToken).ConfigureAwait(false);
         OnProgress?.Invoke($"Creating project '{title}' in '{ownerLogin}'...");
@@ -168,6 +171,13 @@ public sealed class ProjectImporter
             ?? throw new InvalidOperationException(string.Create(CultureInfo.InvariantCulture,
                 $"Project #{projectNumber} was not found in {OwnerDescription} '{ownerLogin}'."));
 
+        if (_operationLog?.PendingProject is { } pendingProject)
+        {
+            throw new InvalidOperationException(
+                $"Pending project operation '{pendingProject.OperationId}' must be resumed by project title before importing into project #{projectNumber}.");
+        }
+
+        ValidatePendingFieldOperations(snapshot, project.Id);
         OnProgress?.Invoke(string.Create(CultureInfo.InvariantCulture,
             $"Applying snapshot to existing project #{project.Number}..."));
         await InvokeBeforeWriteAsync(cancellationToken).ConfigureAwait(false);
@@ -176,6 +186,28 @@ public sealed class ProjectImporter
 
     private Task InvokeBeforeWriteAsync(CancellationToken cancellationToken)
         => BeforeWriteAsync?.Invoke(cancellationToken) ?? Task.CompletedTask;
+
+    private void ValidatePendingFieldOperations(ProjectSnapshot snapshot, string? projectId)
+    {
+        if (_operationLog is null || _operationLog.PendingFields.Count == 0)
+        {
+            return;
+        }
+
+        var snapshotFields = snapshot.Fields.ToDictionary(field => field.Name, StringComparer.Ordinal);
+        foreach (var (name, pending) in _operationLog.PendingFields)
+        {
+            if (projectId is null
+                || !string.Equals(pending.ProjectId, projectId, StringComparison.Ordinal)
+                || !snapshotFields.TryGetValue(name, out var field)
+                || !string.Equals(pending.Name, field.Name, StringComparison.Ordinal)
+                || !string.Equals(pending.DataType, field.DataType, StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    $"Pending field operation '{pending.OperationId}' does not match the selected project and snapshot. Resume the original import or reconcile it manually.");
+            }
+        }
+    }
 
     /// <summary>Applies metadata, custom fields and Status options to the target project and builds the result.</summary>
     private async Task<ImportResult> ApplySnapshotAsync(
@@ -365,6 +397,7 @@ public sealed class ProjectImporter
             new { projectId, collaborators = inputs.ToArray() },
             MutationRetryPolicy.Idempotent,
             target: projectId,
+            requiredResultPath: "collaborators.nodes",
             cancellationToken: cancellationToken).ConfigureAwait(false);
     }
 
@@ -413,6 +446,7 @@ public sealed class ProjectImporter
                     new { projectId, repositoryId },
                     MutationRetryPolicy.Idempotent,
                     target: projectId,
+                    requiredResultPath: "repository.nameWithOwner",
                     cancellationToken: cancellationToken).ConfigureAwait(false);
                 OnProgress?.Invoke($"Linked repository '{mapped}'.");
             }
@@ -597,6 +631,7 @@ public sealed class ProjectImporter
             },
             MutationRetryPolicy.Idempotent,
             target: projectId,
+            requiredResultPath: "projectV2.id",
             cancellationToken: cancellationToken).ConfigureAwait(false);
     }
 
@@ -646,10 +681,7 @@ public sealed class ProjectImporter
     private async Task LoadOperationLogAsync(CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(OperationLogDirectory);
-        if (_operationLog is null)
-        {
-            _operationLog = await ProjectImportLog.LoadAsync(OperationLogDirectory, cancellationToken).ConfigureAwait(false);
-        }
+        _operationLog = await ProjectImportLog.LoadAsync(OperationLogDirectory, cancellationToken).ConfigureAwait(false);
     }
 
     private Task SaveOperationLogAsync(CancellationToken cancellationToken)

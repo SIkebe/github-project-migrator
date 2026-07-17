@@ -73,6 +73,71 @@ public class ProjectImporterResumeTests
         }
     }
 
+    [Fact]
+    public async Task Import_into_rejects_pending_project_before_mutating_selected_project()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var directory = Directory.CreateTempSubdirectory("gpm-project-target-").FullName;
+        try
+        {
+            var log = new ProjectImportLog
+            {
+                PendingProject = new PendingProjectOperation
+                {
+                    OperationId = "pending-project",
+                    OwnerLogin = "target",
+                    Title = "Project",
+                    ExistingProjectIds = [],
+                },
+            };
+            await log.SaveAsync(directory, cancellationToken);
+            using var handler = new FieldResumeHandler(directory);
+            using var client = CreateClient(handler);
+            var importer = new ProjectImporter(client) { OperationLogDirectory = directory };
+
+            var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+                () => importer.ImportIntoAsync(Snapshot(), "target", 7, cancellationToken));
+
+            Assert.Contains("pending project operation", exception.Message, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Import_into_rejects_pending_field_omitted_from_snapshot_before_mutating()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var directory = Directory.CreateTempSubdirectory("gpm-field-target-").FullName;
+        try
+        {
+            var log = new ProjectImportLog();
+            log.PendingFields["Custom"] = new PendingFieldOperation
+            {
+                OperationId = "pending-field",
+                ProjectId = "PVT_existing",
+                Name = "Custom",
+                DataType = "TEXT",
+                ExistingFieldIds = [],
+            };
+            await log.SaveAsync(directory, cancellationToken);
+            using var handler = new FieldResumeHandler(directory);
+            using var client = CreateClient(handler);
+            var importer = new ProjectImporter(client) { OperationLogDirectory = directory };
+
+            var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+                () => importer.ImportIntoAsync(Snapshot(), "target", 7, cancellationToken));
+
+            Assert.Contains("does not match", exception.Message, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
     private static GitHubGraphQLClient CreateClient(HttpMessageHandler handler)
         => new("token", new Uri("https://example.test/graphql"), handler, (_, _) => Task.CompletedTask);
 
