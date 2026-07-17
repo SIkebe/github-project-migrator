@@ -44,7 +44,12 @@ public class CliImportTests
                         "--no-update-check",
                     },
                 ]);
-            var exitCode = await Assert.IsType<Task<int>>(invocation);
+            var exitCode = invocation switch
+            {
+                int code => code,
+                Task<int> task => await task,
+                _ => throw new InvalidOperationException("The gpm entry point returned an unexpected result."),
+            };
 
             Assert.Equal(0, exitCode);
             Assert.Contains("result=skipped project=42", output.ToString(), StringComparison.Ordinal);
@@ -184,4 +189,4 @@ public class CliImportTests
 }
 
 [CollectionDefinition("Console", DisableParallelization = true)]
-public sealed class ConsoleCollection;
+public sealed class ConsoleTestGroup;
