@@ -138,7 +138,8 @@ public class ItemImporterTests
             var resumeResult = await new ItemImporter(client) { RepositoryMapping = IdentityRepoMapping, UserMapping = userMapping }
                 .ImportAsync(snapshot, result, logDirectory, cancellationToken);
             Assert.Equal(0, resumeResult.Created);
-            Assert.Equal(snapshot.Items.Count, resumeResult.Skipped);
+            Assert.Equal(snapshot.Items.Count, resumeResult.AlreadyComplete);
+            Assert.Equal(0, resumeResult.Skipped);
 
             var afterResume = await exporter.ExportAsync(TargetOrg, result.ProjectNumber, cancellationToken);
             Assert.Equal(imported.Items.Count, afterResume.Items.Count);

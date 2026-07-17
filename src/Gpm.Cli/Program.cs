@@ -403,13 +403,23 @@ importCommand.SetAction(async (parseResult, cancellationToken) =>
         }
 
         var itemLog = await ImportLog.LoadAsync(inDirectory, cancellationToken);
-        var pendingItemProjectId = itemLog is { PendingDrafts.Count: > 0 }
+        if (itemLog is not null
+            && !string.Equals(
+                itemLog.SourceSnapshotFingerprint,
+                ImportLog.ComputeSnapshotFingerprint(snapshot),
+                StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"{ImportLog.FileName} in '{inDirectory}' belongs to a different source snapshot.");
+        }
+
+        var hasIncompleteItemWork = itemLog is { PendingDrafts.Count: > 0 }
             || itemLog is { PendingContents.Count: > 0 }
-                ? itemLog.ProjectId
-                : null;
+            || itemLog is { HasIncompleteItems: true };
+        var pendingItemProjectId = itemLog?.ProjectId;
         var importer = new ProjectImporter(client)
         {
-            OnConflict = onConflict,
+            OnConflict = hasIncompleteItemWork ? ConflictAction.Update : onConflict,
             OwnerType = ownerType,
             RepositoryMapping = repoMapping,
             UserMapping = userMapping,
@@ -483,7 +493,7 @@ importCommand.SetAction(async (parseResult, cancellationToken) =>
         Console.WriteLine(string.Create(CultureInfo.InvariantCulture,
             $"result={FormatProjectImportOutcome(result.Outcome)} project={result.ProjectNumber}"));
         Console.WriteLine(string.Create(CultureInfo.InvariantCulture,
-            $"items: created={itemResult.Created} skipped={itemResult.Skipped} warnings={itemResult.Warnings.Count}"));
+            $"items: created={itemResult.Created} resumed={itemResult.Resumed} already-complete={itemResult.AlreadyComplete} skipped={itemResult.Skipped} warnings={itemResult.Warnings.Count}"));
         if (enableBrowserAutomation)
         {
             Console.WriteLine(string.Create(CultureInfo.InvariantCulture,

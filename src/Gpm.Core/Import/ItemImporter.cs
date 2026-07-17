@@ -48,42 +48,68 @@ public sealed class ItemImporter
         ArgumentNullException.ThrowIfNull(target);
         ArgumentException.ThrowIfNullOrWhiteSpace(logDirectory);
 
+        var snapshotFingerprint = ImportLog.ComputeSnapshotFingerprint(snapshot);
         var log = await ImportLog.LoadAsync(logDirectory, cancellationToken).ConfigureAwait(false);
-        if (log is not null && !string.Equals(log.ProjectId, target.ProjectId, StringComparison.Ordinal))
+        if (log is not null
+            && (!string.Equals(log.ProjectId, target.ProjectId, StringComparison.Ordinal)
+                || !string.Equals(log.SourceSnapshotFingerprint, snapshotFingerprint, StringComparison.Ordinal)))
         {
-            if (log.PendingDrafts.Count > 0 || log.PendingContents.Count > 0)
-            {
-                throw new InvalidOperationException(
-                    $"{ImportLog.FileName} in '{logDirectory}' contains pending operations for project '{log.ProjectId}'. Resume that project or reconcile it manually before importing into project '{target.ProjectId}'.");
-            }
-
-            OnProgress?.Invoke($"warning: {ImportLog.FileName} in '{logDirectory}' belongs to a different project; starting a fresh log.");
-            log = null;
+            throw new InvalidOperationException(
+                $"{ImportLog.FileName} in '{logDirectory}' belongs to a different source snapshot or target project. Use a separate log directory or restore the matching snapshot and target before resuming.");
         }
 
-        log ??= new ImportLog { ProjectId = target.ProjectId };
+        log ??= new ImportLog
+        {
+            ProjectId = target.ProjectId,
+            SourceSnapshotFingerprint = snapshotFingerprint,
+        };
 
         var warnings = new List<string>();
         var items = snapshot.Items.OrderBy(i => i.Position).ToList();
         var total = items.Count;
         var created = 0;
+        var resumed = 0;
+        var alreadyComplete = 0;
         var skipped = 0;
 
         for (var index = 0; index < items.Count; index++)
         {
             var item = items[index];
             var key = item.Position.ToString(CultureInfo.InvariantCulture);
+            var stateKey = BuildItemStateKey(item);
             var label = DescribeItem(item);
             var prefix = string.Create(CultureInfo.InvariantCulture, $"[{index + 1}/{total}]");
-
-            if (log.Items.ContainsKey(key))
+            IReadOnlyList<string>? draftAssigneeIds = null;
+            if (item is { Type: "DRAFT_ISSUE", Draft: not null })
             {
-                OnProgress?.Invoke($"{prefix} {label}: already imported on a previous run; skipping (resume).");
-                skipped++;
+                draftAssigneeIds = await ResolveAssigneeIdsAsync(item.Draft, warnings, cancellationToken).ConfigureAwait(false);
+            }
+            var targetContentIdentity = GetTargetContentIdentity(item, draftAssigneeIds);
+
+            if (log.ItemStates.TryGetValue(stateKey, out var existingState)
+                && !string.Equals(existingState.TargetContentIdentity, targetContentIdentity, StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    $"{label}: the target content mapping no longer matches the identity recorded in {ImportLog.FileName}. Restore the original repository or user mapping, or use a separate log directory.");
+            }
+
+            if (log.ItemStates.TryGetValue(stateKey, out var completedState)
+                && completedState.FieldValuesApplied)
+            {
+                if (completedState.PositionApplied && completedState.ArchiveApplied)
+                {
+                    OnProgress?.Invoke($"{prefix} {label}: already complete.");
+                    alreadyComplete++;
+                }
+                else
+                {
+                    OnProgress?.Invoke($"{prefix} {label}: content and field values already complete; resuming later stages.");
+                    resumed++;
+                }
                 continue;
             }
 
-            OnProgress?.Invoke($"{prefix} Importing {label}...");
+            OnProgress?.Invoke($"{prefix} Importing or resuming {label}...");
             var hasPendingDraft = log.PendingDrafts.ContainsKey(key);
             var hasPendingContent = log.PendingContents.ContainsKey(key);
             var expectsDraft = item is { Type: "DRAFT_ISSUE", Draft: not null };
@@ -99,12 +125,12 @@ public sealed class ItemImporter
             var resumedPendingOperation = hasPendingDraft || hasPendingContent;
             try
             {
-                string? itemId = null;
+                string? itemId = completedState?.TargetItemId;
                 PendingDraftOperation? pendingDraft = null;
-                if (item is { Type: "DRAFT_ISSUE", Draft: not null })
+                if (itemId is null && item is { Type: "DRAFT_ISSUE", Draft: not null })
                 {
                     var body = BuildDraftBody(item.Draft);
-                    var assigneeIds = await ResolveAssigneeIdsAsync(item.Draft, warnings, cancellationToken).ConfigureAwait(false);
+                    var assigneeIds = draftAssigneeIds ?? [];
                     if (log.PendingDrafts.TryGetValue(key, out pendingDraft))
                     {
                         if (!string.Equals(pendingDraft.Title, item.Draft.Title, StringComparison.Ordinal)
@@ -163,21 +189,53 @@ public sealed class ItemImporter
 
                 // Persist the mapping immediately so an interrupted run never duplicates this item.
                 log.Items[key] = itemId;
+                if (!log.ItemStates.TryGetValue(stateKey, out var itemState))
+                {
+                    itemState = new ImportItemState
+                    {
+                        TargetItemId = itemId,
+                        TargetContentIdentity = targetContentIdentity,
+                    };
+                    log.ItemStates[stateKey] = itemState;
+                }
                 log.PendingDrafts.Remove(key);
                 log.PendingContents.Remove(key);
                 await log.SaveAsync(logDirectory, cancellationToken).ConfigureAwait(false);
 
-                await ApplyFieldValuesAsync(item, itemId, target, label, warnings, cancellationToken).ConfigureAwait(false);
-                created++;
+                itemState.FieldValuesApplied = await ApplyFieldValuesAsync(
+                    item,
+                    itemId,
+                    target,
+                    label,
+                    warnings,
+                    cancellationToken).ConfigureAwait(false);
+                itemState.FieldValuesError = itemState.FieldValuesApplied
+                    ? null
+                    : "One or more field values could not be applied; resume will retry this stage.";
+                await log.SaveAsync(logDirectory, cancellationToken).ConfigureAwait(false);
+                if (completedState is null && !resumedPendingOperation)
+                {
+                    created++;
+                }
+                else
+                {
+                    resumed++;
+                }
             }
             catch (AmbiguousMutationResultException)
             {
                 throw;
             }
-            catch when (!resumedPendingOperation)
+            catch (Exception exception)
             {
-                if (log.PendingDrafts.Remove(key) | log.PendingContents.Remove(key))
+                if (!resumedPendingOperation
+                    && (log.PendingDrafts.Remove(key) | log.PendingContents.Remove(key)))
                 {
+                    await log.SaveAsync(logDirectory, CancellationToken.None).ConfigureAwait(false);
+                }
+                else if (log.ItemStates.TryGetValue(stateKey, out var itemState))
+                {
+                    itemState.FieldValuesError = exception.Message;
                     await log.SaveAsync(logDirectory, CancellationToken.None).ConfigureAwait(false);
                 }
 
@@ -185,13 +243,20 @@ public sealed class ItemImporter
             }
         }
 
-        await ApplyPositionsAsync(items, target.ProjectId, log, cancellationToken).ConfigureAwait(false);
-        await ArchiveItemsAsync(items, target.ProjectId, log, warnings, cancellationToken).ConfigureAwait(false);
+        await ApplyPositionsAsync(items, target.ProjectId, log, logDirectory, cancellationToken).ConfigureAwait(false);
+        await ArchiveItemsAsync(items, target.ProjectId, log, logDirectory, warnings, cancellationToken).ConfigureAwait(false);
 
         OnProgress?.Invoke(string.Create(CultureInfo.InvariantCulture,
-            $"Item import finished: {created} created, {skipped} skipped, {warnings.Count} warnings."));
+            $"Item import finished: {created} created, {resumed} resumed, {alreadyComplete} already complete, {skipped} skipped, {warnings.Count} warnings."));
 
-        return new ItemImportResult { Created = created, Skipped = skipped, Warnings = warnings };
+        return new ItemImportResult
+        {
+            Created = created,
+            Resumed = resumed,
+            AlreadyComplete = alreadyComplete,
+            Skipped = skipped,
+            Warnings = warnings,
+        };
     }
 
     /// <summary>
@@ -587,8 +652,9 @@ public sealed class ItemImporter
         return [.. ids];
     }
 
-    private async Task ApplyFieldValuesAsync(ItemSnapshot item, string itemId, ImportResult target, string label, List<string> warnings, CancellationToken cancellationToken)
+    private async Task<bool> ApplyFieldValuesAsync(ItemSnapshot item, string itemId, ImportResult target, string label, List<string> warnings, CancellationToken cancellationToken)
     {
+        var allApplied = true;
         foreach (var value in item.FieldValues)
         {
             if (string.Equals(value.FieldName, TitleFieldName, StringComparison.Ordinal))
@@ -599,6 +665,7 @@ public sealed class ItemImporter
             if (!target.FieldIds.TryGetValue(value.FieldName, out var fieldId))
             {
                 Warn(warnings, $"{label}: field '{value.FieldName}' does not exist in the target project; skipping the value.");
+                allApplied = false;
                 continue;
             }
 
@@ -621,6 +688,7 @@ public sealed class ItemImporter
                     || !options.TryGetValue(value.SingleSelectOptionName, out var optionId))
                 {
                     Warn(warnings, $"{label}: option '{value.SingleSelectOptionName}' of field '{value.FieldName}' has no target id; skipping the value.");
+                    allApplied = false;
                     continue;
                 }
 
@@ -632,6 +700,7 @@ public sealed class ItemImporter
                     || !iterations.TryGetValue(value.IterationTitle, out var iterationId))
                 {
                     Warn(warnings, $"{label}: iteration '{value.IterationTitle}' of field '{value.FieldName}' has no target id; skipping the value.");
+                    allApplied = false;
                     continue;
                 }
 
@@ -657,47 +726,95 @@ public sealed class ItemImporter
                 requiredResultPath: "projectV2Item.id",
                 cancellationToken: cancellationToken).ConfigureAwait(false);
         }
+
+        return allApplied;
     }
 
     /// <summary>Restores snapshot order by chaining updateProjectV2ItemPosition (afterId = previous item's new id). Archived items are excluded.</summary>
-    private async Task ApplyPositionsAsync(List<ItemSnapshot> items, string projectId, ImportLog log, CancellationToken cancellationToken)
+    private async Task ApplyPositionsAsync(
+        List<ItemSnapshot> items,
+        string projectId,
+        ImportLog log,
+        string logDirectory,
+        CancellationToken cancellationToken)
     {
         OnProgress?.Invoke("Applying item positions...");
         string? afterId = null;
         foreach (var item in items)
         {
-            var key = item.Position.ToString(CultureInfo.InvariantCulture);
-            if (item.IsArchived || !log.Items.TryGetValue(key, out var itemId))
+            var stateKey = BuildItemStateKey(item);
+            if (!log.ItemStates.TryGetValue(stateKey, out var state))
             {
                 continue;
             }
 
-            await _client.MutationAsync(
-                "updateProjectV2ItemPosition",
-                """
-                mutation($projectId: ID!, $itemId: ID!, $afterId: ID, $clientMutationId: String!) {
-                  updateProjectV2ItemPosition(input: { projectId: $projectId, itemId: $itemId, afterId: $afterId, clientMutationId: $clientMutationId }) {
-                    clientMutationId
-                  }
+            var itemId = state.TargetItemId;
+            if (!item.IsArchived && !state.PositionApplied)
+            {
+                try
+                {
+                    await _client.MutationAsync(
+                        "updateProjectV2ItemPosition",
+                        """
+                        mutation($projectId: ID!, $itemId: ID!, $afterId: ID, $clientMutationId: String!) {
+                          updateProjectV2ItemPosition(input: { projectId: $projectId, itemId: $itemId, afterId: $afterId, clientMutationId: $clientMutationId }) {
+                            clientMutationId
+                          }
+                        }
+                        """,
+                        new { projectId, itemId, afterId },
+                        MutationRetryPolicy.Idempotent,
+                        target: itemId,
+                        requiredResultPath: "clientMutationId",
+                        cancellationToken: cancellationToken).ConfigureAwait(false);
+                    state.PositionApplied = true;
+                    state.PositionError = null;
+                    await log.SaveAsync(logDirectory, cancellationToken).ConfigureAwait(false);
                 }
-                """,
-                new { projectId, itemId, afterId },
-                MutationRetryPolicy.Idempotent,
-                target: itemId,
-                requiredResultPath: "clientMutationId",
-                cancellationToken: cancellationToken).ConfigureAwait(false);
+                catch (Exception exception)
+                {
+                    state.PositionError = exception.Message;
+                    await log.SaveAsync(logDirectory, CancellationToken.None).ConfigureAwait(false);
+                    throw;
+                }
+            }
+            else if (item.IsArchived && !state.PositionApplied)
+            {
+                state.PositionApplied = true;
+                await log.SaveAsync(logDirectory, cancellationToken).ConfigureAwait(false);
+            }
 
-            afterId = itemId;
+            if (!item.IsArchived)
+            {
+                afterId = itemId;
+            }
         }
     }
 
-    private async Task ArchiveItemsAsync(List<ItemSnapshot> items, string projectId, ImportLog log, List<string> warnings, CancellationToken cancellationToken)
+    private async Task ArchiveItemsAsync(
+        List<ItemSnapshot> items,
+        string projectId,
+        ImportLog log,
+        string logDirectory,
+        List<string> warnings,
+        CancellationToken cancellationToken)
     {
         foreach (var item in items)
         {
-            var key = item.Position.ToString(CultureInfo.InvariantCulture);
-            if (!item.IsArchived || !log.Items.TryGetValue(key, out var itemId))
+            var stateKey = BuildItemStateKey(item);
+            if (!log.ItemStates.TryGetValue(stateKey, out var state)
+                || state.ArchiveApplied
+                || !state.FieldValuesApplied
+                || !state.PositionApplied)
             {
+                continue;
+            }
+
+            if (!item.IsArchived)
+            {
+                state.ArchiveApplied = true;
+                state.ArchiveError = null;
+                await log.SaveAsync(logDirectory, cancellationToken).ConfigureAwait(false);
                 continue;
             }
 
@@ -712,18 +829,83 @@ public sealed class ItemImporter
                       }
                     }
                     """,
-                    new { projectId, itemId },
+                    new { projectId, itemId = state.TargetItemId },
                     MutationRetryPolicy.Idempotent,
-                    target: itemId,
+                    target: state.TargetItemId,
                     requiredResultPath: "item.id",
                     cancellationToken: cancellationToken).ConfigureAwait(false);
+                state.ArchiveApplied = true;
+                state.ArchiveError = null;
+                await log.SaveAsync(logDirectory, cancellationToken).ConfigureAwait(false);
             }
             catch (GitHubGraphQLException exception)
             {
-                // Already archived on a previous run, or otherwise not archivable.
+                if (await IsItemArchivedAsync(state.TargetItemId, cancellationToken).ConfigureAwait(false))
+                {
+                    state.ArchiveApplied = true;
+                    state.ArchiveError = null;
+                    await log.SaveAsync(logDirectory, cancellationToken).ConfigureAwait(false);
+                    continue;
+                }
+
+                state.ArchiveError = exception.Message;
+                await log.SaveAsync(logDirectory, CancellationToken.None).ConfigureAwait(false);
                 Warn(warnings, $"{DescribeItem(item)}: could not archive: {exception.Message}");
             }
         }
+    }
+
+    private async Task<bool> IsItemArchivedAsync(string itemId, CancellationToken cancellationToken)
+    {
+        var data = await _client.QueryAsync(
+            """
+            query($itemId: ID!) {
+              node(id: $itemId) {
+                ... on ProjectV2Item { isArchived }
+              }
+            }
+            """,
+            new { itemId },
+            cancellationToken).ConfigureAwait(false);
+        var node = data.GetProperty("node");
+        return node.ValueKind == JsonValueKind.Object
+            && node.TryGetProperty("isArchived", out var archived)
+            && archived.GetBoolean();
+    }
+
+    private static string BuildItemStateKey(ItemSnapshot item)
+    {
+        var identity = item.Type switch
+        {
+            "DRAFT_ISSUE" when item.Draft is not null
+                => $"{item.Type}:{item.Draft.Title}:{item.Draft.Body}:{item.Draft.Creator}:{item.Draft.CreatedAt}",
+            _ when item.Repository is not null && item.Number is not null
+                => string.Create(CultureInfo.InvariantCulture, $"{item.Type}:{item.Repository}:{item.Number.Value}"),
+            _ => item.Type,
+        };
+        return string.Create(CultureInfo.InvariantCulture, $"{identity}:position:{item.Position}");
+    }
+
+    private string? GetTargetContentIdentity(ItemSnapshot item, IReadOnlyList<string>? draftAssigneeIds)
+    {
+        if (item.Type == "DRAFT_ISSUE")
+        {
+            return "DRAFT_ISSUE:assignees:" + string.Join(",", draftAssigneeIds ?? []);
+        }
+
+        if (item.Type is not ("ISSUE" or "PULL_REQUEST")
+            || item.Repository is null
+            || item.Number is null)
+        {
+            return null;
+        }
+
+        var repository = RepositoryMapping.TryGetValue(item.Repository, out var mappedRepository)
+            ? mappedRepository
+            : null;
+        return repository is null
+            ? null
+            : string.Create(CultureInfo.InvariantCulture, $"{item.Type}:{repository.ToLowerInvariant()}:{item.Number.Value}");
     }
 
     private async Task<string?> ResolveIssueOrPullRequestIdAsync(string owner, string name, int number, CancellationToken cancellationToken)

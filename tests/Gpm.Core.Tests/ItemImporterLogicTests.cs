@@ -62,15 +62,30 @@ public class ItemImporterLogicTests
         var directory = Directory.CreateTempSubdirectory("gpm-importlog-").FullName;
         try
         {
-            var log = new ImportLog { ProjectId = "PVT_abc123" };
+            var log = new ImportLog
+            {
+                ProjectId = "PVT_abc123",
+                SourceSnapshotFingerprint = "snapshot-fingerprint",
+            };
             log.Items["0"] = "PVTI_item0";
             log.Items["2"] = "PVTI_item2";
+            log.ItemStates["issue:0"] = new ImportItemState
+            {
+                TargetItemId = "PVTI_item0",
+                TargetContentIdentity = "ISSUE:target/repo:1",
+            };
+            log.ItemStates["issue:2"] = new ImportItemState
+            {
+                TargetItemId = "PVTI_item2",
+                TargetContentIdentity = "ISSUE:target/repo:2",
+            };
             log.PendingDrafts["3"] = new PendingDraftOperation
             {
                 OperationId = "operation-3",
                 AttemptedAt = DateTimeOffset.Parse("2026-07-17T05:00:00Z", System.Globalization.CultureInfo.InvariantCulture),
                 Title = "Pending draft",
                 Body = "Pending body",
+                AssigneeIds = [],
                 ExistingItemIds = ["PVTI_existing"],
             };
             log.PendingContents["4"] = new PendingContentOperation
@@ -81,11 +96,14 @@ public class ItemImporterLogicTests
                 ExistingItemIds = [],
             };
             await log.SaveAsync(directory, cancellationToken);
+            await log.SaveAsync(directory, cancellationToken);
 
             var loaded = await ImportLog.LoadAsync(directory, cancellationToken);
 
             Assert.NotNull(loaded);
+            Assert.Equal(ImportLog.CurrentSchemaVersion, loaded.SchemaVersion);
             Assert.Equal("PVT_abc123", loaded.ProjectId);
+            Assert.Equal("snapshot-fingerprint", loaded.SourceSnapshotFingerprint);
             Assert.Equal(2, loaded.Items.Count);
             Assert.Equal("PVTI_item0", loaded.Items["0"]);
             Assert.Equal("PVTI_item2", loaded.Items["2"]);
@@ -95,6 +113,7 @@ public class ItemImporterLogicTests
             Assert.Equal(["PVTI_existing"], pending.Value.ExistingItemIds);
             Assert.Equal("I_issue", Assert.Single(loaded.PendingContents).Value.ContentId);
             Assert.Empty(Directory.GetFiles(directory, "*.tmp"));
+            Assert.True(File.Exists(Path.Combine(directory, ImportLog.BackupFileName)));
         }
         finally
         {
@@ -109,17 +128,6 @@ public class ItemImporterLogicTests
         var directory = Directory.CreateTempSubdirectory("gpm-importlog-switch-").FullName;
         try
         {
-            var log = new ImportLog { ProjectId = "PVT_original" };
-            log.PendingDrafts["0"] = new PendingDraftOperation
-            {
-                OperationId = "operation-0",
-                AttemptedAt = DateTimeOffset.UtcNow,
-                Title = "Pending draft",
-                ExistingItemIds = [],
-            };
-            await log.SaveAsync(directory, cancellationToken);
-            using var client = new GitHubGraphQLClient("dummy-token");
-            var importer = new ItemImporter(client);
             var snapshot = new ProjectSnapshot
             {
                 SchemaVersion = ProjectSnapshot.CurrentSchemaVersion,
@@ -134,6 +142,22 @@ public class ItemImporterLogicTests
                 Workflows = [],
                 Items = [],
             };
+            var log = new ImportLog
+            {
+                ProjectId = "PVT_original",
+                SourceSnapshotFingerprint = ImportLog.ComputeSnapshotFingerprint(snapshot),
+            };
+            log.PendingDrafts["0"] = new PendingDraftOperation
+            {
+                OperationId = "operation-0",
+                AttemptedAt = DateTimeOffset.UtcNow,
+                Title = "Pending draft",
+                AssigneeIds = [],
+                ExistingItemIds = [],
+            };
+            await log.SaveAsync(directory, cancellationToken);
+            using var client = new GitHubGraphQLClient("dummy-token");
+            var importer = new ItemImporter(client);
             var target = new ImportResult
             {
                 ProjectId = "PVT_different",
@@ -148,10 +172,61 @@ public class ItemImporterLogicTests
             var exception = await Assert.ThrowsAsync<InvalidOperationException>(
                 () => importer.ImportAsync(snapshot, target, directory, cancellationToken));
 
-            Assert.Contains("pending operations", exception.Message, StringComparison.Ordinal);
+            Assert.Contains("different source snapshot or target project", exception.Message, StringComparison.Ordinal);
             var preserved = await ImportLog.LoadAsync(directory, cancellationToken);
             Assert.Equal("PVT_original", preserved!.ProjectId);
             Assert.Single(preserved.PendingDrafts);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Import_rejects_changed_snapshot_without_mutating_log_or_target()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var directory = Directory.CreateTempSubdirectory("gpm-importlog-snapshot-").FullName;
+        try
+        {
+            var snapshot = new ProjectSnapshot
+            {
+                SchemaVersion = ProjectSnapshot.CurrentSchemaVersion,
+                Project = new ProjectInfoSnapshot { Title = "Snapshot", Public = false, Closed = false },
+                Fields = [],
+                Views = [],
+                Workflows = [],
+                Items = [],
+            };
+            var log = new ImportLog
+            {
+                ProjectId = "PVT_target",
+                SourceSnapshotFingerprint = ImportLog.ComputeSnapshotFingerprint(snapshot),
+            };
+            await log.SaveAsync(directory, cancellationToken);
+            var changed = snapshot with
+            {
+                Project = snapshot.Project with { ShortDescription = "changed" },
+            };
+            var target = new ImportResult
+            {
+                ProjectId = "PVT_target",
+                ProjectNumber = 1,
+                Url = "https://example.test/project/1",
+                Outcome = ProjectImportOutcome.Updated,
+                FieldIds = new Dictionary<string, string>(),
+                OptionIds = new Dictionary<string, IReadOnlyDictionary<string, string>>(),
+                IterationIds = new Dictionary<string, IReadOnlyDictionary<string, string>>(),
+            };
+            using var client = new GitHubGraphQLClient("dummy-token");
+
+            await Assert.ThrowsAsync<InvalidOperationException>(
+                () => new ItemImporter(client).ImportAsync(changed, target, directory, cancellationToken));
+
+            var preserved = await ImportLog.LoadAsync(directory, cancellationToken);
+            Assert.Equal(log.SourceSnapshotFingerprint, preserved!.SourceSnapshotFingerprint);
+            Assert.Empty(preserved.ItemStates);
         }
         finally
         {
@@ -208,6 +283,82 @@ public class ItemImporterLogicTests
             await File.WriteAllTextAsync(Path.Combine(directory, ImportLog.FileName), "{ not json", cancellationToken);
             await Assert.ThrowsAsync<System.Text.Json.JsonException>(
                 () => ImportLog.LoadAsync(directory, cancellationToken));
+
+            await File.WriteAllTextAsync(
+                Path.Combine(directory, ImportLog.FileName),
+                """{"schemaVersion":2,"projectId":"PVT_target","sourceSnapshotFingerprint":"fingerprint","itemStates":{"item":{"targetItemId":null}}}""",
+                cancellationToken);
+            var malformed = await Assert.ThrowsAsync<InvalidDataException>(
+                () => ImportLog.LoadAsync(directory, cancellationToken));
+            Assert.Contains("malformed item state", malformed.Message, StringComparison.Ordinal);
+
+            await File.WriteAllTextAsync(
+                Path.Combine(directory, ImportLog.FileName),
+                """{"schemaVersion":2,"projectId":"PVT_target","sourceSnapshotFingerprint":"fingerprint","items":{"0":"PVTI_orphan"},"itemStates":{},"pendingDrafts":{},"pendingContents":{}}""",
+                cancellationToken);
+            var inconsistent = await Assert.ThrowsAsync<InvalidDataException>(
+                () => ImportLog.LoadAsync(directory, cancellationToken));
+            Assert.Contains("inconsistent item mappings", inconsistent.Message, StringComparison.Ordinal);
+
+            await File.WriteAllTextAsync(
+                Path.Combine(directory, ImportLog.FileName),
+                """{"schemaVersion":2,"projectId":"PVT_target","sourceSnapshotFingerprint":"fingerprint","items":{"0":"PVTI_item"},"itemStates":{"item":{"targetItemId":"PVTI_item","targetContentIdentity":"DRAFT_ISSUE:assignees:"}},"pendingDrafts":{"0":{"operationId":"op","attemptedAt":"2026-07-17T00:00:00Z","title":"Draft","assigneeIds":[],"existingItemIds":[]}},"pendingContents":{}}""",
+                cancellationToken);
+            var overlapping = await Assert.ThrowsAsync<InvalidDataException>(
+                () => ImportLog.LoadAsync(directory, cancellationToken));
+            Assert.Contains("overlapping pending item operations", overlapping.Message, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task ImportLog_rejects_legacy_schema_instead_of_ignoring_it()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var directory = Directory.CreateTempSubdirectory("gpm-importlog-legacy-").FullName;
+        try
+        {
+            await File.WriteAllTextAsync(
+                Path.Combine(directory, ImportLog.FileName),
+                """{"projectId":"PVT_old","items":{"0":"PVTI_old"}}""",
+                cancellationToken);
+
+            var exception = await Assert.ThrowsAsync<InvalidDataException>(
+                () => ImportLog.LoadAsync(directory, cancellationToken));
+
+            Assert.Contains("unsupported schema version 0", exception.Message, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task ImportLog_replace_failure_preserves_previous_primary()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var directory = Directory.CreateTempSubdirectory("gpm-importlog-atomic-").FullName;
+        try
+        {
+            var original = new ImportLog
+            {
+                ProjectId = "PVT_original",
+                SourceSnapshotFingerprint = "original",
+            };
+            await original.SaveAsync(directory, cancellationToken);
+            Directory.CreateDirectory(Path.Combine(directory, ImportLog.BackupFileName));
+
+            var replacement = original with { SourceSnapshotFingerprint = "replacement" };
+            var exception = await Record.ExceptionAsync(() => replacement.SaveAsync(directory, cancellationToken));
+            Assert.True(exception is IOException or UnauthorizedAccessException);
+
+            var preserved = await ImportLog.LoadAsync(directory, cancellationToken);
+            Assert.Equal("original", preserved!.SourceSnapshotFingerprint);
+            Assert.Empty(Directory.GetFiles(directory, "*.tmp"));
         }
         finally
         {
