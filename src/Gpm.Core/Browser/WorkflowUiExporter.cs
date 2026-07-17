@@ -1,4 +1,5 @@
 using System.Globalization;
+using Gpm.Core.GitHub;
 using Gpm.Core.Snapshot;
 using Microsoft.Playwright;
 
@@ -33,18 +34,28 @@ public sealed class WorkflowUiExporter
 
     /// <summary>Returns a copy of <paramref name="snapshot"/> with <see cref="WorkflowSnapshot.Ui"/> populated.</summary>
     public async Task<ProjectSnapshot> EnrichAsync(ProjectSnapshot snapshot, string orgLogin, int projectNumber, CancellationToken cancellationToken = default)
+        => await EnrichAsync(snapshot, orgLogin, ProjectOwnerType.Organization, projectNumber, cancellationToken).ConfigureAwait(false);
+
+    /// <summary>Returns a copy of <paramref name="snapshot"/> with <see cref="WorkflowSnapshot.Ui"/> populated.</summary>
+    public async Task<ProjectSnapshot> EnrichAsync(
+        ProjectSnapshot snapshot,
+        string ownerLogin,
+        ProjectOwnerType ownerType,
+        int projectNumber,
+        CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(snapshot);
-        ArgumentException.ThrowIfNullOrWhiteSpace(orgLogin);
+        ArgumentException.ThrowIfNullOrWhiteSpace(ownerLogin);
 
         if (snapshot.Workflows.Count == 0)
         {
             return snapshot;
         }
 
+        var ownerPath = ownerType == ProjectOwnerType.User ? "users" : "orgs";
         var page = await _session.GetPageAsync(cancellationToken).ConfigureAwait(false);
         var url = string.Create(CultureInfo.InvariantCulture,
-            $"{_session.BaseUrl}/orgs/{orgLogin}/projects/{projectNumber}/workflows");
+            $"{_session.BaseUrl}/{ownerPath}/{ownerLogin}/projects/{projectNumber}/workflows");
         await _session.GotoAsync(url, cancellationToken).ConfigureAwait(false);
         await Sel.WorkflowsSidebar(page).WaitForAsync().ConfigureAwait(false);
 

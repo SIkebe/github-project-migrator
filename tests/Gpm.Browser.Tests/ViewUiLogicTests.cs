@@ -178,20 +178,22 @@ public class ViewUiLogicTests
         var report = ProjectVerifier.Compare(Snapshot(["Status"], source), Snapshot(["Status"], target));
 
         var difference = Assert.Single(report.Differences, d => d.Category == "View");
-        Assert.Equal(VerifySeverity.Warning, difference.Severity);
+        Assert.Equal(VerifySeverity.Error, difference.Severity);
         Assert.Contains("slice by mismatch", difference.Message, StringComparison.Ordinal);
-        Assert.True(report.IsMatch, "Browser-scraped Ui details stay warnings (scrape granularity can differ between runs).");
+        Assert.Equal(VerifyStatus.Mismatch, report.Status);
     }
 
     [Fact]
-    public void Verifier_skips_ui_comparison_when_one_side_has_no_ui()
+    public void Verifier_marks_ui_not_verified_when_one_side_has_no_ui()
     {
         var source = View("Roadmap", "ROADMAP_LAYOUT") with { Ui = Ui("Assignees") };
         var target = View("Roadmap", "ROADMAP_LAYOUT");
 
         var report = ProjectVerifier.Compare(Snapshot(["Status"], source), Snapshot(["Status"], target));
 
-        Assert.DoesNotContain(report.Differences, d => d.Category == "View");
+        Assert.Equal(VerifyStatus.NotVerified, report.Status);
+        Assert.Contains(report.Categories, category =>
+            category.Category == "View" && category.Status == VerifyStatus.NotVerified);
     }
 
     // ----- helpers -----

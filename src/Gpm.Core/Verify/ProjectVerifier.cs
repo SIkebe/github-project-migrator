@@ -10,9 +10,9 @@ namespace Gpm.Core.Verify;
 /// Verifies a migrated project against its source snapshot (M5). The target project is
 /// read back through <see cref="ProjectExporter"/> and compared with the snapshot:
 /// project metadata (title excluded — it may be changed on import), fields (options,
-/// iterations), views/workflows (name-based; name/layout/enabled differences are errors
-/// since M6/M7 migrate them, browser-scraped <c>Ui</c> details are compared as warnings
-/// when both sides carry them) and items (counts, per-type counts, field values, order,
+/// iterations), views/workflows (GraphQL and browser-scraped settings are errors when
+/// migration output differs, and missing browser data is marked not verified) and items
+/// (counts, per-type counts, field values, order,
 /// archived state). Draft bodies are compared with the import attribution note stripped.
 /// </summary>
 public sealed class ProjectVerifier
@@ -22,6 +22,8 @@ public sealed class ProjectVerifier
     private const string ViewCategory = "View";
     private const string WorkflowCategory = "Workflow";
     private const string ItemCategory = "Item";
+    private const string CollaboratorCategory = "Collaborator";
+    private const string LinkedRepositoryCategory = "LinkedRepository";
 
     private readonly GitHubGraphQLClient _client;
 
@@ -96,14 +98,28 @@ public sealed class ProjectVerifier
         }
 
         var differences = new List<VerifyDifference>();
+        var notVerified = new HashSet<string>(StringComparer.Ordinal);
         CompareProject(source.Project, target.Project, differences);
         CompareFields(source.Fields, target.Fields, differences);
-        CompareViews(source.Views, target.Views, differences);
-        CompareWorkflows(source.Workflows, target.Workflows, differences);
+        CompareViews(source.Views, target.Views, differences, notVerified);
+        CompareWorkflows(source.Workflows, target.Workflows, differences, notVerified);
         CompareItems(source.Items, target.Items, differences);
-        CompareCollaborators(source.Collaborators, target.Collaborators, differences);
-        CompareLinkedRepositories(source.LinkedRepositories, target.LinkedRepositories, differences);
-        return new VerifyReport { Differences = differences };
+        CompareCollaborators(source.Collaborators, target.Collaborators, differences, notVerified);
+        CompareLinkedRepositories(source.LinkedRepositories, target.LinkedRepositories, differences, notVerified);
+        return new VerifyReport
+        {
+            Differences = differences,
+            Categories =
+            [
+                CategoryResult(ProjectCategory, differences, notVerified),
+                CategoryResult(FieldCategory, differences, notVerified),
+                CategoryResult(ItemCategory, differences, notVerified),
+                CategoryResult(ViewCategory, differences, notVerified),
+                CategoryResult(WorkflowCategory, differences, notVerified),
+                CategoryResult(CollaboratorCategory, differences, notVerified),
+                CategoryResult(LinkedRepositoryCategory, differences, notVerified),
+            ],
+        };
     }
 
     private static ProjectSnapshot ApplyRepositoryMapping(ProjectSnapshot source, IReadOnlyDictionary<string, string> repositoryMapping)
@@ -315,15 +331,23 @@ public sealed class ProjectVerifier
         return merged;
     }
 
-    // ----- collaborators / linked repositories (warnings: the API has no collaborator
-    // read field, and linked repositories may be intentionally remapped on import) -----
+    // ----- collaborators / linked repositories -----
 
-    private static void CompareCollaborators(IReadOnlyList<CollaboratorSnapshot>? source, IReadOnlyList<CollaboratorSnapshot>? target, List<VerifyDifference> differences)
+    private static void CompareCollaborators(
+        IReadOnlyList<CollaboratorSnapshot>? source,
+        IReadOnlyList<CollaboratorSnapshot>? target,
+        List<VerifyDifference> differences,
+        HashSet<string> notVerified)
     {
-        // Null means "not captured" (exports always leave collaborators null because the
-        // GraphQL API has no read field for them); only compare when both sides carry data.
         if (source is null || target is null)
         {
+            notVerified.Add(CollaboratorCategory);
+            if (source is not null)
+            {
+                Add(differences, VerifySeverity.Warning, CollaboratorCategory,
+                    "explicit collaborators were captured in the source but could not be read from the target");
+            }
+
             return;
         }
 
@@ -332,12 +356,12 @@ public sealed class ProjectVerifier
         {
             if (!targetByKey.TryGetValue(CollaboratorKey(collaborator), out var other))
             {
-                Add(differences, VerifySeverity.Warning, ProjectCategory,
+                AddError(differences, CollaboratorCategory,
                     $"collaborator {Describe(collaborator)} is missing in the target");
             }
             else if (!string.Equals(collaborator.Role, other.Role, StringComparison.OrdinalIgnoreCase))
             {
-                Add(differences, VerifySeverity.Warning, ProjectCategory,
+                AddError(differences, CollaboratorCategory,
                     $"collaborator {Describe(collaborator)}: role mismatch (source {collaborator.Role}, target {other.Role})");
             }
         }
@@ -345,7 +369,7 @@ public sealed class ProjectVerifier
         var sourceKeys = source.Select(CollaboratorKey).ToHashSet(StringComparer.OrdinalIgnoreCase);
         foreach (var extra in target.Where(c => !sourceKeys.Contains(CollaboratorKey(c))))
         {
-            Add(differences, VerifySeverity.Warning, ProjectCategory,
+            Add(differences, VerifySeverity.Warning, CollaboratorCategory,
                 $"collaborator {Describe(extra)} exists only in the target");
         }
     }
@@ -356,32 +380,40 @@ public sealed class ProjectVerifier
     private static string Describe(CollaboratorSnapshot collaborator)
         => $"{collaborator.Type.ToUpperInvariant()} '{collaborator.Login}'";
 
-    private static void CompareLinkedRepositories(IReadOnlyList<string>? source, IReadOnlyList<string>? target, List<VerifyDifference> differences)
+    private static void CompareLinkedRepositories(
+        IReadOnlyList<string>? source,
+        IReadOnlyList<string>? target,
+        List<VerifyDifference> differences,
+        HashSet<string> notVerified)
     {
-        // Null means the snapshot predates linked-repository capture; nothing to compare.
         if (source is null)
         {
+            notVerified.Add(LinkedRepositoryCategory);
             return;
         }
 
         var targetSet = (target ?? []).ToHashSet(StringComparer.OrdinalIgnoreCase);
         foreach (var repository in source.Where(r => !targetSet.Contains(r)))
         {
-            Add(differences, VerifySeverity.Warning, ProjectCategory,
-                $"linked repository '{repository}' is missing in the target (it may be intentionally remapped)");
+            AddError(differences, LinkedRepositoryCategory,
+                $"linked repository '{repository}' is missing in the target");
         }
 
         var sourceSet = source.ToHashSet(StringComparer.OrdinalIgnoreCase);
         foreach (var extra in (target ?? []).Where(r => !sourceSet.Contains(r)))
         {
-            Add(differences, VerifySeverity.Warning, ProjectCategory,
+            Add(differences, VerifySeverity.Warning, LinkedRepositoryCategory,
                 $"linked repository '{extra}' exists only in the target");
         }
     }
 
-    // ----- views / workflows (errors since M6/M7 migrate them; UI details stay warnings) -----
+    // ----- views / workflows -----
 
-    private static void CompareViews(IReadOnlyList<ViewSnapshot> source, IReadOnlyList<ViewSnapshot> target, List<VerifyDifference> differences)
+    private static void CompareViews(
+        IReadOnlyList<ViewSnapshot> source,
+        IReadOnlyList<ViewSnapshot> target,
+        List<VerifyDifference> differences,
+        HashSet<string> notVerified)
     {
         foreach (var name in Names(source.Select(v => v.Name), target.Select(v => v.Name)))
         {
@@ -407,12 +439,63 @@ public sealed class ProjectVerifier
                 AddError(differences, ViewCategory,
                     $"view '{name}': layout mismatch (source {string.Join(", ", s.Select(v => v.Layout))}, target {string.Join(", ", t.Select(v => v.Layout))})");
             }
-            else if (s.Count == 1 && t.Count == 1 && s[0].Ui is { } sourceUi && t[0].Ui is { } targetUi)
+            else if (s.Count == 1 && t.Count == 1)
             {
-                // Both sides carry browser-scraped UI settings (M6): compare them too.
-                // UI details remain warnings (scrape granularity can differ between runs).
-                CompareViewUi(name, sourceUi, targetUi, differences);
+                CompareViewApi(name, s[0], t[0], differences);
+                if (s[0].Ui is { } sourceUi && t[0].Ui is { } targetUi)
+                {
+                    CompareViewUi(name, sourceUi, targetUi, differences);
+                }
+                else
+                {
+                    notVerified.Add(ViewCategory);
+                    if (s[0].Ui is not null)
+                    {
+                        Add(differences, VerifySeverity.Warning, ViewCategory,
+                            $"view '{name}': UI settings were captured in the source but could not be read from the target");
+                    }
+                }
             }
+        }
+    }
+
+    private static void CompareViewApi(string name, ViewSnapshot source, ViewSnapshot target, List<VerifyDifference> differences)
+    {
+        CompareViewValue(name, "filter", source.Filter, target.Filter, differences);
+        CompareViewList(name, "visible fields", source.VisibleFields, target.VisibleFields, differences);
+        CompareViewList(name, "group by fields", source.GroupByFields, target.GroupByFields, differences);
+        CompareViewList(name, "vertical group by fields", source.VerticalGroupByFields, target.VerticalGroupByFields, differences);
+
+        var sourceSort = source.SortByFields.Select(field => $"{field.Field}:{field.Direction}").ToList();
+        var targetSort = target.SortByFields.Select(field => $"{field.Field}:{field.Direction}").ToList();
+        CompareViewList(name, "sort by fields", sourceSort, targetSort, differences);
+    }
+
+    private static void CompareViewValue(
+        string name,
+        string setting,
+        string? source,
+        string? target,
+        List<VerifyDifference> differences)
+    {
+        if (!string.Equals(source, target, StringComparison.Ordinal))
+        {
+            AddError(differences, ViewCategory,
+                $"view '{name}': {setting} mismatch (source '{source ?? "none"}', target '{target ?? "none"}')");
+        }
+    }
+
+    private static void CompareViewList(
+        string name,
+        string setting,
+        IReadOnlyList<string> source,
+        IReadOnlyList<string> target,
+        List<VerifyDifference> differences)
+    {
+        if (!source.SequenceEqual(target, StringComparer.Ordinal))
+        {
+            AddError(differences, ViewCategory,
+                $"view '{name}': {setting} mismatch (source [{string.Join(", ", source)}], target [{string.Join(", ", target)}])");
         }
     }
 
@@ -424,13 +507,13 @@ public sealed class ProjectVerifier
         CompareUiValue(differences, name, "swimlanes", source.Swimlanes, target.Swimlanes);
         if (!UiListEquals(source.FieldSum, target.FieldSum))
         {
-            Add(differences, VerifySeverity.Warning, ViewCategory,
+            AddError(differences, ViewCategory,
                 $"view '{name}': field sum mismatch (source [{JoinUi(source.FieldSum)}], target [{JoinUi(target.FieldSum)}])");
         }
 
         if ((source.Roadmap is null) != (target.Roadmap is null))
         {
-            Add(differences, VerifySeverity.Warning, ViewCategory,
+            AddError(differences, ViewCategory,
                 $"view '{name}': roadmap settings are present on only one side");
         }
         else if (source.Roadmap is { } sourceRoadmap && target.Roadmap is { } targetRoadmap)
@@ -440,7 +523,7 @@ public sealed class ProjectVerifier
             CompareUiValue(differences, name, "zoom level", sourceRoadmap.Zoom, targetRoadmap.Zoom);
             if (!UiListEquals(sourceRoadmap.Markers, targetRoadmap.Markers))
             {
-                Add(differences, VerifySeverity.Warning, ViewCategory,
+                AddError(differences, ViewCategory,
                     $"view '{name}': markers mismatch (source [{JoinUi(sourceRoadmap.Markers)}], target [{JoinUi(targetRoadmap.Markers)}])");
             }
         }
@@ -450,7 +533,7 @@ public sealed class ProjectVerifier
     {
         if (!string.Equals(source, target, StringComparison.Ordinal))
         {
-            Add(differences, VerifySeverity.Warning, ViewCategory,
+            AddError(differences, ViewCategory,
                 $"view '{viewName}': {setting} mismatch (source '{source ?? "none"}', target '{target ?? "none"}')");
         }
     }
@@ -460,7 +543,11 @@ public sealed class ProjectVerifier
 
     private static string JoinUi(IReadOnlyList<string>? values) => string.Join(", ", values ?? []);
 
-    private static void CompareWorkflows(IReadOnlyList<WorkflowSnapshot> source, IReadOnlyList<WorkflowSnapshot> target, List<VerifyDifference> differences)
+    private static void CompareWorkflows(
+        IReadOnlyList<WorkflowSnapshot> source,
+        IReadOnlyList<WorkflowSnapshot> target,
+        List<VerifyDifference> differences,
+        HashSet<string> notVerified)
     {
         foreach (var name in Names(source.Select(w => w.Name), target.Select(w => w.Name)))
         {
@@ -485,10 +572,21 @@ public sealed class ProjectVerifier
                 AddError(differences, WorkflowCategory,
                     $"workflow '{name}': enabled state mismatch (source {string.Join(", ", s.Select(w => w.Enabled))}, target {string.Join(", ", t.Select(w => w.Enabled))})");
             }
-            else if (s.Count == 1 && t.Count == 1 && s[0].Ui is { } sourceUi && t[0].Ui is { } targetUi)
+            else if (s.Count == 1 && t.Count == 1)
             {
-                // Both sides carry browser-scraped UI settings (M7): compare them too.
-                CompareWorkflowUi(name, sourceUi, targetUi, differences);
+                if (s[0].Ui is { } sourceUi && t[0].Ui is { } targetUi)
+                {
+                    CompareWorkflowUi(name, sourceUi, targetUi, differences);
+                }
+                else
+                {
+                    notVerified.Add(WorkflowCategory);
+                    if (s[0].Ui is not null)
+                    {
+                        Add(differences, VerifySeverity.Warning, WorkflowCategory,
+                            $"workflow '{name}': UI settings were captured in the source but could not be read from the target");
+                    }
+                }
             }
         }
     }
@@ -497,7 +595,7 @@ public sealed class ProjectVerifier
     {
         if (!UiListEquals(source.ContentTypes, target.ContentTypes))
         {
-            Add(differences, VerifySeverity.Warning, WorkflowCategory,
+            AddError(differences, WorkflowCategory,
                 $"workflow '{name}': content types mismatch (source [{JoinUi(source.ContentTypes)}], target [{JoinUi(target.ContentTypes)}])");
         }
 
@@ -510,7 +608,7 @@ public sealed class ProjectVerifier
     {
         if (!string.Equals(source, target, StringComparison.Ordinal))
         {
-            Add(differences, VerifySeverity.Warning, WorkflowCategory,
+            AddError(differences, WorkflowCategory,
                 $"workflow '{workflowName}': {setting} mismatch (source '{source ?? "none"}', target '{target ?? "none"}')");
         }
     }
@@ -697,6 +795,23 @@ public sealed class ProjectVerifier
 
     private static bool TextEquals(string? left, string? right)
         => string.Equals(left ?? string.Empty, right ?? string.Empty, StringComparison.Ordinal);
+
+    private static VerifyCategoryResult CategoryResult(
+        string category,
+        IReadOnlyList<VerifyDifference> differences,
+        HashSet<string> notVerified)
+    {
+        var categoryDifferences = differences.Where(difference =>
+            string.Equals(difference.Category, category, StringComparison.Ordinal));
+        var status = categoryDifferences.Any(difference => difference.Severity == VerifySeverity.Error)
+            ? VerifyStatus.Mismatch
+            : notVerified.Contains(category)
+                ? VerifyStatus.NotVerified
+                : categoryDifferences.Any(difference => difference.Severity == VerifySeverity.Warning)
+                    ? VerifyStatus.PartialMatch
+                    : VerifyStatus.Match;
+        return new VerifyCategoryResult { Category = category, Status = status };
+    }
 
     private static void AddError(List<VerifyDifference> differences, string category, string message)
         => Add(differences, VerifySeverity.Error, category, message);
