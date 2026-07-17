@@ -66,6 +66,13 @@ public static class BrowserBaseUrl
                 nameof(apiBaseUrl));
         }
 
+        if (!apiBaseUrl.IsLoopback && !IsSupportedWebHost(webHost))
+        {
+            throw new ArgumentException(
+                $"API host '{host}' does not identify a supported GitHub.com or single-tenant GHE.com deployment.",
+                nameof(apiBaseUrl));
+        }
+
         return new UriBuilder(apiBaseUrl.Scheme, webHost, apiBaseUrl.IsDefaultPort ? -1 : apiBaseUrl.Port).Uri;
     }
 

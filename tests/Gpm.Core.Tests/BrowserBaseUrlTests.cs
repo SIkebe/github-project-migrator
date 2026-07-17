@@ -96,4 +96,11 @@ public class BrowserBaseUrlTests
         Assert.Throws<ArgumentException>(() =>
             BrowserBaseUrl.Resolve(new Uri("https://github.example.com/api/graphql")));
     }
+
+    [Fact]
+    public void Resolve_rejects_nested_ghe_api_host()
+    {
+        Assert.Throws<ArgumentException>(() =>
+            BrowserBaseUrl.Resolve(new Uri("https://api.nested.tenant.ghe.com/graphql")));
+    }
 }

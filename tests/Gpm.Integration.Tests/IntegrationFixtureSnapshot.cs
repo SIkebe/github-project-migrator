@@ -48,32 +48,7 @@ internal static class IntegrationFixtureSnapshot
         HashSet<string> unexpectedKeys = [];
         for (var attempt = 0; attempt < 8; attempt++)
         {
-            var data = await client.QueryAsync(
-                """
-                query($org: String!, $number: Int!) {
-                  organization(login: $org) {
-                    projectV2(number: $number) {
-                      id
-                      items(first: 100, archivedStates: [ARCHIVED, NOT_ARCHIVED]) {
-                        nodes {
-                          id
-                          type
-                          content {
-                            ... on DraftIssue { title }
-                            ... on Issue { number repository { nameWithOwner } }
-                            ... on PullRequest { number repository { nameWithOwner } }
-                          }
-                        }
-                      }
-                    }
-                  }
-                }
-                """,
-                new { org, number = projectNumber },
-                cancellationToken);
-            var project = data.GetProperty("organization").GetProperty("projectV2");
-            var projectId = project.GetProperty("id").GetString()!;
-            var nodes = project.GetProperty("items").GetProperty("nodes").EnumerateArray().ToArray();
+            var (projectId, nodes) = await QueryItemsAsync();
             var unexpectedNodes = nodes
                 .Where(node => !expectedKeys.Contains(ItemKey(node)))
                 .ToArray();
@@ -102,8 +77,49 @@ internal static class IntegrationFixtureSnapshot
             await Task.Delay(TimeSpan.FromSeconds(2), cancellationToken);
         }
 
+        var (_, finalNodes) = await QueryItemsAsync();
+        unexpectedKeys = finalNodes
+            .Where(node => !expectedKeys.Contains(ItemKey(node)))
+            .Select(ItemKey)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        if (unexpectedKeys.Count == 0)
+        {
+            return;
+        }
+
         throw new InvalidOperationException(
             $"Project #{projectNumber} kept adding unexpected items: [{string.Join(", ", unexpectedKeys)}].");
+
+        async Task<(string ProjectId, System.Text.Json.JsonElement[] Nodes)> QueryItemsAsync()
+        {
+            var data = await client.QueryAsync(
+                """
+                query($org: String!, $number: Int!) {
+                  organization(login: $org) {
+                    projectV2(number: $number) {
+                      id
+                      items(first: 100, archivedStates: [ARCHIVED, NOT_ARCHIVED]) {
+                        nodes {
+                          id
+                          type
+                          content {
+                            ... on DraftIssue { title }
+                            ... on Issue { number repository { nameWithOwner } }
+                            ... on PullRequest { number repository { nameWithOwner } }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+                """,
+                new { org, number = projectNumber },
+                cancellationToken);
+            var project = data.GetProperty("organization").GetProperty("projectV2");
+            return (
+                project.GetProperty("id").GetString()!,
+                project.GetProperty("items").GetProperty("nodes").EnumerateArray().ToArray());
+        }
     }
 
     private static string ItemKey(ItemSnapshot item) => item.Type == "DRAFT_ISSUE"
