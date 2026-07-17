@@ -1,5 +1,7 @@
+using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Gpm.Core.Snapshot;
 
 namespace Gpm.Core.Import;
 
@@ -12,12 +14,23 @@ namespace Gpm.Core.Import;
 public sealed record ImportLog
 {
     public const string FileName = "import-log.json";
+    public const string BackupFileName = "import-log.json.bak";
+    public const int CurrentSchemaVersion = 2;
+
+    /// <summary>Version of the durable import state schema.</summary>
+    public int SchemaVersion { get; init; } = CurrentSchemaVersion;
 
     /// <summary>Node ID of the target project this log belongs to.</summary>
     public required string ProjectId { get; init; }
 
+    /// <summary>SHA-256 fingerprint of the complete source snapshot.</summary>
+    public string? SourceSnapshotFingerprint { get; init; }
+
     /// <summary>Source item position (as an invariant string) → target item node id.</summary>
     public Dictionary<string, string> Items { get; init; } = new(StringComparer.Ordinal);
+
+    /// <summary>Stable source item key → durable progress through each import stage.</summary>
+    public Dictionary<string, ImportItemState> ItemStates { get; init; } = new(StringComparer.Ordinal);
 
     /// <summary>Draft creations persisted before sending so an ambiguous result can be reconciled safely.</summary>
     public Dictionary<string, PendingDraftOperation> PendingDrafts { get; init; } = new(StringComparer.Ordinal);
@@ -39,8 +52,19 @@ public sealed record ImportLog
         var stream = File.OpenRead(path);
         await using (stream.ConfigureAwait(false))
         {
-            return await JsonSerializer.DeserializeAsync(stream, ImportLogJsonContext.Default.ImportLog, cancellationToken).ConfigureAwait(false)
+            var log = await JsonSerializer.DeserializeAsync(stream, ImportLogJsonContext.Default.ImportLog, cancellationToken).ConfigureAwait(false)
                 ?? throw new JsonException($"{FileName} contained null.");
+            if (log.SchemaVersion != CurrentSchemaVersion)
+            {
+                throw new InvalidDataException(
+                    $"{FileName} uses unsupported schema version {log.SchemaVersion}; expected {CurrentSchemaVersion}. The log cannot be resumed safely.");
+            }
+            if (string.IsNullOrWhiteSpace(log.SourceSnapshotFingerprint))
+            {
+                throw new InvalidDataException($"{FileName} does not contain a source snapshot fingerprint and cannot be resumed safely.");
+            }
+
+            return log;
         }
     }
 
@@ -67,7 +91,14 @@ public sealed record ImportLog
                 await stream.FlushAsync(cancellationToken).ConfigureAwait(false);
             }
 
-            File.Move(temporaryPath, path, overwrite: true);
+            if (File.Exists(path))
+            {
+                File.Replace(temporaryPath, path, Path.Combine(directory, BackupFileName));
+            }
+            else
+            {
+                File.Move(temporaryPath, path);
+            }
         }
         finally
         {
@@ -76,6 +107,28 @@ public sealed record ImportLog
 
         return path;
     }
+
+    public static string ComputeSnapshotFingerprint(ProjectSnapshot snapshot)
+    {
+        ArgumentNullException.ThrowIfNull(snapshot);
+        var json = JsonSerializer.SerializeToUtf8Bytes(snapshot, SnapshotJsonContext.Default.ProjectSnapshot);
+        return Convert.ToHexString(SHA256.HashData(json));
+    }
+}
+
+public sealed record ImportItemState
+{
+    public required string TargetItemId { get; init; }
+
+    public string? TargetContentIdentity { get; init; }
+
+    public bool FieldValuesApplied { get; set; }
+
+    public bool PositionApplied { get; set; }
+
+    public bool ArchiveApplied { get; set; }
+
+    public string? LastError { get; set; }
 }
 
 public sealed record PendingDraftOperation

@@ -188,6 +188,127 @@ public class ItemImporterResumeTests
         }
     }
 
+    [Theory]
+    [InlineData("field")]
+    [InlineData("position")]
+    [InlineData("archive")]
+    public async Task Failed_stage_resumes_without_recreating_item(string failedStage)
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var directory = Directory.CreateTempSubdirectory("gpm-stage-resume-").FullName;
+        try
+        {
+            using var handler = new StageResumeHandler(failedStage);
+            using var client = new GitHubGraphQLClient("token", baseUrl: null, handler, (_, _) => Task.CompletedTask);
+            var importer = CreateImporter(client);
+            var snapshot = CreateStageSnapshot(archived: failedStage == "archive", withField: failedStage == "field");
+            var target = Target with
+            {
+                FieldIds = failedStage == "field"
+                    ? new Dictionary<string, string> { ["Text"] = "PVTF_text" }
+                    : new Dictionary<string, string>(),
+            };
+
+            if (failedStage == "archive")
+            {
+                var first = await importer.ImportAsync(snapshot, target, directory, cancellationToken);
+                Assert.Single(first.Warnings);
+            }
+            else
+            {
+                await Assert.ThrowsAsync<GitHubGraphQLException>(
+                    () => importer.ImportAsync(snapshot, target, directory, cancellationToken));
+            }
+
+            var interrupted = await ImportLog.LoadAsync(directory, cancellationToken);
+            var interruptedState = Assert.Single(interrupted!.ItemStates).Value;
+            Assert.Equal("PVTI_new", interruptedState.TargetItemId);
+            Assert.NotNull(interruptedState.LastError);
+
+            await importer.ImportAsync(snapshot, target, directory, cancellationToken);
+
+            var completed = await ImportLog.LoadAsync(directory, cancellationToken);
+            var completedState = Assert.Single(completed!.ItemStates).Value;
+            Assert.True(completedState.FieldValuesApplied);
+            Assert.True(completedState.PositionApplied);
+            Assert.True(completedState.ArchiveApplied);
+            Assert.Null(completedState.LastError);
+            Assert.Equal(1, handler.CreateMutationCount);
+            Assert.Equal(2, failedStage switch
+            {
+                "field" => handler.FieldMutationCount,
+                "position" => handler.PositionMutationCount,
+                _ => handler.ArchiveMutationCount,
+            });
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Missing_field_mapping_remains_resumable()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var directory = Directory.CreateTempSubdirectory("gpm-field-resume-").FullName;
+        try
+        {
+            using var handler = new StageResumeHandler(failedStage: "");
+            using var client = new GitHubGraphQLClient("token", baseUrl: null, handler, (_, _) => Task.CompletedTask);
+            var snapshot = CreateStageSnapshot(archived: false, withField: true);
+
+            var first = await CreateImporter(client).ImportAsync(snapshot, Target, directory, cancellationToken);
+            Assert.Single(first.Warnings);
+            Assert.False(Assert.Single((await ImportLog.LoadAsync(directory, cancellationToken))!.ItemStates).Value.FieldValuesApplied);
+
+            var targetWithField = Target with
+            {
+                FieldIds = new Dictionary<string, string> { ["Text"] = "PVTF_text" },
+            };
+            await CreateImporter(client).ImportAsync(snapshot, targetWithField, directory, cancellationToken);
+
+            Assert.True(Assert.Single((await ImportLog.LoadAsync(directory, cancellationToken))!.ItemStates).Value.FieldValuesApplied);
+            Assert.Equal(1, handler.CreateMutationCount);
+            Assert.Equal(1, handler.FieldMutationCount);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Resume_rejects_changed_repository_mapping_after_creation()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var directory = Directory.CreateTempSubdirectory("gpm-mapping-resume-").FullName;
+        try
+        {
+            using var handler = new StageResumeHandler(failedStage: "");
+            using var client = new GitHubGraphQLClient("token", baseUrl: null, handler, (_, _) => Task.CompletedTask);
+            var snapshot = CreateStageSnapshot(archived: false, withField: false);
+            await CreateImporter(client).ImportAsync(snapshot, Target, directory, cancellationToken);
+
+            var changedImporter = new ItemImporter(client)
+            {
+                RepositoryMapping = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+                {
+                    ["source/repo"] = "other/repo",
+                },
+            };
+            var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+                () => changedImporter.ImportAsync(snapshot, Target, directory, cancellationToken));
+
+            Assert.Contains("repository mapping no longer matches", exception.Message, StringComparison.Ordinal);
+            Assert.Equal(1, handler.CreateMutationCount);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
     private static ItemImporter CreateImporter(GitHubGraphQLClient client) => new(client)
     {
         RepositoryMapping = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
@@ -233,6 +354,30 @@ public class ItemImporterResumeTests
                         Number = 1,
                         FieldValues = [],
                     },
+            ],
+        };
+
+    private static ProjectSnapshot CreateStageSnapshot(bool archived, bool withField)
+        => new()
+        {
+            SchemaVersion = ProjectSnapshot.CurrentSchemaVersion,
+            Project = new ProjectInfoSnapshot { Title = "Project", Public = false, Closed = false },
+            Fields = [],
+            Views = [],
+            Workflows = [],
+            Items =
+            [
+                new ItemSnapshot
+                {
+                    Type = "ISSUE",
+                    Position = 0,
+                    IsArchived = archived,
+                    Repository = "source/repo",
+                    Number = 1,
+                    FieldValues = withField
+                        ? [new FieldValueSnapshot { FieldName = "Text", Text = "value" }]
+                        : [],
+                },
             ],
         };
 
@@ -318,6 +463,80 @@ public class ItemImporterResumeTests
 
             throw new InvalidOperationException($"Unexpected GraphQL operation: {query}");
         }
+
+        private static HttpResponseMessage Json(string body)
+            => new(HttpStatusCode.OK)
+            {
+                Content = new StringContent(body, Encoding.UTF8, "application/json"),
+            };
+    }
+
+    private sealed class StageResumeHandler(string failedStage) : HttpMessageHandler
+    {
+        public int CreateMutationCount { get; private set; }
+
+        public int FieldMutationCount { get; private set; }
+
+        public int PositionMutationCount { get; private set; }
+
+        public int ArchiveMutationCount { get; private set; }
+
+        protected override async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            var body = await request.Content!.ReadAsStringAsync(cancellationToken);
+            using var document = JsonDocument.Parse(body);
+            var query = document.RootElement.GetProperty("query").GetString() ?? string.Empty;
+
+            if (query.Contains("issueOrPullRequest", StringComparison.Ordinal))
+            {
+                return Json("""{"data":{"repository":{"issueOrPullRequest":{"id":"I_content"}}}}""");
+            }
+
+            if (query.Contains("items(first: 100", StringComparison.Ordinal))
+            {
+                return Json("""{"data":{"node":{"items":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}""");
+            }
+
+            if (query.Contains("addProjectV2ItemById", StringComparison.Ordinal))
+            {
+                CreateMutationCount++;
+                return Json("""{"data":{"addProjectV2ItemById":{"item":{"id":"PVTI_new"}}}}""");
+            }
+
+            if (query.Contains("updateProjectV2ItemFieldValue", StringComparison.Ordinal))
+            {
+                FieldMutationCount++;
+                return ShouldFail("field", FieldMutationCount)
+                    ? Error()
+                    : Json("""{"data":{"updateProjectV2ItemFieldValue":{"projectV2Item":{"id":"PVTI_new"}}}}""");
+            }
+
+            if (query.Contains("updateProjectV2ItemPosition", StringComparison.Ordinal))
+            {
+                PositionMutationCount++;
+                return ShouldFail("position", PositionMutationCount)
+                    ? Error()
+                    : Json("""{"data":{"updateProjectV2ItemPosition":{"clientMutationId":"position"}}}""");
+            }
+
+            if (query.Contains("archiveProjectV2Item", StringComparison.Ordinal))
+            {
+                ArchiveMutationCount++;
+                return ShouldFail("archive", ArchiveMutationCount)
+                    ? Error()
+                    : Json("""{"data":{"archiveProjectV2Item":{"item":{"id":"PVTI_new"}}}}""");
+            }
+
+            throw new InvalidOperationException($"Unexpected GraphQL operation: {query}");
+        }
+
+        private bool ShouldFail(string stage, int count)
+            => string.Equals(failedStage, stage, StringComparison.Ordinal) && count == 1;
+
+        private static HttpResponseMessage Error()
+            => Json("""{"data":null,"errors":[{"type":"FORBIDDEN","message":"Injected stage failure"}]}""");
 
         private static HttpResponseMessage Json(string body)
             => new(HttpStatusCode.OK)

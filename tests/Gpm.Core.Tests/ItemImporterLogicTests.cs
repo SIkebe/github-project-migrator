@@ -62,7 +62,11 @@ public class ItemImporterLogicTests
         var directory = Directory.CreateTempSubdirectory("gpm-importlog-").FullName;
         try
         {
-            var log = new ImportLog { ProjectId = "PVT_abc123" };
+            var log = new ImportLog
+            {
+                ProjectId = "PVT_abc123",
+                SourceSnapshotFingerprint = "snapshot-fingerprint",
+            };
             log.Items["0"] = "PVTI_item0";
             log.Items["2"] = "PVTI_item2";
             log.PendingDrafts["3"] = new PendingDraftOperation
@@ -81,11 +85,14 @@ public class ItemImporterLogicTests
                 ExistingItemIds = [],
             };
             await log.SaveAsync(directory, cancellationToken);
+            await log.SaveAsync(directory, cancellationToken);
 
             var loaded = await ImportLog.LoadAsync(directory, cancellationToken);
 
             Assert.NotNull(loaded);
+            Assert.Equal(ImportLog.CurrentSchemaVersion, loaded.SchemaVersion);
             Assert.Equal("PVT_abc123", loaded.ProjectId);
+            Assert.Equal("snapshot-fingerprint", loaded.SourceSnapshotFingerprint);
             Assert.Equal(2, loaded.Items.Count);
             Assert.Equal("PVTI_item0", loaded.Items["0"]);
             Assert.Equal("PVTI_item2", loaded.Items["2"]);
@@ -95,6 +102,7 @@ public class ItemImporterLogicTests
             Assert.Equal(["PVTI_existing"], pending.Value.ExistingItemIds);
             Assert.Equal("I_issue", Assert.Single(loaded.PendingContents).Value.ContentId);
             Assert.Empty(Directory.GetFiles(directory, "*.tmp"));
+            Assert.True(File.Exists(Path.Combine(directory, ImportLog.BackupFileName)));
         }
         finally
         {
@@ -109,17 +117,6 @@ public class ItemImporterLogicTests
         var directory = Directory.CreateTempSubdirectory("gpm-importlog-switch-").FullName;
         try
         {
-            var log = new ImportLog { ProjectId = "PVT_original" };
-            log.PendingDrafts["0"] = new PendingDraftOperation
-            {
-                OperationId = "operation-0",
-                AttemptedAt = DateTimeOffset.UtcNow,
-                Title = "Pending draft",
-                ExistingItemIds = [],
-            };
-            await log.SaveAsync(directory, cancellationToken);
-            using var client = new GitHubGraphQLClient("dummy-token");
-            var importer = new ItemImporter(client);
             var snapshot = new ProjectSnapshot
             {
                 SchemaVersion = ProjectSnapshot.CurrentSchemaVersion,
@@ -134,6 +131,21 @@ public class ItemImporterLogicTests
                 Workflows = [],
                 Items = [],
             };
+            var log = new ImportLog
+            {
+                ProjectId = "PVT_original",
+                SourceSnapshotFingerprint = ImportLog.ComputeSnapshotFingerprint(snapshot),
+            };
+            log.PendingDrafts["0"] = new PendingDraftOperation
+            {
+                OperationId = "operation-0",
+                AttemptedAt = DateTimeOffset.UtcNow,
+                Title = "Pending draft",
+                ExistingItemIds = [],
+            };
+            await log.SaveAsync(directory, cancellationToken);
+            using var client = new GitHubGraphQLClient("dummy-token");
+            var importer = new ItemImporter(client);
             var target = new ImportResult
             {
                 ProjectId = "PVT_different",
@@ -148,7 +160,7 @@ public class ItemImporterLogicTests
             var exception = await Assert.ThrowsAsync<InvalidOperationException>(
                 () => importer.ImportAsync(snapshot, target, directory, cancellationToken));
 
-            Assert.Contains("pending operations", exception.Message, StringComparison.Ordinal);
+            Assert.Contains("different source snapshot or target project", exception.Message, StringComparison.Ordinal);
             var preserved = await ImportLog.LoadAsync(directory, cancellationToken);
             Assert.Equal("PVT_original", preserved!.ProjectId);
             Assert.Single(preserved.PendingDrafts);
@@ -208,6 +220,29 @@ public class ItemImporterLogicTests
             await File.WriteAllTextAsync(Path.Combine(directory, ImportLog.FileName), "{ not json", cancellationToken);
             await Assert.ThrowsAsync<System.Text.Json.JsonException>(
                 () => ImportLog.LoadAsync(directory, cancellationToken));
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task ImportLog_rejects_legacy_schema_instead_of_ignoring_it()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var directory = Directory.CreateTempSubdirectory("gpm-importlog-legacy-").FullName;
+        try
+        {
+            await File.WriteAllTextAsync(
+                Path.Combine(directory, ImportLog.FileName),
+                """{"projectId":"PVT_old","items":{"0":"PVTI_old"}}""",
+                cancellationToken);
+
+            var exception = await Assert.ThrowsAsync<InvalidDataException>(
+                () => ImportLog.LoadAsync(directory, cancellationToken));
+
+            Assert.Contains("unsupported schema version 0", exception.Message, StringComparison.Ordinal);
         }
         finally
         {
