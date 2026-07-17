@@ -134,11 +134,15 @@ gpm export --org source-org --project 7 --out ./snapshot \
 gpm import --org target-org --in ./snapshot \
   --token $TARGET_TOKEN --target-base-url https://api.TENANT.ghe.com \
   --browser-base-url https://TENANT.ghe.com \
+  --repo-mapping ./snapshot/repository-mappings.csv \
+  --user-mapping ./snapshot/user-mappings.csv \
   --enable-browser-automation --browser-profile target
 
 gpm verify --org target-org --project 12 --in ./snapshot \
   --token $TARGET_TOKEN --target-base-url https://api.TENANT.ghe.com \
   --browser-base-url https://TENANT.ghe.com \
+  --repo-mapping ./snapshot/repository-mappings.csv \
+  --user-mapping ./snapshot/user-mappings.csv \
   --enable-browser-automation --browser-profile target
 ```
 

@@ -615,6 +615,7 @@ dotnet run --project src/Gpm.Cli -- verify `
   --target-base-url https://api.TENANT.ghe.com `
   --browser-base-url https://TENANT.ghe.com `
   --repo-mapping "$env:GPM_SNAPSHOT_DIR/repository-mappings.csv" `
+  --user-mapping "$env:GPM_SNAPSHOT_DIR/user-mappings.csv" `
   --enable-browser-automation `
   --browser-profile target `
   --no-update-check
