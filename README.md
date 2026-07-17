@@ -125,16 +125,18 @@ Use named browser profiles when the source and target require different accounts
 
 ```bash
 gpm login --profile source                    # sign in with the source account
-gpm login --profile target                    # sign in with the target (e.g. EMU) account
+gpm login --profile target --base-url https://TENANT.ghe.com
 
 gpm export --org source-org --project 7 --out ./snapshot \
   --token $SOURCE_TOKEN --enable-browser-automation --browser-profile source
 
 gpm import --org target-org --in ./snapshot \
-  --token $TARGET_TOKEN --enable-browser-automation --browser-profile target
+  --token $TARGET_TOKEN --target-base-url https://api.TENANT.ghe.com \
+  --browser-base-url https://TENANT.ghe.com \
+  --enable-browser-automation --browser-profile target
 ```
 
-For GHEC with data residency targets, sign in with `gpm login --profile target --base-url https://TENANT.ghe.com`. For the GraphQL side, point `gpm export --base-url` (source) or `gpm import`/`gpm verify` `--target-base-url` (target) at the tenant API endpoint, e.g. `https://api.TENANT.ghe.com` (a trailing `/graphql` is added automatically; GHEC with data residency is designed to work but **untested**).
+For GHEC with data residency, point `gpm export --base-url` (source) or `gpm import`/`gpm verify` `--target-base-url` (target) at the tenant API endpoint, e.g. `https://api.TENANT.ghe.com` (a trailing `/graphql` is added automatically). Browser-enabled export/import derives `https://TENANT.ghe.com` from that API URL; `--browser-base-url` can set it explicitly and is rejected when it names a different deployment. `setup --fixture-ui` applies the same derivation and validation to `--api-base-url`. Before browser reads or writes, `gpm` also verifies that the selected browser profile is signed in on that host as the same login used by the API token. Cloud API and browser origins must use HTTPS; HTTP is accepted only for loopback test origins. GHEC with data residency is designed to work but requires the manual tenant validation described below.
 
 ### Proxies
 

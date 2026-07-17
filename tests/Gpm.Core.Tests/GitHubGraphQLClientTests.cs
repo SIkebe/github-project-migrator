@@ -38,6 +38,7 @@ public class GitHubGraphQLClientTests
     [InlineData("https://api.tenant.ghe.com/graphql", "https://api.tenant.ghe.com/graphql")]
     [InlineData("https://api.tenant.ghe.com/graphql/", "https://api.tenant.ghe.com/graphql")]
     [InlineData(" https://api.github.com/graphql ", "https://api.github.com/graphql")]
+    [InlineData("http://localhost:8080", "http://localhost:8080/graphql")]
     public void NormalizeBaseUrl_appends_graphql_when_missing(string input, string expected)
     {
         Assert.Equal(new Uri(expected), GitHubGraphQLClient.NormalizeBaseUrl(input));
@@ -46,8 +47,9 @@ public class GitHubGraphQLClientTests
     [Theory]
     [InlineData("api.tenant.ghe.com")]
     [InlineData("ftp://api.tenant.ghe.com")]
+    [InlineData("http://api.tenant.ghe.com")]
     [InlineData("not a url")]
-    public void NormalizeBaseUrl_rejects_non_http_urls(string input)
+    public void NormalizeBaseUrl_rejects_invalid_or_insecure_non_loopback_urls(string input)
     {
         Assert.Throws<FormatException>(() => GitHubGraphQLClient.NormalizeBaseUrl(input));
     }

@@ -40,7 +40,8 @@ public class ProjectImporterTests
 
         // Export the fixture and retarget it under a unique title.
         var exporter = new ProjectExporter(client);
-        var source = await exporter.ExportAsync(SourceOrg, FixtureProjectNumber, cancellationToken);
+        var exported = await exporter.ExportAsync(SourceOrg, FixtureProjectNumber, cancellationToken);
+        var source = IntegrationFixtureSnapshot.SelectCanonicalItems(exported);
         var title = NewTestTitle();
         var snapshot = source with { Project = source.Project with { Title = title } };
 
@@ -195,7 +196,8 @@ public class ProjectImporterTests
         {
             // Export the fixture and apply it to the existing project by number.
             var exporter = new ProjectExporter(client);
-            var snapshot = await exporter.ExportAsync(SourceOrg, FixtureProjectNumber, cancellationToken);
+            var exported = await exporter.ExportAsync(SourceOrg, FixtureProjectNumber, cancellationToken);
+            var snapshot = IntegrationFixtureSnapshot.SelectCanonicalItems(exported);
 
             var importer = new ProjectImporter(client);
             var result = await importer.ImportIntoAsync(snapshot, TargetOrg, emptyProjectNumber, cancellationToken);

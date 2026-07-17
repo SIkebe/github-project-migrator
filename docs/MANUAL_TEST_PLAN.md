@@ -231,6 +231,7 @@ dotnet run --project src/Gpm.Cli -- setup `
   --fixture-org $env:GPM_SOURCE_ORG `
   --fixture-project <source-project-number> `
   --fixture-repo $env:GPM_FIXTURE_REPO `
+  --token $env:GPM_SOURCE_TOKEN `
   --browser-profile source
 ```
 
@@ -590,6 +591,7 @@ dotnet run --project src/Gpm.Cli -- import `
   --in $env:GPM_SNAPSHOT_DIR `
   --token $env:GPM_TARGET_TOKEN `
   --target-base-url https://api.TENANT.ghe.com `
+  --browser-base-url https://TENANT.ghe.com `
   --repo-mapping "$env:GPM_SNAPSHOT_DIR/repository-mappings.csv" `
   --enable-browser-automation `
   --browser-profile target `
