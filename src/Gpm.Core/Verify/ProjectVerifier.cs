@@ -386,13 +386,19 @@ public sealed class ProjectVerifier
         List<VerifyDifference> differences,
         HashSet<string> notVerified)
     {
-        if (source is null)
+        if (source is null || target is null)
         {
             notVerified.Add(LinkedRepositoryCategory);
+            if (source is not null)
+            {
+                Add(differences, VerifySeverity.Warning, LinkedRepositoryCategory,
+                    "linked repositories were captured in the source but could not be read from the target");
+            }
+
             return;
         }
 
-        var targetSet = (target ?? []).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var targetSet = target.ToHashSet(StringComparer.OrdinalIgnoreCase);
         foreach (var repository in source.Where(r => !targetSet.Contains(r)))
         {
             AddError(differences, LinkedRepositoryCategory,
@@ -400,7 +406,7 @@ public sealed class ProjectVerifier
         }
 
         var sourceSet = source.ToHashSet(StringComparer.OrdinalIgnoreCase);
-        foreach (var extra in (target ?? []).Where(r => !sourceSet.Contains(r)))
+        foreach (var extra in target.Where(r => !sourceSet.Contains(r)))
         {
             Add(differences, VerifySeverity.Warning, LinkedRepositoryCategory,
                 $"linked repository '{extra}' exists only in the target");

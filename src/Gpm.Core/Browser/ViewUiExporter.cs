@@ -44,7 +44,20 @@ public sealed class ViewUiExporter
         ArgumentNullException.ThrowIfNull(snapshot);
         ArgumentException.ThrowIfNullOrWhiteSpace(ownerLogin);
 
-        var page = await _session.GetPageAsync(cancellationToken).ConfigureAwait(false);
+        IPage page;
+        try
+        {
+            page = await _session.GetPageAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception exception) when (exception is PlaywrightException or TimeoutException)
+        {
+            _warnings.Add($"view settings page could not be opened — {exception.Message}");
+            return snapshot with
+            {
+                Views = snapshot.Views.Select(view => view with { Ui = null }).ToList(),
+            };
+        }
+
         var views = new List<ViewSnapshot>(snapshot.Views.Count);
         foreach (var view in snapshot.Views)
         {

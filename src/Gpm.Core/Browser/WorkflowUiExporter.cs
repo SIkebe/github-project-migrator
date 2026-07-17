@@ -52,12 +52,24 @@ public sealed class WorkflowUiExporter
             return snapshot;
         }
 
-        var ownerPath = ownerType == ProjectOwnerType.User ? "users" : "orgs";
-        var page = await _session.GetPageAsync(cancellationToken).ConfigureAwait(false);
-        var url = string.Create(CultureInfo.InvariantCulture,
-            $"{_session.BaseUrl}/{ownerPath}/{ownerLogin}/projects/{projectNumber}/workflows");
-        await _session.GotoAsync(url, cancellationToken).ConfigureAwait(false);
-        await Sel.WorkflowsSidebar(page).WaitForAsync().ConfigureAwait(false);
+        IPage page;
+        try
+        {
+            var ownerPath = ownerType == ProjectOwnerType.User ? "users" : "orgs";
+            page = await _session.GetPageAsync(cancellationToken).ConfigureAwait(false);
+            var url = string.Create(CultureInfo.InvariantCulture,
+                $"{_session.BaseUrl}/{ownerPath}/{ownerLogin}/projects/{projectNumber}/workflows");
+            await _session.GotoAsync(url, cancellationToken).ConfigureAwait(false);
+            await Sel.WorkflowsSidebar(page).WaitForAsync().ConfigureAwait(false);
+        }
+        catch (Exception exception) when (exception is PlaywrightException or TimeoutException)
+        {
+            _warnings.Add($"workflow settings page could not be read — {exception.Message}");
+            return snapshot with
+            {
+                Workflows = snapshot.Workflows.Select(workflow => workflow with { Ui = null }).ToList(),
+            };
+        }
 
         var workflows = new List<WorkflowSnapshot>(snapshot.Workflows.Count);
         foreach (var workflow in snapshot.Workflows)

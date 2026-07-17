@@ -771,6 +771,22 @@ public class ProjectVerifierTests
     }
 
     [Fact]
+    public void Linked_repositories_are_not_verified_when_target_capture_is_missing()
+    {
+        var source = BuildSnapshot() with { LinkedRepositories = ["org/repo-a"] };
+        var target = BuildSnapshot() with { LinkedRepositories = null };
+
+        var report = ProjectVerifier.Compare(source, target);
+
+        Assert.Equal(VerifyStatus.NotVerified, report.Status);
+        Assert.DoesNotContain(report.Differences, difference => difference.Severity == VerifySeverity.Error);
+        Assert.Contains(report.Differences, difference =>
+            difference.Severity == VerifySeverity.Warning
+            && difference.Category == "LinkedRepository"
+            && difference.Message.Contains("could not be read", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void Exit_policy_fails_errors_unconditionally_and_optional_incomplete_results()
     {
         var partial = ProjectVerifier.Compare(
