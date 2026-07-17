@@ -5,15 +5,12 @@ using Gpm.Core.Snapshot;
 namespace Gpm.Core.Export;
 
 /// <summary>
-/// Generates the mapping CSV templates written next to exported snapshots:
-/// <c>repository-mappings.csv</c> (distinct source repositories of Issue/PR items) and
-/// <c>user-mappings.csv</c> (distinct draft-issue assignee and explicit user collaborator
-/// logins; only written when at least one user login is present). Repository mappings use <c>source,target</c>.
-/// User mappings use GitHub Enterprise Importer's mannequin reclaim CSV shape
-/// (<c>mannequin-user,mannequin-id,target-user</c>), with blank mannequin IDs because
-/// project snapshots only contain logins. The target column is left blank for the user
-/// to fill in; rows with a blank target are ignored by <see cref="Import.CsvMapping"/>.
-/// Existing files are never overwritten so user edits survive re-exports.
+/// Generates repository, organization and user mapping CSV templates next to exported
+/// snapshots. Candidates include item and linked repositories, Auto-add repositories,
+/// View/Workflow filter identities, draft assignees and explicit user collaborators.
+/// Repository and organization templates use <c>source,target</c>; user templates use
+/// GitHub Enterprise Importer's <c>mannequin-user,mannequin-id,target-user</c> shape.
+/// Existing files are preserved and newly discovered candidates are reported.
 /// </summary>
 public static class MappingTemplates
 {

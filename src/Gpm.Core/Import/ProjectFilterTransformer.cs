@@ -41,6 +41,7 @@ public static class ProjectFilterTransformer
 
         var changes = new List<FilterTokenChange>();
         var unresolved = new List<FilterIdentifier>();
+        var unchanged = new List<FilterIdentifier>();
         var unsupported = new List<FilterIdentifier>();
         var builder = new StringBuilder(filter.Length);
         var position = 0;
@@ -75,6 +76,10 @@ public static class ProjectFilterTransformer
                 {
                     unsupported.Add(new FilterIdentifier(qualifier, value));
                 }
+                else
+                {
+                    unchanged.Add(new FilterIdentifier(qualifier, value));
+                }
             }
             else
             {
@@ -99,6 +104,10 @@ public static class ProjectFilterTransformer
                         {
                             changes.Add(new FilterTokenChange(qualifier, item, mapped));
                         }
+                        else
+                        {
+                            unchanged.Add(new FilterIdentifier(qualifier, item));
+                        }
                     }
                     else
                     {
@@ -106,6 +115,10 @@ public static class ProjectFilterTransformer
                         if (IsMappingRequired(item))
                         {
                             unresolved.Add(new FilterIdentifier(qualifier, item));
+                        }
+                        else
+                        {
+                            unchanged.Add(new FilterIdentifier(qualifier, item));
                         }
                     }
                 }
@@ -119,7 +132,7 @@ public static class ProjectFilterTransformer
             position = tokenEnd;
         }
 
-        return new FilterTransformResult(filter, builder.ToString(), changes, unresolved, unsupported);
+        return new FilterTransformResult(filter, builder.ToString(), changes, unresolved, unchanged, unsupported);
     }
 
     /// <summary>Applies filter mappings to all Views and Workflows in a snapshot.</summary>
@@ -395,6 +408,7 @@ public sealed record FilterTransformResult(
     string Transformed,
     IReadOnlyList<FilterTokenChange> Changes,
     IReadOnlyList<FilterIdentifier> Unresolved,
+    IReadOnlyList<FilterIdentifier> Unchanged,
     IReadOnlyList<FilterIdentifier> Unsupported);
 
 public sealed record SnapshotFilterTransform(string Location, FilterTransformResult Result);

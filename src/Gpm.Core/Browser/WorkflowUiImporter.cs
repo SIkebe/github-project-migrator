@@ -65,8 +65,8 @@ public sealed class WorkflowUiImporter
 
     /// <summary>
     /// Resolves an Auto-add repository short name through an "owner/name" mapping:
-    /// the first entry whose key's name part matches is applied; otherwise the
-    /// source name is used unchanged (same-name repository expected on the target).
+    /// a unique target short name is applied, no match leaves the source unchanged,
+    /// and multiple distinct targets throw <see cref="InvalidOperationException"/>.
     /// </summary>
     public static string ResolveRepositoryName(string sourceRepository, IReadOnlyDictionary<string, string> mapping)
     {
@@ -243,15 +243,15 @@ public sealed class WorkflowUiImporter
     }
 
     /// <summary>
-    /// Mirrors a disabled snapshot workflow. A target workflow that was never saved is
-    /// invisible to GraphQL (M7 discovery), so it is saved once ("Save and turn on
-    /// workflow" is clickable even without setting changes) and then toggled off —
-    /// producing a saved-but-disabled workflow like the source. Saved workflows only
-    /// mirror the toggle state (v1 applies no setting edits to disabled workflows).
+    /// Mirrors a disabled snapshot workflow. Unsaved workflows are saved once, while
+    /// saved workflows are edited when their mapped filter differs. Saving can enable
+    /// the workflow, so the target is toggled off again afterward.
     /// </summary>
     private async Task ApplyDisabledAsync(IPage page, WorkflowSnapshot workflow, WorkflowUiState current, CancellationToken cancellationToken)
     {
-        if (!current.IsSaved && workflow.Ui is not null)
+        var mappedFilterDiffers = workflow.Ui?.Filter is { } filter
+            && !ValueEquals(TransformFilter(filter), current.Filter);
+        if (workflow.Ui is not null && (!current.IsSaved || mappedFilterDiffers))
         {
             await EditAndSaveAsync(page, workflow, current, cancellationToken).ConfigureAwait(false);
 

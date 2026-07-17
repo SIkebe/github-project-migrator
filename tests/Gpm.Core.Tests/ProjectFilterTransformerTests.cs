@@ -100,6 +100,9 @@ public class ProjectFilterTransformerTests
 
         Assert.Equal("assignee:@me author:none", result.Transformed);
         Assert.Empty(result.Unresolved);
+        Assert.Equal(
+            [new FilterIdentifier("assignee", "@me"), new FilterIdentifier("author", "none")],
+            result.Unchanged);
     }
 
     [Fact]

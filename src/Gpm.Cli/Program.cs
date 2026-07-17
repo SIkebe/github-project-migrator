@@ -356,16 +356,19 @@ importCommand.SetAction(async (parseResult, cancellationToken) =>
                 organizationMapping);
             foreach (var transform in filterTransforms)
             {
-                if (transform.Result.Changes.Count > 0)
-                {
-                    Console.Error.WriteLine(
-                        $"Filter preflight {transform.Location}: '{transform.Result.Original}' -> '{transform.Result.Transformed}'");
-                }
+                Console.Error.WriteLine(
+                    $"Filter preflight {transform.Location}: '{transform.Result.Original}' -> '{transform.Result.Transformed}'");
 
                 foreach (var identifier in transform.Result.Unresolved)
                 {
                     Console.Error.WriteLine(
                         $"warning: Filter preflight {transform.Location}: unmapped {identifier.Qualifier} value '{identifier.Value}'");
+                }
+
+                foreach (var identifier in transform.Result.Unchanged)
+                {
+                    Console.Error.WriteLine(
+                        $"Filter preflight {transform.Location}: mapping not required for {identifier.Qualifier} value '{identifier.Value}'");
                 }
 
                 foreach (var identifier in transform.Result.Unsupported)
