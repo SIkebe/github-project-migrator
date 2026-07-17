@@ -49,7 +49,7 @@ public class GitHubGraphQLClientTests
     [InlineData("ftp://api.tenant.ghe.com")]
     [InlineData("http://api.tenant.ghe.com")]
     [InlineData("not a url")]
-    public void NormalizeBaseUrl_rejects_non_http_urls(string input)
+    public void NormalizeBaseUrl_rejects_invalid_or_insecure_non_loopback_urls(string input)
     {
         Assert.Throws<FormatException>(() => GitHubGraphQLClient.NormalizeBaseUrl(input));
     }
