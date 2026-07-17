@@ -141,6 +141,39 @@ public class GitHubGraphQLClientTests
     }
 
     [Fact]
+    public async Task Create_graphql_error_with_possible_side_effect_is_ambiguous()
+    {
+        const string body = """{"data":{"createThing":{"thing":null}},"errors":[{"type":"INTERNAL","message":"Child field failed"}]}""";
+        using var handler = new StubHandler(JsonResponse(HttpStatusCode.OK, body));
+        using var client = CreateClient(handler, []);
+
+        await Assert.ThrowsAsync<AmbiguousMutationResultException>(
+            () => client.MutationAsync(
+                "createThing",
+                "mutation($clientMutationId: String!) { createThing(input: { clientMutationId: $clientMutationId }) { thing { id } } }",
+                requiredResultPath: "thing.id",
+                cancellationToken: TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
+    public async Task Create_known_preside_effect_validation_error_is_definitive()
+    {
+        const string body = """{"data":null,"errors":[{"type":"BAD_USER_INPUT","message":"Invalid input"}]}""";
+        using var handler = new StubHandler(JsonResponse(HttpStatusCode.OK, body));
+        using var client = CreateClient(handler, []);
+
+        var exception = await Assert.ThrowsAsync<GitHubGraphQLException>(
+            () => client.MutationAsync(
+                "createThing",
+                "mutation($clientMutationId: String!) { createThing(input: { clientMutationId: $clientMutationId }) { thing { id } } }",
+                requiredResultPath: "thing.id",
+                cancellationToken: TestContext.Current.CancellationToken));
+
+        Assert.IsNotType<AmbiguousMutationResultException>(exception);
+        Assert.Equal("BAD_USER_INPUT", exception.ErrorType);
+    }
+
+    [Fact]
     public async Task QueryPaginatedAsync_enumerates_all_nodes_across_pages()
     {
         var page1 = """

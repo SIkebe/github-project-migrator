@@ -233,7 +233,7 @@ public class ItemImporterResumeTests
 
                 if (FailDefinitively)
                 {
-                    return Json("""{"data":null,"errors":[{"type":"UNPROCESSABLE","message":"Invalid input"}]}""");
+                    return Json("""{"data":null,"errors":[{"type":"BAD_USER_INPUT","message":"Invalid input"}]}""");
                 }
 
                 throw new HttpRequestException("Response ended prematurely.");

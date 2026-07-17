@@ -410,6 +410,7 @@ importCommand.SetAction(async (parseResult, cancellationToken) =>
             UserMapping = userMapping,
             OnProgress = Console.Error.WriteLine,
             BeforeWriteAsync = enableBrowserAutomation ? ValidateBrowserBeforeWriteAsync : null,
+            OperationLogDirectory = inDirectory,
         };
 
         var result = projectNumber is { } number

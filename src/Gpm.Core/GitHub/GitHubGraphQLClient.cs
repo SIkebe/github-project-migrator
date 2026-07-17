@@ -167,6 +167,14 @@ public sealed class GitHubGraphQLClient : IDisposable
                 continue;
             }
 
+            if (mutation is { RetryPolicy: MutationRetryPolicy.Create }
+                && !ContainsOnlyKnownPreSideEffectErrors(errors))
+            {
+                throw CreateAmbiguousMutationException(
+                    mutation,
+                    "GitHub returned a GraphQL error that may have occurred after the create side effect.");
+            }
+
             string? errorType = null;
             if (errors.ValueKind == JsonValueKind.Array
                 && errors.GetArrayLength() > 0
@@ -539,6 +547,29 @@ public sealed class GitHubGraphQLClient : IDisposable
             JsonValueKind.Null or JsonValueKind.Undefined => false,
             _ => true,
         };
+    }
+
+    private static bool ContainsOnlyKnownPreSideEffectErrors(JsonElement errors)
+    {
+        if (errors.ValueKind != JsonValueKind.Array || errors.GetArrayLength() == 0)
+        {
+            return false;
+        }
+
+        foreach (var error in errors.EnumerateArray())
+        {
+            if (!error.TryGetProperty("type", out var type) || type.ValueKind != JsonValueKind.String)
+            {
+                return false;
+            }
+
+            if (type.GetString() is not ("BAD_USER_INPUT" or "FORBIDDEN" or "INSUFFICIENT_SCOPES" or "NOT_FOUND" or "UNAUTHORIZED"))
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     /// <summary>Converts an arbitrary variables object into a mutable map so the cursor can be injected.</summary>
