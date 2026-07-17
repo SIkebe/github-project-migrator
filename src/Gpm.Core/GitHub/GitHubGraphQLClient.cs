@@ -90,6 +90,7 @@ public sealed class GitHubGraphQLClient : IDisposable
         MutationRetryPolicy retryPolicy = MutationRetryPolicy.Create,
         string? target = null,
         string? clientMutationId = null,
+        string? requiredResultPath = null,
         CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(operationName);
@@ -99,7 +100,7 @@ public sealed class GitHubGraphQLClient : IDisposable
         var variableMap = ToVariableMap(variables);
         variableMap["clientMutationId"] = clientMutationId;
         var payload = JsonSerializer.Serialize(new { query = mutation, variables = variableMap });
-        var context = new MutationContext(operationName, clientMutationId, DateTimeOffset.UtcNow, target, retryPolicy);
+        var context = new MutationContext(operationName, clientMutationId, DateTimeOffset.UtcNow, target, retryPolicy, requiredResultPath);
         return await ExecuteOperationAsync(payload, context, cancellationToken).ConfigureAwait(false);
     }
 
@@ -118,10 +119,7 @@ public sealed class GitHubGraphQLClient : IDisposable
             {
                 if (document.RootElement.TryGetProperty("data", out var data)
                     && data.ValueKind == JsonValueKind.Object
-                    && (mutation is null
-                        || (data.TryGetProperty(mutation.OperationName, out var result)
-                            && result.ValueKind == JsonValueKind.Object
-                            && result.EnumerateObject().Any())))
+                    && (mutation is null || HasExpectedMutationResult(data, mutation)))
                 {
                     return data.Clone();
                 }
@@ -493,6 +491,37 @@ public sealed class GitHubGraphQLClient : IDisposable
             StatusCode = statusCode,
         };
 
+    private static bool HasExpectedMutationResult(JsonElement data, MutationContext mutation)
+    {
+        if (!data.TryGetProperty(mutation.OperationName, out var current)
+            || current.ValueKind != JsonValueKind.Object
+            || !current.EnumerateObject().Any())
+        {
+            return false;
+        }
+
+        if (string.IsNullOrWhiteSpace(mutation.RequiredResultPath))
+        {
+            return true;
+        }
+
+        foreach (var segment in mutation.RequiredResultPath.Split('.'))
+        {
+            if (current.ValueKind != JsonValueKind.Object || !current.TryGetProperty(segment, out current))
+            {
+                return false;
+            }
+        }
+
+        return current.ValueKind switch
+        {
+            JsonValueKind.String => !string.IsNullOrWhiteSpace(current.GetString()),
+            JsonValueKind.Object => current.EnumerateObject().Any(),
+            JsonValueKind.Null or JsonValueKind.Undefined => false,
+            _ => true,
+        };
+    }
+
     /// <summary>Converts an arbitrary variables object into a mutable map so the cursor can be injected.</summary>
     private static Dictionary<string, object?> ToVariableMap(object? variables)
     {
@@ -538,5 +567,6 @@ public sealed class GitHubGraphQLClient : IDisposable
         string ClientMutationId,
         DateTimeOffset AttemptedAt,
         string? Target,
-        MutationRetryPolicy RetryPolicy);
+        MutationRetryPolicy RetryPolicy,
+        string? RequiredResultPath);
 }

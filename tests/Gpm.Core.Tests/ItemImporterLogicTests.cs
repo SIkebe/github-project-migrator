@@ -72,6 +72,13 @@ public class ItemImporterLogicTests
                 Body = "Pending body",
                 ExistingItemIds = ["PVTI_existing"],
             };
+            log.PendingContents["4"] = new PendingContentOperation
+            {
+                OperationId = "operation-4",
+                AttemptedAt = DateTimeOffset.Parse("2026-07-17T05:01:00Z", System.Globalization.CultureInfo.InvariantCulture),
+                ContentId = "I_issue",
+                ExistingItemIds = [],
+            };
             await log.SaveAsync(directory, cancellationToken);
 
             var loaded = await ImportLog.LoadAsync(directory, cancellationToken);
@@ -85,6 +92,8 @@ public class ItemImporterLogicTests
             Assert.Equal("3", pending.Key);
             Assert.Equal("operation-3", pending.Value.OperationId);
             Assert.Equal(["PVTI_existing"], pending.Value.ExistingItemIds);
+            Assert.Equal("I_issue", Assert.Single(loaded.PendingContents).Value.ContentId);
+            Assert.Empty(Directory.GetFiles(directory, "*.tmp"));
         }
         finally
         {

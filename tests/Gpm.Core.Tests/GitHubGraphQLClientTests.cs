@@ -317,6 +317,21 @@ public class GitHubGraphQLClientTests
     }
 
     [Fact]
+    public async Task Create_mutation_missing_required_nested_result_is_ambiguous()
+    {
+        using var handler = new StubHandler(
+            JsonResponse(HttpStatusCode.OK, """{"data":{"createThing":{"thing":null}}}"""));
+        using var client = CreateClient(handler, []);
+
+        await Assert.ThrowsAsync<AmbiguousMutationResultException>(
+            () => client.MutationAsync(
+                "createThing",
+                "mutation($clientMutationId: String!) { createThing(input: { clientMutationId: $clientMutationId }) { thing { id } } }",
+                requiredResultPath: "thing.id",
+                cancellationToken: TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
     public async Task Idempotent_mutation_retries_malformed_success_response()
     {
         using var handler = new StubHandler(

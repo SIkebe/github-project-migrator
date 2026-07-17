@@ -92,20 +92,12 @@ public sealed class ItemImporter
                             $"Pending draft operation '{pendingDraft.OperationId}' no longer matches {label}. Restore the original snapshot or reconcile the target manually.");
                     }
 
-                    var matchingIds = await FindMatchingDraftItemIdsAsync(
+                    itemId = await ReconcilePendingDraftAsync(
                         target.ProjectId,
-                        pendingDraft.Title,
-                        pendingDraft.Body,
+                        pendingDraft,
+                        log.Items.Values,
                         cancellationToken).ConfigureAwait(false);
-                    itemId = SelectReconciledDraftItemId(
-                        pendingDraft.OperationId,
-                        matchingIds,
-                        pendingDraft.ExistingItemIds,
-                        log.Items.Values);
-                    if (itemId is not null)
-                    {
-                        OnProgress?.Invoke($"{prefix} {label}: reconciled the pending create operation to target item '{itemId}'.");
-                    }
+                    OnProgress?.Invoke($"{prefix} {label}: reconciled the pending create operation to target item '{itemId}'.");
                 }
                 else
                 {
@@ -133,6 +125,9 @@ public sealed class ItemImporter
                 label,
                 warnings,
                 pendingDraft?.OperationId,
+                log,
+                key,
+                logDirectory,
                 cancellationToken).ConfigureAwait(false);
             if (itemId is null)
             {
@@ -143,6 +138,7 @@ public sealed class ItemImporter
             // Persist the mapping immediately so an interrupted run never duplicates this item.
             log.Items[key] = itemId;
             log.PendingDrafts.Remove(key);
+            log.PendingContents.Remove(key);
             await log.SaveAsync(logDirectory, cancellationToken).ConfigureAwait(false);
 
             await ApplyFieldValuesAsync(item, itemId, target, label, warnings, cancellationToken).ConfigureAwait(false);
@@ -187,12 +183,23 @@ public sealed class ItemImporter
         string label,
         List<string> warnings,
         string? clientMutationId,
+        ImportLog log,
+        string key,
+        string logDirectory,
         CancellationToken cancellationToken)
     {
         switch (item.Type)
         {
             case "ISSUE" or "PULL_REQUEST":
-                return await CreateContentItemAsync(item, projectId, label, warnings, cancellationToken).ConfigureAwait(false);
+                return await CreateContentItemAsync(
+                    item,
+                    projectId,
+                    label,
+                    warnings,
+                    log,
+                    key,
+                    logDirectory,
+                    cancellationToken).ConfigureAwait(false);
 
             case "DRAFT_ISSUE" when item.Draft is not null:
                 return await CreateDraftItemAsync(item.Draft, projectId, warnings, clientMutationId, cancellationToken).ConfigureAwait(false);
@@ -203,7 +210,15 @@ public sealed class ItemImporter
         }
     }
 
-    private async Task<string?> CreateContentItemAsync(ItemSnapshot item, string projectId, string label, List<string> warnings, CancellationToken cancellationToken)
+    private async Task<string?> CreateContentItemAsync(
+        ItemSnapshot item,
+        string projectId,
+        string label,
+        List<string> warnings,
+        ImportLog log,
+        string key,
+        string logDirectory,
+        CancellationToken cancellationToken)
     {
         if (item.Repository is null || item.Number is null)
         {
@@ -234,6 +249,34 @@ public sealed class ItemImporter
             return null;
         }
 
+        PendingContentOperation pending;
+        if (log.PendingContents.TryGetValue(key, out var existingPending))
+        {
+            pending = existingPending;
+            if (!string.Equals(pending.ContentId, contentId, StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    $"Pending content operation '{pending.OperationId}' no longer matches {label}. Restore the original snapshot or reconcile the target manually.");
+            }
+
+            return await ReconcilePendingContentAsync(
+                projectId,
+                pending,
+                log.Items.Values,
+                cancellationToken).ConfigureAwait(false);
+        }
+
+        var existingIds = await FindContentItemIdsAsync(projectId, contentId, cancellationToken).ConfigureAwait(false);
+        pending = new PendingContentOperation
+        {
+            OperationId = Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture),
+            AttemptedAt = DateTimeOffset.UtcNow,
+            ContentId = contentId,
+            ExistingItemIds = [.. existingIds],
+        };
+        log.PendingContents[key] = pending;
+        await log.SaveAsync(logDirectory, cancellationToken).ConfigureAwait(false);
+
         var data = await _client.MutationAsync(
             "addProjectV2ItemById",
             """
@@ -245,6 +288,8 @@ public sealed class ItemImporter
             """,
             new { projectId, contentId },
             target: $"{projectId}/{contentId}",
+            clientMutationId: pending.OperationId,
+            requiredResultPath: "item.id",
             cancellationToken: cancellationToken).ConfigureAwait(false);
 
         return data.GetProperty("addProjectV2ItemById").GetProperty("item").GetProperty("id").GetString();
@@ -269,8 +314,9 @@ public sealed class ItemImporter
             }
             """,
             new { projectId, title = draft.Title, body = BuildDraftBody(draft), assigneeIds },
-            target: $"{projectId}/{draft.Title}",
+            target: projectId,
             clientMutationId: clientMutationId,
+            requiredResultPath: "projectItem.id",
             cancellationToken: cancellationToken).ConfigureAwait(false);
 
         return data.GetProperty("addProjectV2DraftIssue").GetProperty("projectItem").GetProperty("id").GetString();
@@ -323,6 +369,114 @@ public sealed class ItemImporter
         }
 
         return ids;
+    }
+
+    private async Task<string> ReconcilePendingDraftAsync(
+        string projectId,
+        PendingDraftOperation pending,
+        IEnumerable<string> importedIds,
+        CancellationToken cancellationToken)
+    {
+        for (var attempt = 0; attempt < 3; attempt++)
+        {
+            var matchingIds = await FindMatchingDraftItemIdsAsync(
+                projectId,
+                pending.Title,
+                pending.Body,
+                cancellationToken).ConfigureAwait(false);
+            var itemId = SelectReconciledDraftItemId(
+                pending.OperationId,
+                matchingIds,
+                pending.ExistingItemIds,
+                importedIds);
+            if (itemId is not null)
+            {
+                return itemId;
+            }
+
+            if (attempt < 2)
+            {
+                await Task.Delay(TimeSpan.FromSeconds(Math.Pow(2, attempt)), cancellationToken).ConfigureAwait(false);
+            }
+        }
+
+        throw new InvalidOperationException(
+            $"Pending draft operation '{pending.OperationId}' is not visible in the target after reconciliation polling. Do not resend it until the target state has been reconciled manually.");
+    }
+
+    private async Task<IReadOnlyList<string>> FindContentItemIdsAsync(
+        string projectId,
+        string contentId,
+        CancellationToken cancellationToken)
+    {
+        var ids = new List<string>();
+        await foreach (var node in _client.QueryPaginatedAsync(
+            """
+            query($projectId: ID!, $after: String) {
+              node(id: $projectId) {
+                ... on ProjectV2 {
+                  items(first: 100, after: $after, archivedStates: [ARCHIVED, NOT_ARCHIVED]) {
+                    nodes {
+                      id
+                      content {
+                        ... on Issue { id }
+                        ... on PullRequest { id }
+                      }
+                    }
+                    pageInfo { hasNextPage endCursor }
+                  }
+                }
+              }
+            }
+            """,
+            new { projectId },
+            "node.items",
+            cancellationToken: cancellationToken).ConfigureAwait(false))
+        {
+            var content = node.GetProperty("content");
+            if (content.ValueKind == JsonValueKind.Object
+                && content.TryGetProperty("id", out var targetContentId)
+                && string.Equals(targetContentId.GetString(), contentId, StringComparison.Ordinal)
+                && node.GetProperty("id").GetString() is { } id)
+            {
+                ids.Add(id);
+            }
+        }
+
+        return ids;
+    }
+
+    private async Task<string> ReconcilePendingContentAsync(
+        string projectId,
+        PendingContentOperation pending,
+        IEnumerable<string> importedIds,
+        CancellationToken cancellationToken)
+    {
+        for (var attempt = 0; attempt < 3; attempt++)
+        {
+            var matchingIds = await FindContentItemIdsAsync(projectId, pending.ContentId, cancellationToken).ConfigureAwait(false);
+            var excluded = new HashSet<string>(pending.ExistingItemIds, StringComparer.Ordinal);
+            excluded.UnionWith(importedIds);
+            var candidates = matchingIds.Where(id => !excluded.Contains(id)).Distinct(StringComparer.Ordinal).ToArray();
+            if (candidates.Length == 1)
+            {
+                return candidates[0];
+            }
+
+            if (candidates.Length > 1)
+            {
+                throw new InvalidOperationException(
+                    $"Pending content operation '{pending.OperationId}' matches multiple new target items. Reconcile the target manually before resuming.");
+            }
+
+            if (attempt < 2)
+            {
+                await Task.Delay(TimeSpan.FromSeconds(Math.Pow(2, attempt)), cancellationToken).ConfigureAwait(false);
+            }
+        }
+
+        throw new InvalidOperationException(
+            $"Pending content operation '{pending.OperationId}' is not visible in the target after reconciliation polling. Do not resend it until the target state has been reconciled manually.");
     }
 
     internal static string? SelectReconciledDraftItemId(

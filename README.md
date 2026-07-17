@@ -132,7 +132,7 @@ Creating a new project emits `result=created`. The result line also includes the
 
 Read-only GraphQL queries and explicitly idempotent updates are retried after transient network or server failures. Resource-creation mutations are not: if GitHub may have accepted a mutation but its response was lost, `gpm` exits with `Mutation result is ambiguous` instead of risking a duplicate. The error includes the operation, target, and a non-secret client mutation ID; mutation variables and tokens are never included.
 
-Inspect the named target operation in GitHub before retrying. If the resource exists, rerun the import with the same snapshot directory so `import-log.json` can resume completed items. Draft creation writes a pending operation and the matching target-item baseline before sending; on resume, `gpm` adopts exactly one new matching draft or safely resends when none exists. Multiple new matches stop the import for manual reconciliation.
+Inspect the named target operation in GitHub before retrying. If the resource exists, rerun the import with the same snapshot directory so `import-log.json` can resume completed items. Draft and Issue/PR item creation atomically records a pending operation and matching target-item baseline before sending. On resume, `gpm` polls for and adopts exactly one new match; no match or multiple matches stop the import for manual reconciliation instead of resending.
 
 ### User-owned projects
 

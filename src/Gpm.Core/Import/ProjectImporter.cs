@@ -444,7 +444,8 @@ public sealed class ProjectImporter
             }
             """,
             new { ownerId, title },
-            target: title,
+            target: ownerId,
+            requiredResultPath: "projectV2.id",
             cancellationToken: cancellationToken).ConfigureAwait(false);
 
         return ParseProjectRef(data.GetProperty("createProjectV2").GetProperty("projectV2"));
@@ -504,7 +505,8 @@ public sealed class ProjectImporter
                     ? BuildIterationConfigurationInput(field.Name, configuration)
                     : null,
             },
-            target: $"{projectId}/{field.Name}",
+            target: projectId,
+            requiredResultPath: "projectV2Field.id",
             cancellationToken: cancellationToken).ConfigureAwait(false);
 
         maps.Register(data.GetProperty("createProjectV2Field").GetProperty("projectV2Field"));
