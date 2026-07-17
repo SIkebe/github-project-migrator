@@ -61,16 +61,45 @@ public class VerifyTests
         Assert.NotNull(source.LinkedRepositories);
 
         var snapshot = source with { Project = source.Project with { Title = "gpm-verify-test-" + Guid.NewGuid().ToString("N") } };
+        var targetFixtureRepo = IntegrationTestSettings.TargetFixtureRepositoryFullName;
+        var repoMapping = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            [FixtureRepo] = targetFixtureRepo,
+        };
+        var itemMapping = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            [FixtureRepo] = FixtureRepo,
+        };
+        var userMapping = snapshot.Items
+            .SelectMany(item => item.Draft?.Assignees ?? [])
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(login => login, login => login, StringComparer.OrdinalIgnoreCase);
 
-        var result = await new ProjectImporter(client).ImportAsync(snapshot, TargetOrg, cancellationToken);
+        var result = await new ProjectImporter(client) { RepositoryMapping = repoMapping }
+            .ImportAsync(snapshot, TargetOrg, cancellationToken);
         var logDirectory = Directory.CreateTempSubdirectory("gpm-m5-").FullName;
         try
         {
-            var repoMapping = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase) { [FixtureRepo] = FixtureRepo };
-            await new ItemImporter(client) { RepositoryMapping = repoMapping }
+            var itemResult = await new ItemImporter(client)
+            {
+                RepositoryMapping = itemMapping,
+                UserMapping = userMapping,
+            }
                 .ImportAsync(snapshot, result, logDirectory, cancellationToken);
+            Assert.Equal(snapshot.Items.Count, itemResult.Created);
+            Assert.Empty(itemResult.Warnings);
+            var importLog = await ImportLog.LoadAsync(logDirectory, cancellationToken);
+            Assert.NotNull(importLog);
+            Assert.Equal(snapshot.Items.Count, importLog.Items.Count);
+            var verificationSnapshot = snapshot with
+            {
+                LinkedRepositories = snapshot.LinkedRepositories?.Select(repository =>
+                    string.Equals(repository, FixtureRepo, StringComparison.OrdinalIgnoreCase)
+                        ? targetFixtureRepo
+                        : repository).ToList(),
+            };
             await IntegrationFixtureSnapshot.RemoveUnexpectedItemsAsync(
-                client, TargetOrg, result.ProjectNumber, snapshot, cancellationToken);
+                client, TargetOrg, result.ProjectNumber, verificationSnapshot, cancellationToken);
 
             var postExportCalled = false;
             var verifier = new ProjectVerifier(client)
@@ -85,14 +114,14 @@ public class VerifyTests
             // 1) Right after a full API import the target matches the snapshot except for
             //    views/workflows, which only the browser module migrates (errors since M7).
             //    Items are eventually consistent, so poll until no other error remains.
-            var matchReport = await VerifyUntilAsync(verifier, snapshot, result.ProjectNumber, r => !HasNonBrowserError(r), cancellationToken);
+            var matchReport = await VerifyUntilAsync(verifier, verificationSnapshot, result.ProjectNumber, r => !HasNonBrowserError(r), cancellationToken);
             Assert.True(postExportCalled);
             Assert.DoesNotContain(matchReport.Differences, d => d.Severity == VerifySeverity.Error && !IsBrowserCategory(d));
             Assert.Contains(matchReport.Differences, d => d.Severity == VerifySeverity.Error && d.Category == "View");
             Assert.Contains(matchReport.Differences, d => d.Severity == VerifySeverity.Error && d.Category == "Workflow");
 
             // 2) Drift the target: delete one custom TEXT field...
-            var fieldName = snapshot.Fields.First(f => f.DataType == "TEXT").Name;
+            var fieldName = verificationSnapshot.Fields.First(f => f.DataType == "TEXT").Name;
             await client.QueryAsync(
                 """
                 mutation($fieldId: ID!) {
@@ -103,12 +132,10 @@ public class VerifyTests
                 cancellationToken);
 
             // ...and flip the Status value of one imported (non-archived) item.
-            var log = await ImportLog.LoadAsync(logDirectory, cancellationToken);
-            Assert.NotNull(log);
-            var statusItem = snapshot.Items
+            var statusItem = verificationSnapshot.Items
                 .OrderBy(i => i.Position)
                 .First(i => !i.IsArchived && i.FieldValues.Any(v => v.FieldName == StatusFieldName && v.SingleSelectOptionName is not null));
-            var itemId = log.Items[statusItem.Position.ToString(CultureInfo.InvariantCulture)];
+            var itemId = importLog.Items[statusItem.Position.ToString(CultureInfo.InvariantCulture)];
             var currentStatus = statusItem.FieldValues.First(v => v.FieldName == StatusFieldName).SingleSelectOptionName!;
             var otherOptionId = result.OptionIds[StatusFieldName].First(kvp => !string.Equals(kvp.Key, currentStatus, StringComparison.Ordinal)).Value;
             await client.QueryAsync(
@@ -124,7 +151,7 @@ public class VerifyTests
                 cancellationToken);
 
             // 3) Both drifts are reported as errors.
-            var driftReport = await VerifyUntilAsync(verifier, snapshot, result.ProjectNumber, r =>
+            var driftReport = await VerifyUntilAsync(verifier, verificationSnapshot, result.ProjectNumber, r =>
                 r.Differences.Any(d => d.Severity == VerifySeverity.Error && d.Category == "Field" && d.Message.Contains($"'{fieldName}'", StringComparison.Ordinal))
                 && r.Differences.Any(d => d.Severity == VerifySeverity.Error && d.Category == "Item" && d.Message.Contains($"'{StatusFieldName}' value mismatch", StringComparison.Ordinal)),
                 cancellationToken);

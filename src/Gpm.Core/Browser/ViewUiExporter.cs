@@ -1,4 +1,5 @@
 using System.Globalization;
+using Gpm.Core.GitHub;
 using Gpm.Core.Snapshot;
 using Microsoft.Playwright;
 
@@ -30,11 +31,33 @@ public sealed class ViewUiExporter
 
     /// <summary>Returns a copy of <paramref name="snapshot"/> with <see cref="ViewSnapshot.Ui"/> populated.</summary>
     public async Task<ProjectSnapshot> EnrichAsync(ProjectSnapshot snapshot, string orgLogin, int projectNumber, CancellationToken cancellationToken = default)
+        => await EnrichAsync(snapshot, orgLogin, ProjectOwnerType.Organization, projectNumber, cancellationToken).ConfigureAwait(false);
+
+    /// <summary>Returns a copy of <paramref name="snapshot"/> with <see cref="ViewSnapshot.Ui"/> populated.</summary>
+    public async Task<ProjectSnapshot> EnrichAsync(
+        ProjectSnapshot snapshot,
+        string ownerLogin,
+        ProjectOwnerType ownerType,
+        int projectNumber,
+        CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(snapshot);
-        ArgumentException.ThrowIfNullOrWhiteSpace(orgLogin);
+        ArgumentException.ThrowIfNullOrWhiteSpace(ownerLogin);
 
-        var page = await _session.GetPageAsync(cancellationToken).ConfigureAwait(false);
+        IPage page;
+        try
+        {
+            page = await _session.GetPageAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception exception) when (exception is PlaywrightException or TimeoutException)
+        {
+            _warnings.Add($"view settings page could not be opened — {exception.Message}");
+            return snapshot with
+            {
+                Views = snapshot.Views.Select(view => view with { Ui = null }).ToList(),
+            };
+        }
+
         var views = new List<ViewSnapshot>(snapshot.Views.Count);
         foreach (var view in snapshot.Views)
         {
@@ -44,7 +67,7 @@ public sealed class ViewUiExporter
             ViewUiSnapshot? ui = null;
             try
             {
-                ui = await ReadViewUiAsync(page, orgLogin, projectNumber, view, cancellationToken).ConfigureAwait(false);
+                ui = await ReadViewUiAsync(page, ownerLogin, ownerType, projectNumber, view, cancellationToken).ConfigureAwait(false);
             }
             catch (Exception exception) when (exception is PlaywrightException or TimeoutException)
             {
@@ -57,10 +80,20 @@ public sealed class ViewUiExporter
         return snapshot with { Views = views };
     }
 
-    private async Task<ViewUiSnapshot> ReadViewUiAsync(IPage page, string orgLogin, int projectNumber, ViewSnapshot view, CancellationToken cancellationToken)
+    private async Task<ViewUiSnapshot> ReadViewUiAsync(
+        IPage page,
+        string ownerLogin,
+        ProjectOwnerType ownerType,
+        int projectNumber,
+        ViewSnapshot view,
+        CancellationToken cancellationToken)
     {
-        var url = string.Create(CultureInfo.InvariantCulture,
-            $"{_session.BaseUrl}/orgs/{orgLogin}/projects/{projectNumber}/views/{view.Number}");
+        var url = BrowserProjectUrl.Build(
+            _session.BaseUrl,
+            ownerLogin,
+            ownerType,
+            projectNumber,
+            string.Create(CultureInfo.InvariantCulture, $"views/{view.Number}"));
         await _session.GotoAsync(url, cancellationToken).ConfigureAwait(false);
 
         await Sel.ViewMenuButton(page).ClickAsync().ConfigureAwait(false);

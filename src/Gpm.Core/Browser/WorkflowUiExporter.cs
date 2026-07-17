@@ -1,4 +1,4 @@
-using System.Globalization;
+using Gpm.Core.GitHub;
 using Gpm.Core.Snapshot;
 using Microsoft.Playwright;
 
@@ -33,20 +33,45 @@ public sealed class WorkflowUiExporter
 
     /// <summary>Returns a copy of <paramref name="snapshot"/> with <see cref="WorkflowSnapshot.Ui"/> populated.</summary>
     public async Task<ProjectSnapshot> EnrichAsync(ProjectSnapshot snapshot, string orgLogin, int projectNumber, CancellationToken cancellationToken = default)
+        => await EnrichAsync(snapshot, orgLogin, ProjectOwnerType.Organization, projectNumber, cancellationToken).ConfigureAwait(false);
+
+    /// <summary>Returns a copy of <paramref name="snapshot"/> with <see cref="WorkflowSnapshot.Ui"/> populated.</summary>
+    public async Task<ProjectSnapshot> EnrichAsync(
+        ProjectSnapshot snapshot,
+        string ownerLogin,
+        ProjectOwnerType ownerType,
+        int projectNumber,
+        CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(snapshot);
-        ArgumentException.ThrowIfNullOrWhiteSpace(orgLogin);
+        ArgumentException.ThrowIfNullOrWhiteSpace(ownerLogin);
 
         if (snapshot.Workflows.Count == 0)
         {
             return snapshot;
         }
 
-        var page = await _session.GetPageAsync(cancellationToken).ConfigureAwait(false);
-        var url = string.Create(CultureInfo.InvariantCulture,
-            $"{_session.BaseUrl}/orgs/{orgLogin}/projects/{projectNumber}/workflows");
-        await _session.GotoAsync(url, cancellationToken).ConfigureAwait(false);
-        await Sel.WorkflowsSidebar(page).WaitForAsync().ConfigureAwait(false);
+        IPage page;
+        try
+        {
+            page = await _session.GetPageAsync(cancellationToken).ConfigureAwait(false);
+            var url = BrowserProjectUrl.Build(
+                _session.BaseUrl,
+                ownerLogin,
+                ownerType,
+                projectNumber,
+                "workflows");
+            await _session.GotoAsync(url, cancellationToken).ConfigureAwait(false);
+            await Sel.WorkflowsSidebar(page).WaitForAsync().ConfigureAwait(false);
+        }
+        catch (Exception exception) when (exception is PlaywrightException or TimeoutException)
+        {
+            _warnings.Add($"workflow settings page could not be read — {exception.Message}");
+            return snapshot with
+            {
+                Workflows = snapshot.Workflows.Select(workflow => workflow with { Ui = null }).ToList(),
+            };
+        }
 
         var workflows = new List<WorkflowSnapshot>(snapshot.Workflows.Count);
         foreach (var workflow in snapshot.Workflows)
@@ -56,7 +81,7 @@ public sealed class WorkflowUiExporter
             WorkflowUiSnapshot? ui = null;
             try
             {
-                await OpenWorkflowAsync(page, workflow.Name, cancellationToken).ConfigureAwait(false);
+                await OpenWorkflowAsync(page, workflow.Name, workflow.Number, cancellationToken).ConfigureAwait(false);
                 var state = await ReadCurrentWorkflowAsync(page, workflow.Name).ConfigureAwait(false);
                 ui = new WorkflowUiSnapshot
                 {
@@ -82,6 +107,18 @@ public sealed class WorkflowUiExporter
     internal static async Task OpenWorkflowAsync(IPage page, string name, CancellationToken cancellationToken)
     {
         await Sel.WorkflowLink(page, name).First.ClickAsync().ConfigureAwait(false);
+        await Sel.WorkflowHeading(page, name).First.WaitForAsync().ConfigureAwait(false);
+        await Task.Delay(300, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>Navigates to the saved workflow identified by its GraphQL number.</summary>
+    internal static async Task OpenWorkflowAsync(
+        IPage page,
+        string name,
+        int number,
+        CancellationToken cancellationToken)
+    {
+        await Sel.WorkflowLink(page, number).ClickAsync().ConfigureAwait(false);
         await Sel.WorkflowHeading(page, name).First.WaitForAsync().ConfigureAwait(false);
         await Task.Delay(300, cancellationToken).ConfigureAwait(false);
     }

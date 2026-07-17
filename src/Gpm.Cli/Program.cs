@@ -148,8 +148,8 @@ exportCommand.SetAction(async (parseResult, cancellationToken) =>
 
             exporter.PostExportAsync = async (snapshot, ct) =>
             {
-                snapshot = await uiExporter.EnrichAsync(snapshot, org, number, ct);
-                snapshot = await workflowExporter.EnrichAsync(snapshot, org, number, ct);
+                snapshot = await uiExporter.EnrichAsync(snapshot, org, ownerType, number, ct);
+                snapshot = await workflowExporter.EnrichAsync(snapshot, org, ownerType, number, ct);
                 return await collaboratorExporter.EnrichAsync(snapshot, org, ownerType, number, ct);
             };
         }
@@ -454,6 +454,14 @@ var verifyProjectOption = new Option<int>("--project")
     Description = "Project number in the target organization.",
     Required = true,
 };
+var failOnWarningOption = new Option<bool>("--fail-on-warning")
+{
+    Description = "Exit with an error when any verification warning is reported.",
+};
+var reportJsonOption = new Option<string?>("--report-json")
+{
+    Description = "Write the complete verification result as JSON to this path.",
+};
 
 var verifyCommand = new Command("verify", "Verify a migrated project against the source snapshot and report differences.")
 {
@@ -468,6 +476,8 @@ var verifyCommand = new Command("verify", "Verify a migrated project against the
     enableBrowserOption,
     browserProfileOption,
     browserBaseUrlOption,
+    failOnWarningOption,
+    reportJsonOption,
     noUpdateCheckOption,
 };
 
@@ -480,6 +490,8 @@ verifyCommand.SetAction(async (parseResult, cancellationToken) =>
     var baseUrl = parseResult.GetValue(targetBaseUrlOption);
     var updateCheck = StartUpdateCheck(parseResult.GetValue(noUpdateCheckOption));
     var enableBrowserAutomation = parseResult.GetValue(enableBrowserOption);
+    var failOnWarning = parseResult.GetValue(failOnWarningOption);
+    var reportJsonPath = parseResult.GetValue(reportJsonOption);
     var token = parseResult.GetValue(tokenOption)
         ?? Environment.GetEnvironmentVariable("GITHUB_TOKEN")
         ?? Environment.GetEnvironmentVariable("GPM_TOKEN");
@@ -534,32 +546,34 @@ verifyCommand.SetAction(async (parseResult, cancellationToken) =>
             collaboratorExporter = new CollaboratorUiExporter(session) { OnProgress = Console.Error.WriteLine };
             verifier.PostExportAsync = async (target, ct) =>
             {
-                target = await viewExporter.EnrichAsync(target, org, projectNumber, ct);
-                target = await workflowExporter.EnrichAsync(target, org, projectNumber, ct);
+                target = await viewExporter.EnrichAsync(target, org, ownerType, projectNumber, ct);
+                target = await workflowExporter.EnrichAsync(target, org, ownerType, projectNumber, ct);
                 return await collaboratorExporter.EnrichAsync(target, org, ownerType, projectNumber, ct);
             };
         }
 
         var snapshot = await SnapshotFile.LoadAsync(inDirectory, cancellationToken);
         var report = await verifier.VerifyAsync(snapshot, org, projectNumber, cancellationToken);
-        var browserWarnings = (viewExporter?.Warnings ?? [])
-            .Concat(workflowExporter?.Warnings ?? [])
-            .Concat(collaboratorExporter?.Warnings ?? [])
-            .ToList();
-        foreach (var warning in browserWarnings)
+        var viewWarnings = viewExporter?.Warnings ?? [];
+        var workflowWarnings = workflowExporter?.Warnings ?? [];
+        var collaboratorWarnings = collaboratorExporter?.Warnings ?? [];
+        report = report
+            .WithWarnings("View", viewWarnings)
+            .WithWarnings("Workflow", workflowWarnings)
+            .WithWarnings("Collaborator", collaboratorWarnings);
+        foreach (var warning in viewWarnings.Concat(workflowWarnings).Concat(collaboratorWarnings))
         {
             Console.Error.WriteLine($"warning: {warning}");
         }
 
-        if (browserWarnings.Count > 0)
+        if (reportJsonPath is not null)
         {
-            Console.Error.WriteLine("error: browser-assisted verification was incomplete because one or more target UI settings could not be read.");
-            return 1;
+            await VerifyReportFile.SaveAsync(report, reportJsonPath, cancellationToken);
         }
 
         WriteVerifyReport(report);
         await NotifyUpdateAsync(updateCheck);
-        return report.IsMatch ? 0 : 1;
+        return report.ShouldFail(failOnWarning) ? 1 : 0;
     }
     catch (Exception exception) when (exception is GitHubGraphQLException or InvalidOperationException or IOException or FormatException or PlaywrightException or ArgumentException)
     {
@@ -938,29 +952,36 @@ static async Task NotifyUpdateAsync(Task<string?> updateCheck)
 // Writes the verify report to stdout as a human-readable table plus a summary line.
 static void WriteVerifyReport(VerifyReport report)
 {
-    if (report.Differences.Count == 0)
+    if (report.Status == VerifyStatus.Match && report.Differences.Count == 0)
     {
         Console.WriteLine("OK: the target project matches the snapshot.");
-        return;
     }
 
-    const string SeverityHeader = "SEVERITY";
-    const string CategoryHeader = "CATEGORY";
-    var severityWidth = Math.Max(SeverityHeader.Length, report.Differences.Max(d => d.Severity.ToString().Length));
-    var categoryWidth = Math.Max(CategoryHeader.Length, report.Differences.Max(d => d.Category.Length));
-
-    Console.WriteLine($"{SeverityHeader.PadRight(severityWidth)}  {CategoryHeader.PadRight(categoryWidth)}  MESSAGE");
-    foreach (var difference in report.Differences)
+    if (report.Differences.Count > 0)
     {
-        Console.WriteLine($"{difference.Severity.ToString().PadRight(severityWidth)}  {difference.Category.PadRight(categoryWidth)}  {difference.Message}");
+        const string SeverityHeader = "SEVERITY";
+        const string CategoryHeader = "CATEGORY";
+        var severityWidth = Math.Max(SeverityHeader.Length, report.Differences.Max(d => d.Severity.ToString().Length));
+        var categoryWidth = Math.Max(CategoryHeader.Length, report.Differences.Max(d => d.Category.Length));
+
+        Console.WriteLine($"{SeverityHeader.PadRight(severityWidth)}  {CategoryHeader.PadRight(categoryWidth)}  MESSAGE");
+        foreach (var difference in report.Differences)
+        {
+            Console.WriteLine($"{difference.Severity.ToString().PadRight(severityWidth)}  {difference.Category.PadRight(categoryWidth)}  {difference.Message}");
+        }
+
+        Console.WriteLine();
     }
 
-    var errors = report.Differences.Count(d => d.Severity == VerifySeverity.Error);
-    var warnings = report.Differences.Count(d => d.Severity == VerifySeverity.Warning);
-    var infos = report.Differences.Count(d => d.Severity == VerifySeverity.Info);
+    Console.WriteLine("CATEGORY STATUS");
+    foreach (var category in report.Categories)
+    {
+        Console.WriteLine($"{category.Category}: {category.Status}");
+    }
+
     Console.WriteLine();
     Console.WriteLine(string.Create(CultureInfo.InvariantCulture,
-        $"{errors} error(s), {warnings} warning(s), {infos} info(s). {(errors == 0 ? "Match." : "Mismatch.")}"));
+        $"{report.ErrorCount} error(s), {report.WarningCount} warning(s), {report.InfoCount} info(s), {report.NotVerifiedCount} not verified. {report.Status}."));
 }
 
 static string FormatProjectImportOutcome(ProjectImportOutcome outcome) => outcome switch

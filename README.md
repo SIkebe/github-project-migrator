@@ -60,6 +60,29 @@ gpm verify --org target-org --project 12 --in ./snapshot --token $TARGET_TOKEN \
 
 Tokens are resolved from `--token`, then the `GITHUB_TOKEN` / `GPM_TOKEN` environment variables.
 
+`verify` reports an overall result and a result for Project, Field, Item, View, Workflow, Collaborator, and LinkedRepository:
+
+| Result | Meaning |
+|---|---|
+| `Match` | Every available category was verified with no material difference. |
+| `Mismatch` | At least one migration-owned value differs. |
+| `PartialMatch` | No errors, but a non-fatal warning exists (for example, target-only data). |
+| `NotVerified` | Required source or target data was not captured, so full equality cannot be established. |
+
+`Mismatch` and `NotVerified` always produce exit code 1. `--fail-on-warning` also fails when warnings exist. Use `--report-json <path>` for the same overall/category results and counts in machine-readable form. Without browser automation, GraphQL-readable View settings are still compared, but UI-only View/Workflow settings and explicit collaborators are reported as `NotVerified`; use `--enable-browser-automation` when verification must prove those areas too.
+
+| Category | Verification coverage |
+|---|---|
+| Project | Description, README, visibility, and closed state. A changed title is informational because import supports title overrides. |
+| Field | Field presence/type, single-select option order/name/color/description, and iteration dates/durations. |
+| Item | Counts/types, issue and pull request identity, draft body, field values, active-item order, and archived state. Archived-item order is excluded because GitHub cannot restore it. |
+| View | Name/layout plus GraphQL filter, visible fields/order, grouping, and sorting. Browser mode adds slice, swimlanes, field sums, and roadmap dates/zoom/markers. |
+| Workflow | Name/enabled state. Browser mode adds content types, status, filter, and repository. |
+| Collaborator | Browser-captured explicit user/team collaborators and roles. Inherited and base-role access is excluded. |
+| LinkedRepository | Linked repository identities after repository mapping. |
+
+Insights charts, item/field-value history, and inherited/base-role access are not verified.
+
 ### Token permissions
 
 You can use either a classic PAT or a fine-grained PAT. Fine-grained PATs are scoped to a single resource owner, so cross-organization or cross-account migrations usually need separate source and target tokens.
@@ -246,7 +269,7 @@ Workflows are migrated through the GitHub Projects web UI because GitHub has no 
 
 | Area | Supported? | Notes |
 |---|---:|---|
-| `gpm verify` | ✅ | Compares target project against the snapshot and reports differences. Add `--enable-browser-automation` to re-read and compare UI-only View / Workflow settings and explicit collaborators. |
+| `gpm verify` | ✅ | Compares target project against the snapshot. GraphQL View settings are always checked; `--enable-browser-automation` re-reads UI-only View / Workflow settings and explicit collaborators. Supports category statuses, warning exit policy, and JSON reports. |
 | Resume after interruption | ✅ | Item import writes `import-log.json` so reruns do not duplicate already-created items. |
 | Mapping CSV templates | ✅ | `export` writes repository and user mapping templates without overwriting existing files. |
 | Bulk export | ✅ | Omit `--project` to export every project owned by the organization/user into `<out>/<number>/`. |

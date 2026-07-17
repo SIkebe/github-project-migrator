@@ -133,6 +133,10 @@ internal static class Sel
     public static ILocator WorkflowLink(IPage page, string name)
         => WorkflowsSidebar(page).GetByRole(AriaRole.Link, new() { NameRegex = new Regex($"^{Regex.Escape(name)}{WorkflowOptionsSuffix}") });
 
+    /// <summary>Saved workflow link by its stable GraphQL workflow number.</summary>
+    public static ILocator WorkflowLink(IPage page, int number)
+        => WorkflowsSidebar(page).Locator($"a[href$='/workflows/{number}']");
+
     /// <summary>The h2 heading of the currently displayed workflow.</summary>
     public static ILocator WorkflowHeading(IPage page, string name)
         => page.GetByRole(AriaRole.Heading, new() { Name = name, Exact = true, Level = 2 });

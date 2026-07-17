@@ -6,6 +6,7 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="Gpm.Core.Tests" />
+    <InternalsVisibleTo Include="Gpm.Browser.Tests" />
   </ItemGroup>
 
 </Project>

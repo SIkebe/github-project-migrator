@@ -1,4 +1,3 @@
-using System.Globalization;
 using System.Text.RegularExpressions;
 using Gpm.Core.GitHub;
 using Gpm.Core.Snapshot;
@@ -44,9 +43,12 @@ public sealed partial class CollaboratorUiExporter
         try
         {
             var page = await _session.GetPageAsync(cancellationToken).ConfigureAwait(false);
-            var ownerPath = ownerType == ProjectOwnerType.User ? "users" : "orgs";
-            var url = string.Create(CultureInfo.InvariantCulture,
-                $"{_session.BaseUrl}/{ownerPath}/{ownerLogin}/projects/{projectNumber}/settings/access");
+            var url = BrowserProjectUrl.Build(
+                _session.BaseUrl,
+                ownerLogin,
+                ownerType,
+                projectNumber,
+                "settings/access");
             await _session.GotoAsync(url, cancellationToken).ConfigureAwait(false);
             await page.GetByRole(AriaRole.Heading, new() { Name = "Manage access", Level = 3 })
                 .WaitForAsync().ConfigureAwait(false);

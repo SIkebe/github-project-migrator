@@ -1,5 +1,6 @@
 using System.Net;
 using System.Text;
+using System.Text.Json;
 using Gpm.Core.GitHub;
 using Gpm.Core.Import;
 using Gpm.Core.Snapshot;
@@ -66,9 +67,10 @@ public class ProjectVerifierTests
                 SortByFields = [],
                 VerticalGroupByFields = [],
                 VisibleFields = ["Title", "Status"],
+                Ui = new ViewUiSnapshot(),
             },
         ],
-        Workflows = [new WorkflowSnapshot { Number = 1, Name = "Item closed", Enabled = true }],
+        Workflows = [new WorkflowSnapshot { Number = 1, Name = "Item closed", Enabled = true, Ui = new WorkflowUiSnapshot() }],
         Items =
         [
             DraftItem(position: 0, title: "Draft A", body: "Body A", status: "Todo"),
@@ -88,6 +90,8 @@ public class ProjectVerifierTests
                 ],
             },
         ],
+        Collaborators = [],
+        LinkedRepositories = [],
     };
 
     private static SingleSelectOptionSnapshot Option(string id, string name, string color, string? description = null)
@@ -223,7 +227,7 @@ public class ProjectVerifierTests
 
         var report = ProjectVerifier.Compare(source, BuildSnapshot());
 
-        Assert.True(report.IsMatch);
+        Assert.Equal(VerifyStatus.PartialMatch, report.Status);
         Assert.Contains(report.Differences, d =>
             d.Severity == VerifySeverity.Warning && d.Category == "Field" && d.Message.Contains("only in the target", StringComparison.Ordinal));
     }
@@ -338,7 +342,95 @@ public class ProjectVerifierTests
     }
 
     [Fact]
-    public void Workflow_ui_differences_are_warnings_when_both_sides_carry_ui()
+    public void Graphql_view_settings_are_compared_without_browser_automation()
+    {
+        var source = BuildSnapshot();
+        var target = source with
+        {
+            Views =
+            [
+                source.Views[0] with
+                {
+                    Filter = "is:open",
+                    VisibleFields = ["Status", "Title"],
+                    GroupByFields = ["Status"],
+                    VerticalGroupByFields = ["Assignees"],
+                    SortByFields = [new SortByFieldSnapshot { Field = "Status", Direction = "DESC" }],
+                },
+            ],
+        };
+
+        var report = ProjectVerifier.Compare(source, target);
+
+        Assert.Equal(5, report.Differences.Count(difference =>
+            difference.Severity == VerifySeverity.Error && difference.Category == "View"));
+        Assert.Equal(VerifyStatus.Mismatch, report.Status);
+    }
+
+    [Fact]
+    public void View_ui_is_not_verified_when_target_ui_was_not_read()
+    {
+        var source = BuildSnapshot();
+        var target = source with { Views = [source.Views[0] with { Ui = null }] };
+
+        var report = ProjectVerifier.Compare(source, target);
+
+        Assert.Equal(VerifyStatus.NotVerified, report.Status);
+        Assert.Contains(report.Categories, category =>
+            category.Category == "View" && category.Status == VerifyStatus.NotVerified);
+        Assert.False(report.IsMatch);
+    }
+
+    [Fact]
+    public void Duplicate_view_names_are_compared_as_setting_multisets()
+    {
+        var baseline = BuildSnapshot();
+        var first = baseline.Views[0] with
+        {
+            Number = 1,
+            Filter = "status:Todo",
+            Ui = new ViewUiSnapshot { SliceBy = "Status" },
+        };
+        var second = baseline.Views[0] with
+        {
+            Number = 2,
+            Filter = "status:Done",
+            Ui = new ViewUiSnapshot { SliceBy = "Assignees" },
+        };
+        var source = baseline with { Views = [first, second] };
+        var reordered = baseline with { Views = [second with { Number = 8 }, first with { Number = 9 }] };
+
+        Assert.DoesNotContain(ProjectVerifier.Compare(source, reordered).Differences, difference =>
+            difference.Category == "View");
+
+        var drifted = baseline with
+        {
+            Views = [second with { Number = 8 }, first with { Number = 9, Filter = "status:In Progress" }],
+        };
+        var report = ProjectVerifier.Compare(source, drifted);
+
+        Assert.Contains(report.Differences, difference =>
+            difference.Severity == VerifySeverity.Error
+            && difference.Category == "View"
+            && difference.Message.Contains("API-visible settings", StringComparison.Ordinal));
+
+        var swappedUi = baseline with
+        {
+            Views =
+            [
+                first with { Number = 8, Ui = second.Ui },
+                second with { Number = 9, Ui = first.Ui },
+            ],
+        };
+        var swappedReport = ProjectVerifier.Compare(source, swappedUi);
+        Assert.Contains(swappedReport.Differences, difference =>
+            difference.Severity == VerifySeverity.Error
+            && difference.Category == "View"
+            && difference.Message.Contains("combined API and UI settings", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Workflow_ui_differences_are_errors_when_both_sides_carry_ui()
     {
         var ui = new WorkflowUiSnapshot
         {
@@ -362,15 +454,15 @@ public class ProjectVerifierTests
 
         var report = ProjectVerifier.Compare(source, target);
 
-        Assert.True(report.IsMatch);
+        Assert.Equal(VerifyStatus.Mismatch, report.Status);
         Assert.Contains(report.Differences, d =>
-            d.Severity == VerifySeverity.Warning && d.Category == "Workflow" && d.Message.Contains("status value mismatch", StringComparison.Ordinal));
+            d.Severity == VerifySeverity.Error && d.Category == "Workflow" && d.Message.Contains("status value mismatch", StringComparison.Ordinal));
         Assert.Contains(report.Differences, d =>
-            d.Severity == VerifySeverity.Warning && d.Category == "Workflow" && d.Message.Contains("repository mismatch", StringComparison.Ordinal));
+            d.Severity == VerifySeverity.Error && d.Category == "Workflow" && d.Message.Contains("repository mismatch", StringComparison.Ordinal));
     }
 
     [Fact]
-    public void Workflow_ui_comparison_is_skipped_when_one_side_has_no_ui()
+    public void Workflow_ui_is_not_verified_when_one_side_has_no_ui()
     {
         var source = BuildSnapshot();
         source = source with
@@ -378,9 +470,112 @@ public class ProjectVerifierTests
             Workflows = [source.Workflows[0] with { Ui = new WorkflowUiSnapshot { StatusValue = "Done" } }],
         };
 
-        var report = ProjectVerifier.Compare(source, BuildSnapshot());
+        var target = BuildSnapshot() with
+        {
+            Workflows = [BuildSnapshot().Workflows[0] with { Ui = null }],
+        };
+        var report = ProjectVerifier.Compare(source, target);
 
-        Assert.DoesNotContain(report.Differences, d => d.Category == "Workflow");
+        Assert.Equal(VerifyStatus.NotVerified, report.Status);
+        Assert.Contains(report.Categories, category =>
+            category.Category == "Workflow" && category.Status == VerifyStatus.NotVerified);
+    }
+
+    [Fact]
+    public void Unordered_ui_selections_and_repository_casing_do_not_cause_drift()
+    {
+        var baseline = BuildSnapshot();
+        var source = baseline with
+        {
+            Views =
+            [
+                baseline.Views[0] with
+                {
+                    Ui = new ViewUiSnapshot
+                    {
+                        FieldSum = ["Count", "Estimate"],
+                        Roadmap = new RoadmapSettingsSnapshot { Markers = ["Milestone", "Date"] },
+                    },
+                },
+            ],
+            Workflows =
+            [
+                baseline.Workflows[0] with
+                {
+                    Ui = new WorkflowUiSnapshot
+                    {
+                        ContentTypes = ["ISSUE", "PULL_REQUEST"],
+                        Repository = "TargetOrg/Repo",
+                    },
+                },
+            ],
+        };
+        var target = source with
+        {
+            Views =
+            [
+                source.Views[0] with
+                {
+                    Ui = source.Views[0].Ui! with
+                    {
+                        FieldSum = ["Estimate", "Count"],
+                        Roadmap = source.Views[0].Ui!.Roadmap! with { Markers = ["Date", "Milestone"] },
+                    },
+                },
+            ],
+            Workflows =
+            [
+                source.Workflows[0] with
+                {
+                    Ui = source.Workflows[0].Ui! with
+                    {
+                        ContentTypes = ["PULL_REQUEST", "ISSUE"],
+                        Repository = "targetorg/repo",
+                    },
+                },
+            ],
+        };
+
+        var report = ProjectVerifier.Compare(source, target);
+
+        Assert.DoesNotContain(report.Differences, difference =>
+            difference.Category is "View" or "Workflow");
+    }
+
+    [Fact]
+    public void Duplicate_workflow_names_are_compared_as_setting_multisets()
+    {
+        var baseline = BuildSnapshot();
+        var first = baseline.Workflows[0] with
+        {
+            Number = 1,
+            Ui = new WorkflowUiSnapshot { Filter = "is:issue", StatusValue = "Todo" },
+        };
+        var second = baseline.Workflows[0] with
+        {
+            Number = 2,
+            Ui = new WorkflowUiSnapshot { Filter = "is:pr", StatusValue = "Done" },
+        };
+        var source = baseline with { Workflows = [first, second] };
+        var reordered = baseline with { Workflows = [second with { Number = 8 }, first with { Number = 9 }] };
+
+        Assert.DoesNotContain(ProjectVerifier.Compare(source, reordered).Differences, difference =>
+            difference.Category == "Workflow");
+
+        var drifted = baseline with
+        {
+            Workflows =
+            [
+                second with { Number = 8 },
+                first with { Number = 9, Ui = first.Ui! with { Filter = "is:open" } },
+            ],
+        };
+        var report = ProjectVerifier.Compare(source, drifted);
+
+        Assert.Contains(report.Differences, difference =>
+            difference.Severity == VerifySeverity.Error
+            && difference.Category == "Workflow"
+            && difference.Message.Contains("UI settings", StringComparison.Ordinal));
     }
 
     // ----- items -----
@@ -504,7 +699,7 @@ public class ProjectVerifierTests
     // ----- collaborators / linked repositories -----
 
     [Fact]
-    public void Collaborators_are_not_compared_when_either_side_is_null()
+    public void Collaborators_are_not_verified_when_either_side_is_null()
     {
         // Exports always leave collaborators null (no read API), so a null side must not
         // produce differences even when the other side carries collaborators.
@@ -513,12 +708,13 @@ public class ProjectVerifierTests
             Collaborators = [new CollaboratorSnapshot { Type = "USER", Login = "octocat", Role = "WRITER" }],
         };
 
-        Assert.Empty(ProjectVerifier.Compare(withCollaborators, BuildSnapshot()).Differences);
-        Assert.Empty(ProjectVerifier.Compare(BuildSnapshot(), withCollaborators).Differences);
+        var withoutCollaborators = BuildSnapshot() with { Collaborators = null };
+        Assert.Equal(VerifyStatus.NotVerified, ProjectVerifier.Compare(withCollaborators, withoutCollaborators).Status);
+        Assert.Equal(VerifyStatus.NotVerified, ProjectVerifier.Compare(withoutCollaborators, withCollaborators).Status);
     }
 
     [Fact]
-    public void Collaborator_differences_are_warnings()
+    public void Missing_collaborators_and_role_differences_are_errors()
     {
         var source = BuildSnapshot() with
         {
@@ -539,11 +735,11 @@ public class ProjectVerifierTests
 
         var report = ProjectVerifier.Compare(source, target);
 
-        Assert.True(report.IsMatch); // warnings only
+        Assert.Equal(VerifyStatus.Mismatch, report.Status);
         Assert.Contains(report.Differences, d =>
-            d.Severity == VerifySeverity.Warning && d.Message.Contains("USER 'octocat': role mismatch", StringComparison.Ordinal));
+            d.Severity == VerifySeverity.Error && d.Message.Contains("USER 'octocat': role mismatch", StringComparison.Ordinal));
         Assert.Contains(report.Differences, d =>
-            d.Severity == VerifySeverity.Warning && d.Message.Contains("TEAM 'fixture-team' is missing in the target", StringComparison.Ordinal));
+            d.Severity == VerifySeverity.Error && d.Message.Contains("TEAM 'fixture-team' is missing in the target", StringComparison.Ordinal));
         Assert.Contains(report.Differences, d =>
             d.Severity == VerifySeverity.Warning && d.Message.Contains("USER 'extra-user' exists only in the target", StringComparison.Ordinal));
     }
@@ -582,16 +778,16 @@ public class ProjectVerifierTests
     }
 
     [Fact]
-    public void Linked_repository_differences_are_warnings()
+    public void Missing_linked_repositories_are_errors_and_extra_repositories_are_warnings()
     {
         var source = BuildSnapshot() with { LinkedRepositories = ["org/repo-a", "org/repo-b"] };
         var target = BuildSnapshot() with { LinkedRepositories = ["ORG/REPO-A", "org/repo-c"] }; // names are case-insensitive
 
         var report = ProjectVerifier.Compare(source, target);
 
-        Assert.True(report.IsMatch); // warnings only
+        Assert.Equal(VerifyStatus.Mismatch, report.Status);
         Assert.Contains(report.Differences, d =>
-            d.Severity == VerifySeverity.Warning && d.Message.Contains("'org/repo-b' is missing in the target", StringComparison.Ordinal));
+            d.Severity == VerifySeverity.Error && d.Message.Contains("'org/repo-b' is missing in the target", StringComparison.Ordinal));
         Assert.Contains(report.Differences, d =>
             d.Severity == VerifySeverity.Warning && d.Message.Contains("'org/repo-c' exists only in the target", StringComparison.Ordinal));
         Assert.DoesNotContain(report.Differences, d => d.Message.Contains("repo-a", StringComparison.OrdinalIgnoreCase));
@@ -623,10 +819,93 @@ public class ProjectVerifierTests
     }
 
     [Fact]
-    public void Linked_repositories_are_not_compared_when_the_source_predates_capture()
+    public void Linked_repositories_are_not_verified_when_the_source_predates_capture()
     {
         var target = BuildSnapshot() with { LinkedRepositories = ["org/repo-a"] };
 
-        Assert.Empty(ProjectVerifier.Compare(BuildSnapshot(), target).Differences);
+        var source = BuildSnapshot() with { LinkedRepositories = null };
+        var report = ProjectVerifier.Compare(source, target);
+
+        Assert.Equal(VerifyStatus.NotVerified, report.Status);
+        Assert.Contains(report.Categories, category =>
+            category.Category == "LinkedRepository" && category.Status == VerifyStatus.NotVerified);
+    }
+
+    [Fact]
+    public void Linked_repositories_are_not_verified_when_target_capture_is_missing()
+    {
+        var source = BuildSnapshot() with { LinkedRepositories = ["org/repo-a"] };
+        var target = BuildSnapshot() with { LinkedRepositories = null };
+
+        var report = ProjectVerifier.Compare(source, target);
+
+        Assert.Equal(VerifyStatus.NotVerified, report.Status);
+        Assert.DoesNotContain(report.Differences, difference => difference.Severity == VerifySeverity.Error);
+        Assert.Contains(report.Differences, difference =>
+            difference.Severity == VerifySeverity.Warning
+            && difference.Category == "LinkedRepository"
+            && difference.Message.Contains("could not be read", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Exit_policy_fails_errors_unconditionally_and_optional_incomplete_results()
+    {
+        var partial = ProjectVerifier.Compare(
+            BuildSnapshot() with { Fields = BuildSnapshot().Fields.Take(1).ToList() },
+            BuildSnapshot());
+        Assert.Equal(VerifyStatus.PartialMatch, partial.Status);
+        Assert.False(partial.ShouldFail(failOnWarning: false));
+        Assert.True(partial.ShouldFail(failOnWarning: true));
+
+        var notVerified = ProjectVerifier.Compare(
+            BuildSnapshot() with { Collaborators = null },
+            BuildSnapshot());
+        Assert.Equal(VerifyStatus.NotVerified, notVerified.Status);
+        Assert.True(notVerified.ShouldFail(failOnWarning: false));
+
+        var mismatch = ProjectVerifier.Compare(
+            BuildSnapshot(),
+            BuildSnapshot() with { Project = BuildSnapshot().Project with { Public = true } });
+        Assert.True(mismatch.ShouldFail(failOnWarning: false));
+    }
+
+    [Fact]
+    public void Added_browser_warnings_affect_counts_status_and_exit_policy()
+    {
+        var report = ProjectVerifier.Compare(BuildSnapshot(), BuildSnapshot())
+            .WithWarnings("View", ["view scrape timed out"]);
+
+        Assert.Equal(VerifyStatus.PartialMatch, report.Status);
+        Assert.Equal(1, report.WarningCount);
+        Assert.Contains(report.Differences, difference =>
+            difference.Category == "View" && difference.Message == "view scrape timed out");
+        Assert.True(report.ShouldFail(failOnWarning: true));
+    }
+
+    [Fact]
+    public async Task Json_report_contains_the_same_status_and_counts_as_the_report()
+    {
+        var report = ProjectVerifier.Compare(
+            BuildSnapshot(),
+            BuildSnapshot() with { Views = [BuildSnapshot().Views[0] with { Ui = null }] });
+        var directory = Path.Combine(Path.GetTempPath(), "gpm-verify-report-" + Guid.NewGuid().ToString("N"));
+        var path = Path.Combine(directory, "report.json");
+        try
+        {
+            await VerifyReportFile.SaveAsync(report, path, TestContext.Current.CancellationToken);
+            using var document = JsonDocument.Parse(await File.ReadAllTextAsync(path, TestContext.Current.CancellationToken));
+
+            Assert.Equal(report.Status.ToString(), document.RootElement.GetProperty("status").GetString());
+            Assert.Equal(report.ErrorCount, document.RootElement.GetProperty("errorCount").GetInt32());
+            Assert.Equal(report.WarningCount, document.RootElement.GetProperty("warningCount").GetInt32());
+            Assert.Equal(report.NotVerifiedCount, document.RootElement.GetProperty("notVerifiedCount").GetInt32());
+        }
+        finally
+        {
+            if (Directory.Exists(directory))
+            {
+                Directory.Delete(directory, recursive: true);
+            }
+        }
     }
 }
