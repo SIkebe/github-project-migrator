@@ -94,7 +94,7 @@ public class CliImportTests
     }
 
     [Fact]
-    public async Task Filter_mapping_preflight_fails_before_any_api_request_by_default()
+    public async Task Browser_filter_mapping_preflight_fails_before_any_mutation_by_default()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
         var directory = Path.Combine(Path.GetTempPath(), "gpm-cli-filter-preflight-" + Guid.NewGuid().ToString("N"));
@@ -117,15 +117,16 @@ public class CliImportTests
         };
         await SnapshotFile.SaveAsync(snapshot, directory, cancellationToken);
 
-        using var server = new GraphQlStubServer(ExistingProjectResponse);
+        using var server = new GraphQlStubServer(EmptyProjectsResponse, OwnerResponse);
         try
         {
-            var result = await RunCliAsync(directory, server);
+            var result = await RunCliAsync(directory, server, "--enable-browser-automation");
 
             Assert.Equal(1, result.ExitCode);
             Assert.Contains("unmapped assignee value 'old-user'", result.Error, StringComparison.Ordinal);
             Assert.Contains("Filter mapping preflight failed", result.Error, StringComparison.Ordinal);
-            Assert.Empty(server.RequestBodies);
+            Assert.DoesNotContain(server.RequestBodies, request =>
+                request.Contains("mutation", StringComparison.OrdinalIgnoreCase));
         }
         finally
         {
@@ -271,6 +272,7 @@ public class CliImportTests
                 Number = 1,
                 Name = "Table",
                 Layout = "TABLE_LAYOUT",
+                Filter = "assignee:old-user",
                 GroupByFields = [],
                 SortByFields = [],
                 VerticalGroupByFields = [],
@@ -316,6 +318,16 @@ public class CliImportTests
           "pageInfo":{"hasNextPage":false,"endCursor":null}
         }}}}
         """;
+
+    private const string EmptyProjectsResponse =
+        """
+        {"data":{"organization":{"projectsV2":{
+          "nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}
+        }}}}
+        """;
+
+    private const string OwnerResponse =
+        """{"data":{"organization":{"id":"O_target"}}}""";
 
     private const string UpdateProjectResponse =
         """{"data":{"updateProjectV2":{"projectV2":{"id":"PVT_existing"}}}}""";

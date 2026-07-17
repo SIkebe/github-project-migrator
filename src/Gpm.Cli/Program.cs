@@ -341,33 +341,13 @@ importCommand.SetAction(async (parseResult, cancellationToken) =>
             ? System.Collections.ObjectModel.ReadOnlyDictionary<string, string>.Empty
             : CsvMapping.Load(organizationMappingPath);
 
-        async Task ValidateBrowserBeforeWriteAsync(CancellationToken ct)
-        {
-            session = new BrowserSession(new BrowserSessionOptions
-            {
-                BaseUrl = BrowserBaseUrl.Resolve(graphQlBaseUrl, parseResult.GetValue(browserBaseUrlOption)),
-                Profile = parseResult.GetValue(browserProfileOption),
-            });
-            var apiLogin = await client.GetViewerLoginAsync(ct);
-            await session.ValidateAuthenticationAsync(apiLogin, ct);
-        }
-
-        var importer = new ProjectImporter(client)
-        {
-            OnConflict = onConflict,
-            OwnerType = ownerType,
-            RepositoryMapping = repoMapping,
-            UserMapping = userMapping,
-            OnProgress = Console.Error.WriteLine,
-            BeforeWriteAsync = enableBrowserAutomation ? ValidateBrowserBeforeWriteAsync : null,
-        };
-
         var snapshot = await SnapshotFile.LoadAsync(inDirectory, cancellationToken);
         if (projectTitle is not null)
         {
             snapshot = snapshot with { Project = snapshot.Project with { Title = projectTitle } };
         }
 
+        async Task ValidateBrowserBeforeWriteAsync(CancellationToken ct)
         {
             var filterTransforms = ProjectFilterTransformer.AnalyzeSnapshot(
                 snapshot,
@@ -409,7 +389,25 @@ importCommand.SetAction(async (parseResult, cancellationToken) =>
                 throw new InvalidOperationException(
                     "Filter mapping preflight failed; fill the generated mapping CSV rows before importing.");
             }
+
+            session = new BrowserSession(new BrowserSessionOptions
+            {
+                BaseUrl = BrowserBaseUrl.Resolve(graphQlBaseUrl, parseResult.GetValue(browserBaseUrlOption)),
+                Profile = parseResult.GetValue(browserProfileOption),
+            });
+            var apiLogin = await client.GetViewerLoginAsync(ct);
+            await session.ValidateAuthenticationAsync(apiLogin, ct);
         }
+
+        var importer = new ProjectImporter(client)
+        {
+            OnConflict = onConflict,
+            OwnerType = ownerType,
+            RepositoryMapping = repoMapping,
+            UserMapping = userMapping,
+            OnProgress = Console.Error.WriteLine,
+            BeforeWriteAsync = enableBrowserAutomation ? ValidateBrowserBeforeWriteAsync : null,
+        };
 
         var result = projectNumber is { } number
             ? await importer.ImportIntoAsync(snapshot, org, number, cancellationToken)

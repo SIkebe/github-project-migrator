@@ -21,7 +21,11 @@ public static class MappingTemplates
     public const string UserMappingFileName = "user-mappings.csv";
     public const string OrganizationMappingFileName = "organization-mappings.csv";
 
-    /// <summary>Distinct source repositories ("org/repo") of all Issue/PR items, in first-seen order.</summary>
+    /// <summary>
+    /// Distinct repository mapping candidates from Issue/PR items, linked repositories,
+    /// Auto-add repository short names and <c>repo:</c> filter values, in first-seen order.
+    /// Candidates are not necessarily owner-qualified.
+    /// </summary>
     public static IReadOnlyList<string> ExtractSourceRepositories(IEnumerable<ProjectSnapshot> snapshots)
     {
         ArgumentNullException.ThrowIfNull(snapshots);
