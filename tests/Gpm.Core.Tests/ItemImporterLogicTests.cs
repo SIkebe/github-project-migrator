@@ -299,6 +299,14 @@ public class ItemImporterLogicTests
             var inconsistent = await Assert.ThrowsAsync<InvalidDataException>(
                 () => ImportLog.LoadAsync(directory, cancellationToken));
             Assert.Contains("inconsistent item mappings", inconsistent.Message, StringComparison.Ordinal);
+
+            await File.WriteAllTextAsync(
+                Path.Combine(directory, ImportLog.FileName),
+                """{"schemaVersion":2,"projectId":"PVT_target","sourceSnapshotFingerprint":"fingerprint","items":{"0":"PVTI_item"},"itemStates":{"item":{"targetItemId":"PVTI_item","targetContentIdentity":"DRAFT_ISSUE:assignees:"}},"pendingDrafts":{"0":{"operationId":"op","attemptedAt":"2026-07-17T00:00:00Z","title":"Draft","assigneeIds":[],"existingItemIds":[]}},"pendingContents":{}}""",
+                cancellationToken);
+            var overlapping = await Assert.ThrowsAsync<InvalidDataException>(
+                () => ImportLog.LoadAsync(directory, cancellationToken));
+            Assert.Contains("overlapping pending item operations", overlapping.Message, StringComparison.Ordinal);
         }
         finally
         {

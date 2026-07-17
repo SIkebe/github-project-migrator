@@ -110,6 +110,13 @@ public sealed record ImportLog
                 throw new InvalidDataException(
                     $"{FileName} contains inconsistent item mappings and cannot be resumed safely.");
             }
+            if (log.PendingDrafts.Keys.Any(key =>
+                    log.PendingContents.ContainsKey(key) || log.Items.ContainsKey(key))
+                || log.PendingContents.Keys.Any(log.Items.ContainsKey))
+            {
+                throw new InvalidDataException(
+                    $"{FileName} contains overlapping pending item operations and cannot be resumed safely.");
+            }
 
             return log;
         }
