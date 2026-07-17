@@ -15,8 +15,11 @@ public sealed record ImportResult
     /// <summary>Web URL of the target project.</summary>
     public required string Url { get; init; }
 
-    /// <summary>True when the project was created by this run (false for Skip/Update on an existing project).</summary>
-    public required bool Created { get; init; }
+    /// <summary>Whether this run created, updated, or skipped the target project.</summary>
+    public required ProjectImportOutcome Outcome { get; init; }
+
+    /// <summary>True when the project was created by this run.</summary>
+    public bool Created => Outcome == ProjectImportOutcome.Created;
 
     /// <summary>Field name → field node ID.</summary>
     public required IReadOnlyDictionary<string, string> FieldIds { get; init; }

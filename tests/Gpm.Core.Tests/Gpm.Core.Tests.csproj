@@ -18,6 +18,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\Gpm.Core\Gpm.Core.csproj" />
+    <ProjectReference Include="..\..\src\Gpm.Cli\Gpm.Cli.csproj" />
   </ItemGroup>
 
 </Project>

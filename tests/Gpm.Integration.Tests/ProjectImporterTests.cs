@@ -50,6 +50,7 @@ public class ProjectImporterTests
         try
         {
             Assert.True(result.Created);
+            Assert.Equal(ProjectImportOutcome.Created, result.Outcome);
             Assert.False(string.IsNullOrWhiteSpace(result.ProjectId));
             Assert.True(result.ProjectNumber > 0);
             Assert.Contains(TargetOrg, result.Url, StringComparison.OrdinalIgnoreCase);
@@ -152,11 +153,10 @@ public class ProjectImporterTests
                 .ImportAsync(snapshot, TargetOrg, cancellationToken);
 
             Assert.False(second.Created);
+            Assert.Equal(ProjectImportOutcome.Skipped, second.Outcome);
             Assert.Equal(first.ProjectId, second.ProjectId);
             Assert.Equal(first.ProjectNumber, second.ProjectNumber);
-
-            // The skip path still returns the field maps (built-in Status included).
-            Assert.True(second.FieldIds.ContainsKey("Status"));
+            Assert.Empty(second.FieldIds);
         }
         finally
         {
@@ -203,6 +203,7 @@ public class ProjectImporterTests
             var result = await importer.ImportIntoAsync(snapshot, TargetOrg, emptyProjectNumber, cancellationToken);
 
             Assert.False(result.Created);
+            Assert.Equal(ProjectImportOutcome.Updated, result.Outcome);
             Assert.Equal(emptyProjectId, result.ProjectId);
             Assert.Equal(emptyProjectNumber, result.ProjectNumber);
 

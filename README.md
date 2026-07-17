@@ -95,6 +95,16 @@ gpm import --org target-org --in ./snapshot --project-title "Roadmap (migrated)"
 
 `--project-number` is mutually exclusive with `--on-conflict` and `--project-title`.
 
+When a project with the same title already exists, `--on-conflict` controls the entire import:
+
+| Value | Result | Existing project changes |
+|---|---|---|
+| `fail` (default) | Exits with an error | None |
+| `skip` | Exits successfully with `result=skipped` | None; items, fields, metadata, collaborators, linked repositories, views, and workflows are not imported |
+| `update` | Exits successfully with `result=updated` | Applies the snapshot, including items and browser-assisted views/workflows when enabled |
+
+Creating a new project emits `result=created`. The result line also includes the target project number for machine-readable automation, for example `result=skipped project=42`.
+
 ### User-owned projects
 
 `export` / `import` / `verify` accept `--owner-type user` to migrate projects owned by a user account instead of an organization (URLs use the `/users/<login>/projects/<n>` form):

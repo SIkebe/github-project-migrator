@@ -49,6 +49,9 @@ public sealed class ProjectImporter
     /// <summary>Invoked with a human-readable progress message at each import stage.</summary>
     public Action<string>? OnProgress { get; set; }
 
+    /// <summary>Invoked after conflict resolution and immediately before the first mutation.</summary>
+    public Func<CancellationToken, Task>? BeforeWriteAsync { get; set; }
+
     /// <summary>Imports the snapshot into <paramref name="ownerLogin"/> and returns the target project identity and field mappings.</summary>
     public async Task<ImportResult> ImportAsync(ProjectSnapshot snapshot, string ownerLogin, CancellationToken cancellationToken = default)
     {
@@ -57,7 +60,6 @@ public sealed class ProjectImporter
 
         var title = snapshot.Project.Title;
         OnProgress?.Invoke($"Checking {OwnerDescription} '{ownerLogin}' for an existing project titled '{title}'...");
-        var ownerId = await GetOwnerIdAsync(ownerLogin, cancellationToken).ConfigureAwait(false);
         var existing = await FindProjectByTitleAsync(ownerLogin, title, cancellationToken).ConfigureAwait(false);
 
         if (existing is not null)
@@ -72,18 +74,21 @@ public sealed class ProjectImporter
                 case ConflictAction.Skip:
                     OnProgress?.Invoke(string.Create(CultureInfo.InvariantCulture,
                         $"Project '{title}' already exists (#{existing.Number}); skipping (on-conflict=skip)."));
-                    return await BuildResultForExistingAsync(existing, created: false, cancellationToken).ConfigureAwait(false);
+                    return BuildSkippedResult(existing);
 
                 case ConflictAction.Update:
                     OnProgress?.Invoke(string.Create(CultureInfo.InvariantCulture,
                         $"Project '{title}' already exists (#{existing.Number}); applying snapshot to it (on-conflict=update)."));
-                    return await ApplySnapshotAsync(snapshot, ownerLogin, existing, created: false, cancellationToken).ConfigureAwait(false);
+                    await InvokeBeforeWriteAsync(cancellationToken).ConfigureAwait(false);
+                    return await ApplySnapshotAsync(snapshot, ownerLogin, existing, ProjectImportOutcome.Updated, cancellationToken).ConfigureAwait(false);
             }
         }
 
+        var ownerId = await GetOwnerIdAsync(ownerLogin, cancellationToken).ConfigureAwait(false);
+        await InvokeBeforeWriteAsync(cancellationToken).ConfigureAwait(false);
         OnProgress?.Invoke($"Creating project '{title}' in '{ownerLogin}'...");
         var project = await CreateProjectAsync(ownerId, title, cancellationToken).ConfigureAwait(false);
-        return await ApplySnapshotAsync(snapshot, ownerLogin, project, created: true, cancellationToken).ConfigureAwait(false);
+        return await ApplySnapshotAsync(snapshot, ownerLogin, project, ProjectImportOutcome.Created, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -104,11 +109,20 @@ public sealed class ProjectImporter
 
         OnProgress?.Invoke(string.Create(CultureInfo.InvariantCulture,
             $"Applying snapshot to existing project #{project.Number}..."));
-        return await ApplySnapshotAsync(snapshot, ownerLogin, project, created: false, cancellationToken).ConfigureAwait(false);
+        await InvokeBeforeWriteAsync(cancellationToken).ConfigureAwait(false);
+        return await ApplySnapshotAsync(snapshot, ownerLogin, project, ProjectImportOutcome.Updated, cancellationToken).ConfigureAwait(false);
     }
 
+    private Task InvokeBeforeWriteAsync(CancellationToken cancellationToken)
+        => BeforeWriteAsync?.Invoke(cancellationToken) ?? Task.CompletedTask;
+
     /// <summary>Applies metadata, custom fields and Status options to the target project and builds the result.</summary>
-    private async Task<ImportResult> ApplySnapshotAsync(ProjectSnapshot snapshot, string ownerLogin, ProjectRef project, bool created, CancellationToken cancellationToken)
+    private async Task<ImportResult> ApplySnapshotAsync(
+        ProjectSnapshot snapshot,
+        string ownerLogin,
+        ProjectRef project,
+        ProjectImportOutcome outcome,
+        CancellationToken cancellationToken)
     {
         _warnings.Clear();
         OnProgress?.Invoke("Applying project metadata (description, README, visibility, closed state)...");
@@ -157,7 +171,7 @@ public sealed class ProjectImporter
 
         OnProgress?.Invoke(string.Create(CultureInfo.InvariantCulture,
             $"Import finished: project #{project.Number}, {maps.FieldIds.Count} fields mapped."));
-        return maps.ToResult(project, created);
+        return maps.ToResult(project, outcome);
     }
 
     /// <summary>
@@ -350,13 +364,16 @@ public sealed class ProjectImporter
         OnProgress?.Invoke("warning: " + message);
     }
 
-    /// <summary>Skip path: reads the existing project's fields to build the mappings without modifying anything.</summary>
-    private async Task<ImportResult> BuildResultForExistingAsync(ProjectRef project, bool created, CancellationToken cancellationToken)
+    private static ImportResult BuildSkippedResult(ProjectRef project) => new()
     {
-        var maps = new FieldMaps();
-        await FetchFieldsAsync(project.Id, maps, cancellationToken).ConfigureAwait(false);
-        return maps.ToResult(project, created);
-    }
+        ProjectId = project.Id,
+        ProjectNumber = project.Number,
+        Url = project.Url,
+        Outcome = ProjectImportOutcome.Skipped,
+        FieldIds = ReadOnlyDictionary<string, string>.Empty,
+        OptionIds = ReadOnlyDictionary<string, IReadOnlyDictionary<string, string>>.Empty,
+        IterationIds = ReadOnlyDictionary<string, IReadOnlyDictionary<string, string>>.Empty,
+    };
 
     private string OwnerField => OwnerType == ProjectOwnerType.User ? "user" : "organization";
 
@@ -589,12 +606,12 @@ public sealed class ProjectImporter
             return new TargetField(id, name, dataType);
         }
 
-        public ImportResult ToResult(ProjectRef project, bool created) => new()
+        public ImportResult ToResult(ProjectRef project, ProjectImportOutcome outcome) => new()
         {
             ProjectId = project.Id,
             ProjectNumber = project.Number,
             Url = project.Url,
-            Created = created,
+            Outcome = outcome,
             FieldIds = FieldIds,
             OptionIds = OptionIds,
             IterationIds = IterationIds,
