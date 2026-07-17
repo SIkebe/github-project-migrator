@@ -517,11 +517,19 @@ verifyCommand.SetAction(async (parseResult, cancellationToken) =>
 
         var snapshot = await SnapshotFile.LoadAsync(inDirectory, cancellationToken);
         var report = await verifier.VerifyAsync(snapshot, org, projectNumber, cancellationToken);
-        foreach (var warning in (viewExporter?.Warnings ?? [])
+        var browserWarnings = (viewExporter?.Warnings ?? [])
             .Concat(workflowExporter?.Warnings ?? [])
-            .Concat(collaboratorExporter?.Warnings ?? []))
+            .Concat(collaboratorExporter?.Warnings ?? [])
+            .ToList();
+        foreach (var warning in browserWarnings)
         {
             Console.Error.WriteLine($"warning: {warning}");
+        }
+
+        if (browserWarnings.Count > 0)
+        {
+            Console.Error.WriteLine("error: browser-assisted verification was incomplete because one or more target UI settings could not be read.");
+            return 1;
         }
 
         WriteVerifyReport(report);
