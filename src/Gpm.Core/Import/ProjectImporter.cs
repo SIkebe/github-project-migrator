@@ -529,6 +529,7 @@ public sealed class ProjectImporter
             new { fieldId, options = BuildOptionInputs(options) },
             MutationRetryPolicy.Idempotent,
             target: fieldId,
+            requiredResultPath: "projectV2Field.id",
             cancellationToken: cancellationToken).ConfigureAwait(false);
 
         maps.Register(data.GetProperty("updateProjectV2Field").GetProperty("projectV2Field"));

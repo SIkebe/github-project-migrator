@@ -352,6 +352,27 @@ public class GitHubGraphQLClientTests
     }
 
     [Fact]
+    public async Task Idempotent_mutation_retries_structurally_incomplete_success_response()
+    {
+        using var handler = new StubHandler(
+            JsonResponse(HttpStatusCode.OK, """{"data":{"updateThing":{"thing":null}}}"""),
+            JsonResponse(HttpStatusCode.OK, """{"data":{"updateThing":{"thing":{"id":"updated"}}}}"""));
+        var delays = new List<TimeSpan>();
+        using var client = CreateClient(handler, delays);
+
+        var data = await client.MutationAsync(
+            "updateThing",
+            "mutation($clientMutationId: String!) { updateThing(input: { clientMutationId: $clientMutationId }) { thing { id } } }",
+            retryPolicy: MutationRetryPolicy.Idempotent,
+            requiredResultPath: "thing.id",
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Equal("updated", data.GetProperty("updateThing").GetProperty("thing").GetProperty("id").GetString());
+        Assert.Equal([TimeSpan.FromSeconds(1)], delays);
+        Assert.Equal(2, handler.RequestBodies.Count);
+    }
+
+    [Fact]
     public async Task Idempotent_mutation_retries_transport_failures()
     {
         using var handler = new FlakyHandler(

@@ -110,6 +110,7 @@ public sealed class GitHubGraphQLClient : IDisposable
         CancellationToken cancellationToken)
     {
         var temporaryConflictRetries = 0;
+        var incompleteResultRetries = 0;
 
         while (true)
         {
@@ -129,6 +130,18 @@ public sealed class GitHubGraphQLClient : IDisposable
                     throw CreateAmbiguousMutationException(
                         mutation,
                         "GitHub returned a success response without the expected mutation result.");
+                }
+
+                if (mutation is { RetryPolicy: MutationRetryPolicy.Idempotent }
+                    && incompleteResultRetries < MaxServerErrorRetries)
+                {
+                    var backoff = GetBackoff(incompleteResultRetries);
+                    incompleteResultRetries++;
+                    await NotifyAndDelayAsync(
+                        string.Create(CultureInfo.InvariantCulture, $"Incomplete mutation result; backing off {backoff.TotalSeconds:0}s (attempt {incompleteResultRetries}/{MaxServerErrorRetries})."),
+                        backoff,
+                        cancellationToken).ConfigureAwait(false);
+                    continue;
                 }
 
                 throw new GitHubGraphQLException(
