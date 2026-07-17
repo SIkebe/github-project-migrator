@@ -91,8 +91,20 @@ public static class BrowserBaseUrl
             throw new FormatException($"'{baseUrl}' must use HTTPS. HTTP is allowed only for loopback test origins.");
         }
 
+        if (!uri.IsLoopback && !IsSupportedWebHost(uri.Host))
+        {
+            throw new FormatException(
+                $"'{baseUrl}' is not a supported GitHub web origin. Use github.com, <tenant>.ghe.com, or a loopback test origin.");
+        }
+
         return new UriBuilder(uri.Scheme, uri.Host, uri.IsDefaultPort ? -1 : uri.Port).Uri;
     }
+
+    private static bool IsSupportedWebHost(string host)
+        => string.Equals(host, "github.com", StringComparison.OrdinalIgnoreCase)
+            || (host.EndsWith(".ghe.com", StringComparison.OrdinalIgnoreCase)
+                && host.Count(character => character == '.') == 2
+                && !host.StartsWith("api.", StringComparison.OrdinalIgnoreCase));
 
     private static bool HasSameOrigin(Uri left, Uri right)
         => string.Equals(left.Scheme, right.Scheme, StringComparison.OrdinalIgnoreCase)

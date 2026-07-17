@@ -30,6 +30,10 @@ public class BrowserBaseUrlTests
     [InlineData("ftp://github.com")]
     [InlineData("http://github.com")]
     [InlineData("http://tenant.ghe.com")]
+    [InlineData("https://github.com.attacker.example")]
+    [InlineData("https://api.tenant.ghe.com")]
+    [InlineData("https://nested.tenant.ghe.com")]
+    [InlineData("https://example.com")]
     [InlineData("not-a-url")]
     public void NormalizeStandalone_rejects_invalid_web_origin(string baseUrl)
     {
