@@ -174,6 +174,21 @@ public class GitHubGraphQLClientTests
     }
 
     [Fact]
+    public async Task Create_partial_payload_with_known_error_type_is_ambiguous()
+    {
+        const string body = """{"data":{"createThing":{"thing":null}},"errors":[{"type":"FORBIDDEN","message":"Child field forbidden"}]}""";
+        using var handler = new StubHandler(JsonResponse(HttpStatusCode.OK, body));
+        using var client = CreateClient(handler, []);
+
+        await Assert.ThrowsAsync<AmbiguousMutationResultException>(
+            () => client.MutationAsync(
+                "createThing",
+                "mutation($clientMutationId: String!) { createThing(input: { clientMutationId: $clientMutationId }) { thing { id } } }",
+                requiredResultPath: "thing.id",
+                cancellationToken: TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
     public async Task QueryPaginatedAsync_enumerates_all_nodes_across_pages()
     {
         var page1 = """

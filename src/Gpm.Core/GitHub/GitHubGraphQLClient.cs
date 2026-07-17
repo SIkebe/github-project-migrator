@@ -168,7 +168,8 @@ public sealed class GitHubGraphQLClient : IDisposable
             }
 
             if (mutation is { RetryPolicy: MutationRetryPolicy.Create }
-                && !ContainsOnlyKnownPreSideEffectErrors(errors))
+                && (HasMutationPayload(document.RootElement, mutation.OperationName)
+                    || !ContainsOnlyKnownPreSideEffectErrors(errors)))
             {
                 throw CreateAmbiguousMutationException(
                     mutation,
@@ -571,6 +572,13 @@ public sealed class GitHubGraphQLClient : IDisposable
 
         return true;
     }
+
+    private static bool HasMutationPayload(JsonElement root, string operationName)
+        => root.TryGetProperty("data", out var data)
+            && data.ValueKind == JsonValueKind.Object
+            && data.TryGetProperty(operationName, out var payload)
+            && payload.ValueKind == JsonValueKind.Object
+            && payload.EnumerateObject().Any();
 
     /// <summary>Converts an arbitrary variables object into a mutable map so the cursor can be injected.</summary>
     private static Dictionary<string, object?> ToVariableMap(object? variables)

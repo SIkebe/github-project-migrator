@@ -209,6 +209,7 @@ public sealed class ProjectImporter
                 }
 
                 if (!existingFields.TryGetValue(field.Name, out var reconciled)
+                    || !string.Equals(reconciled.DataType, pendingField.DataType, StringComparison.Ordinal)
                     || pendingField.ExistingFieldIds.Contains(reconciled.Id, StringComparer.Ordinal))
                 {
                     reconciled = await ReconcilePendingFieldAsync(project.Id, field, maps, pendingField, cancellationToken).ConfigureAwait(false);

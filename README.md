@@ -134,6 +134,8 @@ Read-only GraphQL queries and explicitly idempotent updates are retried after tr
 
 Inspect the named target operation in GitHub before retrying. Rerun with the same snapshot directory so `project-import-log.json` and `import-log.json` can reconcile pending work. Project, custom-field, Draft, and Issue/PR item creation atomically records an operation and matching target baseline before sending. On resume, `gpm` polls for and adopts exactly one new match; no match or multiple matches stop the import for manual reconciliation instead of resending.
 
+If the target project was created before the interruption, resume with `--on-conflict update`; when the original import targeted an existing project, pass the same `--project-number`. The default `--on-conflict fail` and `skip` modes intentionally do not modify an existing project and therefore cannot continue pending field or item reconciliation.
+
 ### User-owned projects
 
 `export` / `import` / `verify` accept `--owner-type user` to migrate projects owned by a user account instead of an organization (URLs use the `/users/<login>/projects/<n>` form):
