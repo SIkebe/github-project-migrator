@@ -35,7 +35,7 @@ public class ItemImporterResumeTests
             Assert.Equal(operationId, handler.ClientMutationId);
 
             handler.Resume = true;
-            await importer.ImportAsync(snapshot, Target, directory, cancellationToken);
+            var result = await importer.ImportAsync(snapshot, Target, directory, cancellationToken);
 
             var completed = await ImportLog.LoadAsync(directory, cancellationToken);
             Assert.NotNull(completed);
@@ -43,6 +43,8 @@ public class ItemImporterResumeTests
             Assert.Empty(completed.PendingDrafts);
             Assert.Empty(completed.PendingContents);
             Assert.Equal(1, handler.CreateMutationCount);
+            Assert.Equal(0, result.Created);
+            Assert.Equal(1, result.Resumed);
         }
         finally
         {
@@ -368,6 +370,38 @@ public class ItemImporterResumeTests
     }
 
     [Fact]
+    public async Task Position_resume_reconstructs_after_id_from_completed_predecessor()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var directory = Directory.CreateTempSubdirectory("gpm-position-chain-").FullName;
+        try
+        {
+            using var handler = new StageResumeHandler("position", failureAttempt: 2);
+            using var client = new GitHubGraphQLClient("token", baseUrl: null, handler, (_, _) => Task.CompletedTask);
+            var first = CreateStageSnapshot(archived: false, withField: false).Items[0];
+            var snapshot = CreateStageSnapshot(archived: false, withField: false) with
+            {
+                Items =
+                [
+                    first,
+                    first with { Position = 1, Number = 2 },
+                ],
+            };
+
+            await Assert.ThrowsAsync<GitHubGraphQLException>(
+                () => CreateImporter(client).ImportAsync(snapshot, Target, directory, cancellationToken));
+            await CreateImporter(client).ImportAsync(snapshot, Target, directory, cancellationToken);
+
+            Assert.Equal([null, "PVTI_new", "PVTI_new"], handler.PositionAfterIds);
+            Assert.Equal(2, handler.CreateMutationCount);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task Resume_rejects_changed_repository_mapping_after_creation()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
@@ -573,6 +607,8 @@ public class ItemImporterResumeTests
 
         public int ArchiveMutationCount { get; private set; }
 
+        public List<string?> PositionAfterIds { get; } = [];
+
         protected override async Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request,
             CancellationToken cancellationToken)
@@ -594,7 +630,9 @@ public class ItemImporterResumeTests
             if (query.Contains("addProjectV2ItemById", StringComparison.Ordinal))
             {
                 CreateMutationCount++;
-                return Json("""{"data":{"addProjectV2ItemById":{"item":{"id":"PVTI_new"}}}}""");
+                return CreateMutationCount == 1
+                    ? Json("""{"data":{"addProjectV2ItemById":{"item":{"id":"PVTI_new"}}}}""")
+                    : Json("""{"data":{"addProjectV2ItemById":{"item":{"id":"PVTI_second"}}}}""");
             }
 
             if (query.Contains("updateProjectV2ItemFieldValue", StringComparison.Ordinal))
@@ -608,6 +646,8 @@ public class ItemImporterResumeTests
             if (query.Contains("updateProjectV2ItemPosition", StringComparison.Ordinal))
             {
                 PositionMutationCount++;
+                var afterId = document.RootElement.GetProperty("variables").GetProperty("afterId");
+                PositionAfterIds.Add(afterId.ValueKind == JsonValueKind.Null ? null : afterId.GetString());
                 return ShouldFail("position", PositionMutationCount)
                     ? Error()
                     : Json("""{"data":{"updateProjectV2ItemPosition":{"clientMutationId":"position"}}}""");

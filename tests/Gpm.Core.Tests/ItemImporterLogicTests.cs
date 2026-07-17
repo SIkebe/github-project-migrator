@@ -266,7 +266,8 @@ public class ItemImporterLogicTests
             Directory.CreateDirectory(Path.Combine(directory, ImportLog.BackupFileName));
 
             var replacement = original with { SourceSnapshotFingerprint = "replacement" };
-            await Assert.ThrowsAnyAsync<IOException>(() => replacement.SaveAsync(directory, cancellationToken));
+            var exception = await Record.ExceptionAsync(() => replacement.SaveAsync(directory, cancellationToken));
+            Assert.True(exception is IOException or UnauthorizedAccessException);
 
             var preserved = await ImportLog.LoadAsync(directory, cancellationToken);
             Assert.Equal("original", preserved!.SourceSnapshotFingerprint);

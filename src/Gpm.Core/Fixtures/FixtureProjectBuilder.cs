@@ -48,6 +48,29 @@ public sealed class FixtureProjectBuilder
             || itemLog is { PendingDrafts.Count: > 0 }
             || itemLog is { PendingContents.Count: > 0 }
             || itemLog is { HasIncompleteItems: true };
+
+        var viewerLogin = await _graphQl.GetViewerLoginAsync(cancellationToken).ConfigureAwait(false);
+        var repositoryFullName = $"{organization}/{repositoryName}";
+        var pullRequestNumber = await EnsureRepositoryAsync(organization, repositoryName, cancellationToken).ConfigureAwait(false);
+
+        var snapshot = CreateSnapshot(title, repositoryFullName, viewerLogin, pullRequestNumber);
+        if (itemLog is not null)
+        {
+            if (!string.Equals(
+                    itemLog.SourceSnapshotFingerprint,
+                    ImportLog.ComputeSnapshotFingerprint(snapshot),
+                    StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    $"{ImportLog.FileName} in '{operationDirectory}' belongs to a different fixture snapshot.");
+            }
+            if (existing is null || !string.Equals(existing.Id, itemLog.ProjectId, StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    $"{ImportLog.FileName} targets project '{itemLog.ProjectId}', but that fixture project was not found.");
+            }
+        }
+
         if (existing is not null && !hasPendingOperations)
         {
             OnProgress?.Invoke(string.Create(CultureInfo.InvariantCulture,
@@ -55,21 +78,12 @@ public sealed class FixtureProjectBuilder
             return new FixtureProjectSetupResult(existing.Number, existing.Url, Created: false);
         }
 
-        var viewerLogin = await _graphQl.GetViewerLoginAsync(cancellationToken).ConfigureAwait(false);
-        var repositoryFullName = $"{organization}/{repositoryName}";
-        var pullRequestNumber = await EnsureRepositoryAsync(organization, repositoryName, cancellationToken).ConfigureAwait(false);
-
-        var snapshot = CreateSnapshot(title, repositoryFullName, viewerLogin, pullRequestNumber);
         var projectImporter = new ProjectImporter(_graphQl)
         {
             OnProgress = OnProgress,
             OnConflict = existing is null ? ConflictAction.Fail : ConflictAction.Update,
             OperationLogDirectory = operationDirectory,
-            PendingItemProjectId = itemLog is { PendingDrafts.Count: > 0 }
-                || itemLog is { PendingContents.Count: > 0 }
-                || itemLog is { HasIncompleteItems: true }
-                    ? itemLog.ProjectId
-                    : null,
+            PendingItemProjectId = itemLog?.ProjectId,
             RepositoryMapping = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
             {
                 [repositoryFullName] = repositoryFullName,
@@ -349,6 +363,7 @@ public sealed class FixtureProjectBuilder
             if (string.Equals(node.GetProperty("title").GetString(), title, StringComparison.Ordinal))
             {
                 return new ProjectRef(
+                    node.GetProperty("id").GetString() ?? string.Empty,
                     node.GetProperty("number").GetInt32(),
                     node.GetProperty("url").GetString() ?? string.Empty);
             }
@@ -357,7 +372,7 @@ public sealed class FixtureProjectBuilder
         return null;
     }
 
-    private sealed record ProjectRef(int Number, string Url);
+    private sealed record ProjectRef(string Id, int Number, string Url);
 }
 
 public sealed record FixtureProjectSetupResult(int ProjectNumber, string Url, bool Created);

@@ -208,7 +208,7 @@ public sealed class ItemImporter
                     ? null
                     : "One or more field values could not be applied; resume will retry this stage.";
                 await log.SaveAsync(logDirectory, cancellationToken).ConfigureAwait(false);
-                if (completedState is null)
+                if (completedState is null && !resumedPendingOperation)
                 {
                     created++;
                 }

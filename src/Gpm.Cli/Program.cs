@@ -403,14 +403,23 @@ importCommand.SetAction(async (parseResult, cancellationToken) =>
         }
 
         var itemLog = await ImportLog.LoadAsync(inDirectory, cancellationToken);
-        var pendingItemProjectId = itemLog is { PendingDrafts.Count: > 0 }
+        if (itemLog is not null
+            && !string.Equals(
+                itemLog.SourceSnapshotFingerprint,
+                ImportLog.ComputeSnapshotFingerprint(snapshot),
+                StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"{ImportLog.FileName} in '{inDirectory}' belongs to a different source snapshot.");
+        }
+
+        var hasIncompleteItemWork = itemLog is { PendingDrafts.Count: > 0 }
             || itemLog is { PendingContents.Count: > 0 }
-            || itemLog is { HasIncompleteItems: true }
-                ? itemLog.ProjectId
-                : null;
+            || itemLog is { HasIncompleteItems: true };
+        var pendingItemProjectId = itemLog?.ProjectId;
         var importer = new ProjectImporter(client)
         {
-            OnConflict = pendingItemProjectId is null ? onConflict : ConflictAction.Update,
+            OnConflict = hasIncompleteItemWork ? ConflictAction.Update : onConflict,
             OwnerType = ownerType,
             RepositoryMapping = repoMapping,
             UserMapping = userMapping,
