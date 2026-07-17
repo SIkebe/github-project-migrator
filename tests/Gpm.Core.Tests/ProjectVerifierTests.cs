@@ -854,20 +854,19 @@ public class ProjectVerifierTests
             BuildSnapshot() with { Fields = BuildSnapshot().Fields.Take(1).ToList() },
             BuildSnapshot());
         Assert.Equal(VerifyStatus.PartialMatch, partial.Status);
-        Assert.False(partial.ShouldFail(strict: false, failOnWarning: false));
-        Assert.True(partial.ShouldFail(strict: false, failOnWarning: true));
+        Assert.False(partial.ShouldFail(failOnWarning: false));
+        Assert.True(partial.ShouldFail(failOnWarning: true));
 
         var notVerified = ProjectVerifier.Compare(
             BuildSnapshot() with { Collaborators = null },
             BuildSnapshot());
         Assert.Equal(VerifyStatus.NotVerified, notVerified.Status);
-        Assert.False(notVerified.ShouldFail(strict: false, failOnWarning: false));
-        Assert.True(notVerified.ShouldFail(strict: true, failOnWarning: false));
+        Assert.True(notVerified.ShouldFail(failOnWarning: false));
 
         var mismatch = ProjectVerifier.Compare(
             BuildSnapshot(),
             BuildSnapshot() with { Project = BuildSnapshot().Project with { Public = true } });
-        Assert.True(mismatch.ShouldFail(strict: false, failOnWarning: false));
+        Assert.True(mismatch.ShouldFail(failOnWarning: false));
     }
 
     [Fact]
@@ -880,7 +879,7 @@ public class ProjectVerifierTests
         Assert.Equal(1, report.WarningCount);
         Assert.Contains(report.Differences, difference =>
             difference.Category == "View" && difference.Message == "view scrape timed out");
-        Assert.True(report.ShouldFail(strict: false, failOnWarning: true));
+        Assert.True(report.ShouldFail(failOnWarning: true));
     }
 
     [Fact]

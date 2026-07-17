@@ -454,10 +454,6 @@ var verifyProjectOption = new Option<int>("--project")
     Description = "Project number in the target organization.",
     Required = true,
 };
-var strictOption = new Option<bool>("--strict")
-{
-    Description = "Exit with an error when any verification category could not be verified.",
-};
 var failOnWarningOption = new Option<bool>("--fail-on-warning")
 {
     Description = "Exit with an error when any verification warning is reported.",
@@ -480,7 +476,6 @@ var verifyCommand = new Command("verify", "Verify a migrated project against the
     enableBrowserOption,
     browserProfileOption,
     browserBaseUrlOption,
-    strictOption,
     failOnWarningOption,
     reportJsonOption,
     noUpdateCheckOption,
@@ -495,7 +490,6 @@ verifyCommand.SetAction(async (parseResult, cancellationToken) =>
     var baseUrl = parseResult.GetValue(targetBaseUrlOption);
     var updateCheck = StartUpdateCheck(parseResult.GetValue(noUpdateCheckOption));
     var enableBrowserAutomation = parseResult.GetValue(enableBrowserOption);
-    var strict = parseResult.GetValue(strictOption);
     var failOnWarning = parseResult.GetValue(failOnWarningOption);
     var reportJsonPath = parseResult.GetValue(reportJsonOption);
     var token = parseResult.GetValue(tokenOption)
@@ -579,7 +573,7 @@ verifyCommand.SetAction(async (parseResult, cancellationToken) =>
 
         WriteVerifyReport(report);
         await NotifyUpdateAsync(updateCheck);
-        return report.ShouldFail(strict, failOnWarning) ? 1 : 0;
+        return report.ShouldFail(failOnWarning) ? 1 : 0;
     }
     catch (Exception exception) when (exception is GitHubGraphQLException or InvalidOperationException or IOException or FormatException or PlaywrightException or ArgumentException)
     {

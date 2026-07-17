@@ -22,7 +22,7 @@ public class CliImportTests
         {
             var result = await RunVerifyCliAsync(directory, server, "--report-json", reportPath);
 
-            Assert.Equal(0, result.ExitCode);
+            Assert.Equal(1, result.ExitCode);
             Assert.Contains("Project: Match", result.Output, StringComparison.Ordinal);
             Assert.Contains("LinkedRepository: PartialMatch", result.Output, StringComparison.Ordinal);
             Assert.Contains("Collaborator: NotVerified", result.Output, StringComparison.Ordinal);
@@ -33,29 +33,6 @@ public class CliImportTests
             Assert.Equal("NotVerified", report.RootElement.GetProperty("status").GetString());
             Assert.Equal(1, report.RootElement.GetProperty("warningCount").GetInt32());
             Assert.Equal(1, report.RootElement.GetProperty("notVerifiedCount").GetInt32());
-        }
-        finally
-        {
-            Directory.Delete(directory, recursive: true);
-        }
-    }
-
-    [Theory]
-    [InlineData("--strict")]
-    [InlineData("--fail-on-warning")]
-    public async Task Verify_exit_policy_options_fail_incomplete_or_warning_results(string option)
-    {
-        var cancellationToken = TestContext.Current.CancellationToken;
-        var directory = Path.Combine(Path.GetTempPath(), "gpm-cli-verify-policy-" + Guid.NewGuid().ToString("N"));
-        await SnapshotFile.SaveAsync(VerifySnapshot(), directory, cancellationToken);
-
-        using var server = new GraphQlStubServer(VerifyProjectResponse, VerifyItemsResponse);
-        try
-        {
-            var result = await RunVerifyCliAsync(directory, server, option);
-
-            Assert.Equal(1, result.ExitCode);
-            Assert.Contains("NotVerified.", result.Output, StringComparison.Ordinal);
         }
         finally
         {

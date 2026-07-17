@@ -69,7 +69,7 @@ Tokens are resolved from `--token`, then the `GITHUB_TOKEN` / `GPM_TOKEN` enviro
 | `PartialMatch` | No errors, but a non-fatal warning exists (for example, target-only data). |
 | `NotVerified` | Required source or target data was not captured, so full equality cannot be established. |
 
-Errors always produce exit code 1. `--strict` also fails on `NotVerified`, and `--fail-on-warning` also fails when warnings exist. Use `--report-json <path>` for the same overall/category results and counts in machine-readable form. Without browser automation, GraphQL-readable View settings are still compared, but UI-only View/Workflow settings and explicit collaborators are reported as `NotVerified`; use `--enable-browser-automation --strict` when verification must prove those areas too.
+`Mismatch` and `NotVerified` always produce exit code 1. `--fail-on-warning` also fails when warnings exist. Use `--report-json <path>` for the same overall/category results and counts in machine-readable form. Without browser automation, GraphQL-readable View settings are still compared, but UI-only View/Workflow settings and explicit collaborators are reported as `NotVerified`; use `--enable-browser-automation` when verification must prove those areas too.
 
 | Category | Verification coverage |
 |---|---|
@@ -269,7 +269,7 @@ Workflows are migrated through the GitHub Projects web UI because GitHub has no 
 
 | Area | Supported? | Notes |
 |---|---:|---|
-| `gpm verify` | ✅ | Compares target project against the snapshot. GraphQL View settings are always checked; `--enable-browser-automation` re-reads UI-only View / Workflow settings and explicit collaborators. Supports category statuses, strict/warning exit policies, and JSON reports. |
+| `gpm verify` | ✅ | Compares target project against the snapshot. GraphQL View settings are always checked; `--enable-browser-automation` re-reads UI-only View / Workflow settings and explicit collaborators. Supports category statuses, warning exit policy, and JSON reports. |
 | Resume after interruption | ✅ | Item import writes `import-log.json` so reruns do not duplicate already-created items. |
 | Mapping CSV templates | ✅ | `export` writes repository and user mapping templates without overwriting existing files. |
 | Bulk export | ✅ | Omit `--project` to export every project owned by the organization/user into `<out>/<number>/`. |

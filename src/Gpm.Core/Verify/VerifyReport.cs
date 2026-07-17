@@ -79,9 +79,9 @@ public sealed record VerifyReport
 
     public int NotVerifiedCount => Categories.Count(category => category.Status == VerifyStatus.NotVerified);
 
-    public bool ShouldFail(bool strict, bool failOnWarning)
+    public bool ShouldFail(bool failOnWarning)
         => ErrorCount > 0
-            || (strict && NotVerifiedCount > 0)
+            || NotVerifiedCount > 0
             || (failOnWarning && WarningCount > 0);
 
     public VerifyReport WithWarnings(string category, IEnumerable<string> warnings)
