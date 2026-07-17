@@ -91,8 +91,8 @@ public class WorkflowUiLogicTests
     {
         var mapping = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
-            ["source-a/fixture-repo"] = "target/renamed-a",
-            ["source-b/fixture-repo"] = "target/renamed-b",
+            ["source-a/fixture-repo"] = "target-a/renamed",
+            ["source-b/fixture-repo"] = "target-b/renamed",
         };
 
         var exception = Assert.Throws<InvalidOperationException>(

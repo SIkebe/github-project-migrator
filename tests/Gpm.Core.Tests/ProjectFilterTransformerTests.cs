@@ -119,6 +119,17 @@ public class ProjectFilterTransformerTests
     }
 
     [Fact]
+    public void Transform_preserves_whitespace_around_comma_separated_values()
+    {
+        var result = ProjectFilterTransformer.Transform(
+            "assignee:\"alice, old-user \"",
+            Users);
+
+        Assert.Equal("assignee:\"alice_shortcode, old-user_shortcode \"", result.Transformed);
+        Assert.Empty(result.Unresolved);
+    }
+
+    [Fact]
     public void BuildOrganizationMapping_omits_ambiguous_source_owners()
     {
         var mapping = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)

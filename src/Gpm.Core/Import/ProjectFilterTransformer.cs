@@ -97,28 +97,31 @@ public static class ProjectFilterTransformer
                     }
 
                     var item = values[index];
-                    if (mapping.TryGetValue(item, out var mapped))
+                    var identity = item.Trim();
+                    var leadingWhitespace = item[..(item.Length - item.TrimStart().Length)];
+                    var trailingWhitespace = item[item.TrimEnd().Length..];
+                    if (mapping.TryGetValue(identity, out var mapped))
                     {
-                        builder.Append(mapped);
-                        if (!string.Equals(item, mapped, StringComparison.Ordinal))
+                        builder.Append(leadingWhitespace).Append(mapped).Append(trailingWhitespace);
+                        if (!string.Equals(identity, mapped, StringComparison.Ordinal))
                         {
-                            changes.Add(new FilterTokenChange(qualifier, item, mapped));
+                            changes.Add(new FilterTokenChange(qualifier, identity, mapped));
                         }
                         else
                         {
-                            unchanged.Add(new FilterIdentifier(qualifier, item));
+                            unchanged.Add(new FilterIdentifier(qualifier, identity));
                         }
                     }
                     else
                     {
                         builder.Append(item);
-                        if (IsMappingRequired(item))
+                        if (IsMappingRequired(identity))
                         {
-                            unresolved.Add(new FilterIdentifier(qualifier, item));
+                            unresolved.Add(new FilterIdentifier(qualifier, identity));
                         }
-                        else
+                        else if (identity.Length > 0)
                         {
-                            unchanged.Add(new FilterIdentifier(qualifier, item));
+                            unchanged.Add(new FilterIdentifier(qualifier, identity));
                         }
                     }
                 }
@@ -240,13 +243,13 @@ public static class ProjectFilterTransformer
 
         var targets = repositoryMapping
             .Where(pair => string.Equals(ShortName(pair.Key), sourceRepository, StringComparison.OrdinalIgnoreCase))
-            .Select(pair => ShortName(pair.Value))
+            .Select(pair => pair.Value)
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
         return targets.Count switch
         {
             0 => new RepositoryResolution(sourceRepository, null, RepositoryResolutionStatus.Unmapped),
-            1 => new RepositoryResolution(sourceRepository, targets[0], RepositoryResolutionStatus.Mapped),
+            1 => new RepositoryResolution(sourceRepository, ShortName(targets[0]), RepositoryResolutionStatus.Mapped),
             _ => new RepositoryResolution(sourceRepository, null, RepositoryResolutionStatus.Ambiguous),
         };
 
