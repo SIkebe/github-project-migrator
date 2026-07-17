@@ -201,7 +201,7 @@ v1 で扱わないものと将来対応は §8 のロードマップを参照。
 **詳細設計は [docs/BROWSER_AUTOMATION_PLAN.md](docs/BROWSER_AUTOMATION_PLAN.md) を参照(タスク分解 B0–B9、セレクター戦略、操作シーケンス、検証ループを定義済み)。**
 
 - 着手前に Discovery フェーズ(B0/D0)でセレクターを実 UI で確定し、aria snapshot を `docs/ui-maps/` にコミット
-- `ghpmv setup --browsers` / `ghpmv login --browser`(storageState 保存)
+- `ghpmv setup --browsers` / `ghpmv login`(storageState 保存)
 - View の UI-export(Slice by / Field sum / Roadmap 設定)と View import(全レイアウト)
 - ✅ 検証: B0–B5 の各テスト(fixture project への適用 → GraphQL + UI の read-back 照合)+ nightly CI
 
