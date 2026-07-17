@@ -1,3 +1,6 @@
+using System.Net;
+using System.Text;
+using Gpm.Core.GitHub;
 using Gpm.Core.Import;
 using Gpm.Core.Snapshot;
 using Gpm.Core.Verify;
@@ -108,6 +111,22 @@ public class ProjectVerifierTests
     private static ProjectSnapshot WithItems(ProjectSnapshot snapshot, Func<ItemSnapshot, ItemSnapshot> transform)
         => snapshot with { Items = snapshot.Items.Select(transform).ToList() };
 
+    private sealed class StubHandler(params string[] responses) : HttpMessageHandler
+    {
+        private readonly Queue<string> _responses = new(responses);
+
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            var response = new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(_responses.Dequeue(), Encoding.UTF8, "application/json"),
+            };
+            return Task.FromResult(response);
+        }
+    }
+
     // ----- match -----
 
     [Fact]
@@ -117,6 +136,45 @@ public class ProjectVerifierTests
 
         Assert.Empty(report.Differences);
         Assert.True(report.IsMatch);
+    }
+
+    [Fact]
+    public async Task VerifyAsync_applies_post_export_hook_before_comparison()
+    {
+        using var handler = new StubHandler(
+            """
+            {"data":{"organization":{"projectV2":{"title":"Raw target","shortDescription":null,"readme":null,"public":false,"closed":false,"fields":{"nodes":[]},"views":{"nodes":[]},"workflows":{"nodes":[]},"repositories":{"nodes":[]}}}}}
+            """,
+            """
+            {"data":{"organization":{"projectV2":{"items":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}
+            """);
+        using var client = new GitHubGraphQLClient("dummy-token", baseUrl: null, handler, delayAsync: null);
+        var source = BuildSnapshot();
+        var hookCalled = false;
+        var verifier = new ProjectVerifier(client)
+        {
+            PostExportAsync = (target, _) =>
+            {
+                hookCalled = true;
+                Assert.Equal("Raw target", target.Project.Title);
+                return Task.FromResult(source with
+                {
+                    Project = source.Project with { ShortDescription = "changed by hook" },
+                });
+            },
+        };
+
+        var report = await verifier.VerifyAsync(
+            source,
+            "target-org",
+            42,
+            TestContext.Current.CancellationToken);
+
+        Assert.True(hookCalled);
+        var difference = Assert.Single(report.Differences);
+        Assert.Equal(VerifySeverity.Error, difference.Severity);
+        Assert.Equal("Project", difference.Category);
+        Assert.Contains("short description mismatch", difference.Message, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -488,6 +546,39 @@ public class ProjectVerifierTests
             d.Severity == VerifySeverity.Warning && d.Message.Contains("TEAM 'fixture-team' is missing in the target", StringComparison.Ordinal));
         Assert.Contains(report.Differences, d =>
             d.Severity == VerifySeverity.Warning && d.Message.Contains("USER 'extra-user' exists only in the target", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void User_mapping_normalizes_user_collaborators_without_changing_teams()
+    {
+        var source = BuildSnapshot() with
+        {
+            Collaborators =
+            [
+                new CollaboratorSnapshot { Type = "USER", Login = "source-user", Role = "WRITER" },
+                new CollaboratorSnapshot { Type = "TEAM", Login = "source-team", Role = "READER" },
+            ],
+        };
+        var target = BuildSnapshot() with
+        {
+            Collaborators =
+            [
+                new CollaboratorSnapshot { Type = "USER", Login = "target-user", Role = "WRITER" },
+                new CollaboratorSnapshot { Type = "TEAM", Login = "source-team", Role = "READER" },
+            ],
+        };
+
+        var report = ProjectVerifier.Compare(
+            source,
+            target,
+            System.Collections.ObjectModel.ReadOnlyDictionary<string, string>.Empty,
+            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["source-user"] = "target-user",
+                ["source-team"] = "target-team",
+            });
+
+        Assert.Empty(report.Differences);
     }
 
     [Fact]

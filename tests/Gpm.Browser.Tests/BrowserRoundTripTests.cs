@@ -2,6 +2,8 @@ using Gpm.Core.Browser;
 using Gpm.Core.Export;
 using Gpm.Core.GitHub;
 using Gpm.Core.Import;
+using Gpm.Core.Snapshot;
+using Gpm.Core.Verify;
 using System.Text.Json;
 
 namespace Gpm.Browser.Tests;
@@ -110,18 +112,28 @@ public class BrowserRoundTripTests
             await viewImporter.ImportAsync(snapshot, TargetOrg, result.ProjectNumber, cancellationToken);
             Assert.Empty(viewImporter.Warnings);
 
-            // Re-export the target (GraphQL + UI scrape) and diff the views.
-            var reExported = await exporter.ExportAsync(TargetOrg, result.ProjectNumber, cancellationToken);
+            // Verify re-exports the target through GraphQL and its browser post-export hook.
+            ProjectSnapshot? reExported = null;
             var reExportUi = new ViewUiExporter(session);
-            reExported = await reExportUi.EnrichAsync(reExported, TargetOrg, result.ProjectNumber, cancellationToken);
+            var verifier = new ProjectVerifier(client)
+            {
+                PostExportAsync = async (target, ct) =>
+                {
+                    reExported = await reExportUi.EnrichAsync(target, TargetOrg, result.ProjectNumber, ct);
+                    return reExported;
+                },
+            };
+            var report = await verifier.VerifyAsync(snapshot, TargetOrg, result.ProjectNumber, cancellationToken);
             Assert.Empty(reExportUi.Warnings);
+            var target = Assert.IsType<ProjectSnapshot>(reExported);
+            Assert.DoesNotContain(report.Differences, difference => difference.Category == "View");
 
-            Assert.Equal(snapshot.Views.Count, reExported.Views.Count);
+            Assert.Equal(snapshot.Views.Count, target.Views.Count);
             // Tab order re-creation is out of scope for v1 (PLAN §8.1) and target view
             // numbers are re-assigned, so views are matched by name instead of position.
             foreach (var expected in snapshot.Views)
             {
-                var actual = Assert.Single(reExported.Views, v => string.Equals(v.Name, expected.Name, StringComparison.Ordinal));
+                var actual = Assert.Single(target.Views, v => string.Equals(v.Name, expected.Name, StringComparison.Ordinal));
                 Assert.Equal(expected.Layout, actual.Layout);
 
                 Assert.NotNull(expected.Ui);

@@ -40,15 +40,29 @@ public sealed class ProjectVerifier
     /// <summary>Source → target repository mapping ("owner/name" form), used to normalize the source snapshot before comparison.</summary>
     public IReadOnlyDictionary<string, string> RepositoryMapping { get; init; } = ReadOnlyDictionary<string, string>.Empty;
 
+    /// <summary>Source → target user mapping, used to normalize explicit user collaborators before comparison.</summary>
+    public IReadOnlyDictionary<string, string> UserMapping { get; init; } = ReadOnlyDictionary<string, string>.Empty;
+
+    /// <summary>
+    /// Optional post-processing hook for the target snapshot. Browser-assisted verification
+    /// uses this to re-read UI-only settings before comparison.
+    /// </summary>
+    public Func<ProjectSnapshot, CancellationToken, Task<ProjectSnapshot>>? PostExportAsync { get; set; }
+
     /// <summary>Exports the target project and compares it against <paramref name="source"/>.</summary>
     public async Task<VerifyReport> VerifyAsync(ProjectSnapshot source, string targetOrgLogin, int targetProjectNumber, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(source);
         ArgumentException.ThrowIfNullOrWhiteSpace(targetOrgLogin);
 
-        var exporter = new ProjectExporter(_client) { OnProgress = OnProgress, OwnerType = OwnerType };
+        var exporter = new ProjectExporter(_client)
+        {
+            OnProgress = OnProgress,
+            OwnerType = OwnerType,
+            PostExportAsync = PostExportAsync,
+        };
         var target = await exporter.ExportAsync(targetOrgLogin, targetProjectNumber, cancellationToken).ConfigureAwait(false);
-        return Compare(source, target, RepositoryMapping);
+        return Compare(source, target, RepositoryMapping, UserMapping);
     }
 
     /// <summary>Pure snapshot-to-snapshot comparison (no API access).</summary>
@@ -57,14 +71,28 @@ public sealed class ProjectVerifier
 
     /// <summary>Pure snapshot-to-snapshot comparison (no API access), with source repository names normalized through a mapping.</summary>
     public static VerifyReport Compare(ProjectSnapshot source, ProjectSnapshot target, IReadOnlyDictionary<string, string> repositoryMapping)
+        => Compare(source, target, repositoryMapping, ReadOnlyDictionary<string, string>.Empty);
+
+    /// <summary>Pure snapshot comparison with source repository and user collaborator names normalized through mappings.</summary>
+    public static VerifyReport Compare(
+        ProjectSnapshot source,
+        ProjectSnapshot target,
+        IReadOnlyDictionary<string, string> repositoryMapping,
+        IReadOnlyDictionary<string, string> userMapping)
     {
         ArgumentNullException.ThrowIfNull(source);
         ArgumentNullException.ThrowIfNull(target);
         ArgumentNullException.ThrowIfNull(repositoryMapping);
+        ArgumentNullException.ThrowIfNull(userMapping);
 
         if (repositoryMapping.Count > 0)
         {
             source = ApplyRepositoryMapping(source, repositoryMapping);
+        }
+
+        if (userMapping.Count > 0)
+        {
+            source = ApplyUserMapping(source, userMapping);
         }
 
         var differences = new List<VerifyDifference>();
@@ -92,6 +120,18 @@ public sealed class ProjectVerifier
             Workflows = source.Workflows.Select(workflow => workflow.Ui?.Repository is { Length: > 0 } repository
                 ? workflow with { Ui = workflow.Ui with { Repository = ResolveRepositoryName(repository, repositoryMapping) } }
                 : workflow).ToList(),
+        };
+    }
+
+    private static ProjectSnapshot ApplyUserMapping(ProjectSnapshot source, IReadOnlyDictionary<string, string> userMapping)
+    {
+        return source with
+        {
+            Collaborators = source.Collaborators?.Select(collaborator =>
+                string.Equals(collaborator.Type, "USER", StringComparison.OrdinalIgnoreCase)
+                && userMapping.TryGetValue(collaborator.Login, out var mappedLogin)
+                    ? collaborator with { Login = mappedLogin }
+                    : collaborator).ToList(),
         };
     }
 

@@ -62,7 +62,7 @@ var tokenOption = new Option<string?>("--token")
 };
 var enableBrowserOption = new Option<bool>("--enable-browser-automation")
 {
-    Description = "Also migrate UI-only view settings with browser automation (requires 'gpm setup --browsers' and 'gpm login').",
+    Description = "Also read or write UI-only project settings with browser automation (requires 'gpm setup --browsers' and 'gpm login').",
 };
 var browserProfileOption = new Option<string?>("--browser-profile")
 {
@@ -443,8 +443,12 @@ var verifyCommand = new Command("verify", "Verify a migrated project against the
     ownerTypeOption,
     inOption,
     repoMappingOption,
+    userMappingOption,
     tokenOption,
     targetBaseUrlOption,
+    enableBrowserOption,
+    browserProfileOption,
+    browserBaseUrlOption,
     noUpdateCheckOption,
 };
 
@@ -456,6 +460,7 @@ verifyCommand.SetAction(async (parseResult, cancellationToken) =>
     var inDirectory = parseResult.GetValue(inOption)!;
     var baseUrl = parseResult.GetValue(targetBaseUrlOption);
     var updateCheck = StartUpdateCheck(parseResult.GetValue(noUpdateCheckOption));
+    var enableBrowserAutomation = parseResult.GetValue(enableBrowserOption);
     var token = parseResult.GetValue(tokenOption)
         ?? Environment.GetEnvironmentVariable("GITHUB_TOKEN")
         ?? Environment.GetEnvironmentVariable("GPM_TOKEN");
@@ -466,28 +471,78 @@ verifyCommand.SetAction(async (parseResult, cancellationToken) =>
         return 1;
     }
 
-    using var client = new GitHubGraphQLClient(token, baseUrl is null ? null : GitHubGraphQLClient.NormalizeBaseUrl(baseUrl));
+    var graphQlBaseUrl = baseUrl is null ? null : GitHubGraphQLClient.NormalizeBaseUrl(baseUrl);
+    using var client = new GitHubGraphQLClient(token, graphQlBaseUrl);
     client.OnRetry = Console.Error.WriteLine;
 
     try
     {
+        await using var session = enableBrowserAutomation
+            ? new BrowserSession(new BrowserSessionOptions
+            {
+                BaseUrl = BrowserBaseUrl.Resolve(graphQlBaseUrl, parseResult.GetValue(browserBaseUrlOption)),
+                Profile = parseResult.GetValue(browserProfileOption),
+            })
+            : null;
+        if (session is not null)
+        {
+            var apiLogin = await client.GetViewerLoginAsync(cancellationToken);
+            await session.ValidateAuthenticationAsync(apiLogin, cancellationToken);
+        }
+
         var repoMappingPath = parseResult.GetValue(repoMappingOption);
         var repoMapping = repoMappingPath is null
             ? System.Collections.ObjectModel.ReadOnlyDictionary<string, string>.Empty
             : CsvMapping.Load(repoMappingPath);
+        var userMappingPath = parseResult.GetValue(userMappingOption);
+        var userMapping = userMappingPath is null
+            ? System.Collections.ObjectModel.ReadOnlyDictionary<string, string>.Empty
+            : CsvMapping.LoadUserMapping(userMappingPath);
         var verifier = new ProjectVerifier(client)
         {
             OnProgress = Console.Error.WriteLine,
             OwnerType = ownerType,
             RepositoryMapping = repoMapping,
+            UserMapping = userMapping,
         };
+        ViewUiExporter? viewExporter = null;
+        WorkflowUiExporter? workflowExporter = null;
+        CollaboratorUiExporter? collaboratorExporter = null;
+        if (session is not null)
+        {
+            viewExporter = new ViewUiExporter(session) { OnProgress = Console.Error.WriteLine };
+            workflowExporter = new WorkflowUiExporter(session) { OnProgress = Console.Error.WriteLine };
+            collaboratorExporter = new CollaboratorUiExporter(session) { OnProgress = Console.Error.WriteLine };
+            verifier.PostExportAsync = async (target, ct) =>
+            {
+                target = await viewExporter.EnrichAsync(target, org, projectNumber, ct);
+                target = await workflowExporter.EnrichAsync(target, org, projectNumber, ct);
+                return await collaboratorExporter.EnrichAsync(target, org, ownerType, projectNumber, ct);
+            };
+        }
+
         var snapshot = await SnapshotFile.LoadAsync(inDirectory, cancellationToken);
         var report = await verifier.VerifyAsync(snapshot, org, projectNumber, cancellationToken);
+        var browserWarnings = (viewExporter?.Warnings ?? [])
+            .Concat(workflowExporter?.Warnings ?? [])
+            .Concat(collaboratorExporter?.Warnings ?? [])
+            .ToList();
+        foreach (var warning in browserWarnings)
+        {
+            Console.Error.WriteLine($"warning: {warning}");
+        }
+
+        if (browserWarnings.Count > 0)
+        {
+            Console.Error.WriteLine("error: browser-assisted verification was incomplete because one or more target UI settings could not be read.");
+            return 1;
+        }
+
         WriteVerifyReport(report);
         await NotifyUpdateAsync(updateCheck);
         return report.IsMatch ? 0 : 1;
     }
-    catch (Exception exception) when (exception is GitHubGraphQLException or InvalidOperationException or IOException or FormatException)
+    catch (Exception exception) when (exception is GitHubGraphQLException or InvalidOperationException or IOException or FormatException or PlaywrightException or ArgumentException)
     {
         Console.Error.WriteLine($"error: {exception.Message}");
         return 1;

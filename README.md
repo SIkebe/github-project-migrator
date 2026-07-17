@@ -55,7 +55,7 @@ gpm import --org target-org --in ./snapshot --token $TARGET_TOKEN \
 
 # 3. Verify the migrated project against the snapshot
 gpm verify --org target-org --project 12 --in ./snapshot --token $TARGET_TOKEN \
-  --repo-mapping repos.csv
+  --repo-mapping repos.csv --user-mapping users.csv
 ```
 
 Tokens are resolved from `--token`, then the `GITHUB_TOKEN` / `GPM_TOKEN` environment variables.
@@ -114,9 +114,10 @@ Views and Workflows have no public API, so `gpm` replays them through the Projec
 gpm setup --browsers            # installs the Playwright Chromium browser
 gpm login                       # interactive sign-in; session saved locally
 
-# Then add --enable-browser-automation to export/import
+# Then add --enable-browser-automation to export/import/verify
 gpm export --org source-org --project 7 --out ./snapshot --enable-browser-automation
 gpm import --org target-org --in ./snapshot --enable-browser-automation
+gpm verify --org target-org --project 12 --in ./snapshot --enable-browser-automation
 ```
 
 ### Cross-account migration (e.g. non-EMU source → EMU target)
@@ -133,10 +134,19 @@ gpm export --org source-org --project 7 --out ./snapshot \
 gpm import --org target-org --in ./snapshot \
   --token $TARGET_TOKEN --target-base-url https://api.TENANT.ghe.com \
   --browser-base-url https://TENANT.ghe.com \
+  --repo-mapping ./snapshot/repository-mappings.csv \
+  --user-mapping ./snapshot/user-mappings.csv \
+  --enable-browser-automation --browser-profile target
+
+gpm verify --org target-org --project 12 --in ./snapshot \
+  --token $TARGET_TOKEN --target-base-url https://api.TENANT.ghe.com \
+  --browser-base-url https://TENANT.ghe.com \
+  --repo-mapping ./snapshot/repository-mappings.csv \
+  --user-mapping ./snapshot/user-mappings.csv \
   --enable-browser-automation --browser-profile target
 ```
 
-For GHEC with data residency, point `gpm export --base-url` (source) or `gpm import`/`gpm verify` `--target-base-url` (target) at the tenant API endpoint, e.g. `https://api.TENANT.ghe.com` (a trailing `/graphql` is added automatically). Browser-enabled export/import derives `https://TENANT.ghe.com` from that API URL; `--browser-base-url` can set it explicitly and is rejected when it names a different deployment. `setup --fixture-ui` applies the same derivation and validation to `--api-base-url`. Before browser reads or writes, `gpm` also verifies that the selected browser profile is signed in on that host as the same login used by the API token. Cloud API and browser origins must use HTTPS; HTTP is accepted only for loopback test origins. GHEC with data residency is designed to work but requires the manual tenant validation described below.
+For GHEC with data residency, point `gpm export --base-url` (source) or `gpm import`/`gpm verify` `--target-base-url` (target) at the tenant API endpoint, e.g. `https://api.TENANT.ghe.com` (a trailing `/graphql` is added automatically). Browser-enabled export/import/verify derives `https://TENANT.ghe.com` from that API URL; `--browser-base-url` can set it explicitly and is rejected when it names a different deployment. `setup --fixture-ui` applies the same derivation and validation to `--api-base-url`. Before browser reads or writes, `gpm` also verifies that the selected browser profile is signed in on that host as the same login used by the API token. Cloud API and browser origins must use HTTPS; HTTP is accepted only for loopback test origins. GHEC with data residency is designed to work but requires the manual tenant validation described below.
 
 ### Proxies
 
@@ -226,7 +236,7 @@ Workflows are migrated through the GitHub Projects web UI because GitHub has no 
 
 | Area | Supported? | Notes |
 |---|---:|---|
-| `gpm verify` | ✅ | Compares target project against the snapshot and reports differences. |
+| `gpm verify` | ✅ | Compares target project against the snapshot and reports differences. Add `--enable-browser-automation` to re-read and compare UI-only View / Workflow settings and explicit collaborators. |
 | Resume after interruption | ✅ | Item import writes `import-log.json` so reruns do not duplicate already-created items. |
 | Mapping CSV templates | ✅ | `export` writes repository and user mapping templates without overwriting existing files. |
 | Bulk export | ✅ | Omit `--project` to export every project owned by the organization/user into `<out>/<number>/`. |
@@ -242,7 +252,7 @@ Workflows are migrated through the GitHub Projects web UI because GitHub has no 
 4. **Fill in `user-mappings.csv` if generated.** This is important for Enterprise Managed Users where target logins usually have a `_shortcode` suffix.
 5. **Use browser automation only when you need Views or Workflows.** Run `gpm setup --browsers` and `gpm login` first, then pass `--enable-browser-automation` to both export and import.
 
-When source and target repository names differ, pass the same `--repo-mapping` file to `gpm verify` as well. This lets verification compare imported Issue / Pull Request items and linked repositories after repository remapping.
+When source and target repository or user names differ, pass the same `--repo-mapping` and `--user-mapping` files to `gpm verify` as well. This lets verification compare imported Issue / Pull Request items, linked repositories, and explicit user collaborators after remapping.
 
 If you do not enable browser automation, `gpm` still migrates projects, fields, items, values, ordering, archived state and linked repositories, but **Views and Workflows will not be fully recreated**.
 
