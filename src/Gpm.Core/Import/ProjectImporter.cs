@@ -49,6 +49,9 @@ public sealed class ProjectImporter
     /// <summary>Invoked with a human-readable progress message at each import stage.</summary>
     public Action<string>? OnProgress { get; set; }
 
+    /// <summary>Invoked after conflict resolution and immediately before the first mutation.</summary>
+    public Func<CancellationToken, Task>? BeforeWriteAsync { get; set; }
+
     /// <summary>Imports the snapshot into <paramref name="ownerLogin"/> and returns the target project identity and field mappings.</summary>
     public async Task<ImportResult> ImportAsync(ProjectSnapshot snapshot, string ownerLogin, CancellationToken cancellationToken = default)
     {
@@ -76,11 +79,13 @@ public sealed class ProjectImporter
                 case ConflictAction.Update:
                     OnProgress?.Invoke(string.Create(CultureInfo.InvariantCulture,
                         $"Project '{title}' already exists (#{existing.Number}); applying snapshot to it (on-conflict=update)."));
+                    await InvokeBeforeWriteAsync(cancellationToken).ConfigureAwait(false);
                     return await ApplySnapshotAsync(snapshot, ownerLogin, existing, ProjectImportOutcome.Updated, cancellationToken).ConfigureAwait(false);
             }
         }
 
         var ownerId = await GetOwnerIdAsync(ownerLogin, cancellationToken).ConfigureAwait(false);
+        await InvokeBeforeWriteAsync(cancellationToken).ConfigureAwait(false);
         OnProgress?.Invoke($"Creating project '{title}' in '{ownerLogin}'...");
         var project = await CreateProjectAsync(ownerId, title, cancellationToken).ConfigureAwait(false);
         return await ApplySnapshotAsync(snapshot, ownerLogin, project, ProjectImportOutcome.Created, cancellationToken).ConfigureAwait(false);
@@ -104,8 +109,12 @@ public sealed class ProjectImporter
 
         OnProgress?.Invoke(string.Create(CultureInfo.InvariantCulture,
             $"Applying snapshot to existing project #{project.Number}..."));
+        await InvokeBeforeWriteAsync(cancellationToken).ConfigureAwait(false);
         return await ApplySnapshotAsync(snapshot, ownerLogin, project, ProjectImportOutcome.Updated, cancellationToken).ConfigureAwait(false);
     }
+
+    private Task InvokeBeforeWriteAsync(CancellationToken cancellationToken)
+        => BeforeWriteAsync?.Invoke(cancellationToken) ?? Task.CompletedTask;
 
     /// <summary>Applies metadata, custom fields and Status options to the target project and builds the result.</summary>
     private async Task<ImportResult> ApplySnapshotAsync(

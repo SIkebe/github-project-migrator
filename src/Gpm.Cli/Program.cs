@@ -319,6 +319,7 @@ importCommand.SetAction(async (parseResult, cancellationToken) =>
     var graphQlBaseUrl = baseUrl is null ? null : GitHubGraphQLClient.NormalizeBaseUrl(baseUrl);
     using var client = new GitHubGraphQLClient(token, graphQlBaseUrl);
     client.OnRetry = Console.Error.WriteLine;
+    BrowserSession? session = null;
 
     try
     {
@@ -331,6 +332,17 @@ importCommand.SetAction(async (parseResult, cancellationToken) =>
             ? System.Collections.ObjectModel.ReadOnlyDictionary<string, string>.Empty
             : CsvMapping.LoadUserMapping(userMappingPath);
 
+        async Task ValidateBrowserBeforeWriteAsync(CancellationToken ct)
+        {
+            session = new BrowserSession(new BrowserSessionOptions
+            {
+                BaseUrl = BrowserBaseUrl.Resolve(graphQlBaseUrl, parseResult.GetValue(browserBaseUrlOption)),
+                Profile = parseResult.GetValue(browserProfileOption),
+            });
+            var apiLogin = await client.GetViewerLoginAsync(ct);
+            await session.ValidateAuthenticationAsync(apiLogin, ct);
+        }
+
         var importer = new ProjectImporter(client)
         {
             OnConflict = onConflict,
@@ -338,6 +350,7 @@ importCommand.SetAction(async (parseResult, cancellationToken) =>
             RepositoryMapping = repoMapping,
             UserMapping = userMapping,
             OnProgress = Console.Error.WriteLine,
+            BeforeWriteAsync = enableBrowserAutomation ? ValidateBrowserBeforeWriteAsync : null,
         };
 
         var snapshot = await SnapshotFile.LoadAsync(inDirectory, cancellationToken);
@@ -358,19 +371,6 @@ importCommand.SetAction(async (parseResult, cancellationToken) =>
                 $"result={FormatProjectImportOutcome(result.Outcome)} project={result.ProjectNumber}"));
             await NotifyUpdateAsync(updateCheck);
             return 0;
-        }
-
-        await using var session = enableBrowserAutomation
-            ? new BrowserSession(new BrowserSessionOptions
-            {
-                BaseUrl = BrowserBaseUrl.Resolve(graphQlBaseUrl, parseResult.GetValue(browserBaseUrlOption)),
-                Profile = parseResult.GetValue(browserProfileOption),
-            })
-            : null;
-        if (session is not null)
-        {
-            var apiLogin = await client.GetViewerLoginAsync(cancellationToken);
-            await session.ValidateAuthenticationAsync(apiLogin, cancellationToken);
         }
 
         var itemImporter = new ItemImporter(client)
@@ -431,6 +431,13 @@ importCommand.SetAction(async (parseResult, cancellationToken) =>
     {
         Console.Error.WriteLine($"error: {exception.Message}");
         return 1;
+    }
+    finally
+    {
+        if (session is not null)
+        {
+            await session.DisposeAsync();
+        }
     }
 });
 

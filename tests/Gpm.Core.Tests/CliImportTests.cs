@@ -52,7 +52,8 @@ public class CliImportTests
             Assert.Equal(1, result.ExitCode);
             Assert.Contains("already exists", result.Error, StringComparison.Ordinal);
             Assert.DoesNotContain("result=", result.Output, StringComparison.Ordinal);
-            Assert.Single(server.RequestBodies);
+            var request = Assert.Single(server.RequestBodies);
+            Assert.DoesNotContain("mutation", request, StringComparison.OrdinalIgnoreCase);
         }
         finally
         {
@@ -61,23 +62,25 @@ public class CliImportTests
     }
 
     [Fact]
-    public async Task Import_into_existing_project_emits_stable_updated_result()
+    public async Task Conflict_update_emits_stable_result_and_applies_project_mutation()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
         var directory = Path.Combine(Path.GetTempPath(), "gpm-cli-update-" + Guid.NewGuid().ToString("N"));
         await SnapshotFile.SaveAsync(MinimalSnapshot(), directory, cancellationToken);
 
         using var server = new GraphQlStubServer(
-            ProjectByNumberResponse,
+            ExistingProjectResponse,
             UpdateProjectResponse,
             EmptyFieldsResponse);
         try
         {
-            var result = await RunCliAsync(directory, server, "--project-number", "42");
+            var result = await RunCliAsync(directory, server, "--on-conflict", "update");
 
             Assert.Equal(0, result.ExitCode);
             Assert.Contains("result=updated project=42", result.Output, StringComparison.Ordinal);
             Assert.Equal(3, server.RequestBodies.Count);
+            Assert.Single(server.RequestBodies, request =>
+                request.Contains("mutation", StringComparison.OrdinalIgnoreCase));
         }
         finally
         {
@@ -199,13 +202,6 @@ public class CliImportTests
         {"data":{"organization":{"projectsV2":{
           "nodes":[{"id":"PVT_existing","number":42,"title":"Roadmap","url":"https://github.com/orgs/target/projects/42"}],
           "pageInfo":{"hasNextPage":false,"endCursor":null}
-        }}}}
-        """;
-
-    private const string ProjectByNumberResponse =
-        """
-        {"data":{"organization":{"projectV2":{
-          "id":"PVT_existing","number":42,"title":"Roadmap","url":"https://github.com/orgs/target/projects/42"
         }}}}
         """;
 

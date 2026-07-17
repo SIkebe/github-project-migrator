@@ -44,6 +44,43 @@ public class ProjectImporterLogicTests
             StringComparison.OrdinalIgnoreCase);
     }
 
+    [Fact]
+    public async Task Conflict_update_runs_prewrite_hook_before_sending_mutations()
+    {
+        const string response =
+            """
+            {"data":{"organization":{"projectsV2":{
+              "nodes":[{"id":"PVT_existing","number":42,"title":"Roadmap","url":"https://github.com/orgs/target/projects/42"}],
+              "pageInfo":{"hasNextPage":false,"endCursor":null}
+            }}}}
+            """;
+        using var handler = new StubHandler(response);
+        using var client = new GitHubGraphQLClient(
+            "dummy-token",
+            new Uri("https://example.test/graphql"),
+            handler,
+            delayAsync: null);
+        var importer = new ProjectImporter(client)
+        {
+            OnConflict = ConflictAction.Update,
+            BeforeWriteAsync = _ => throw new InvalidOperationException("authentication failed"),
+        };
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => importer.ImportAsync(
+                MinimalSnapshot("Roadmap"),
+                "target",
+                TestContext.Current.CancellationToken));
+
+        Assert.Equal("authentication failed", exception.Message);
+        var request = Assert.Single(handler.RequestBodies);
+        using var document = JsonDocument.Parse(request);
+        Assert.DoesNotContain(
+            "mutation",
+            document.RootElement.GetProperty("query").GetString()!,
+            StringComparison.OrdinalIgnoreCase);
+    }
+
     private static ProjectSnapshot MinimalSnapshot(string title) => new()
     {
         SchemaVersion = ProjectSnapshot.CurrentSchemaVersion,
