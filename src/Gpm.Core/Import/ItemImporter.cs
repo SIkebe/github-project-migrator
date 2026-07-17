@@ -261,14 +261,27 @@ public sealed class ItemImporter
         string logDirectory,
         CancellationToken cancellationToken)
     {
+        var hasPendingOperation = log.PendingContents.TryGetValue(key, out var existingPending);
         if (item.Repository is null || item.Number is null)
         {
+            if (hasPendingOperation)
+            {
+                throw new InvalidOperationException(
+                    $"Pending content operation '{existingPending!.OperationId}' no longer has a repository and item number in the snapshot. Restore the original snapshot or reconcile the target manually.");
+            }
+
             Warn(warnings, $"{label}: snapshot is missing the repository or number; skipping.");
             return null;
         }
 
         if (!RepositoryMapping.TryGetValue(item.Repository, out var targetRepository))
         {
+            if (hasPendingOperation)
+            {
+                throw new InvalidOperationException(
+                    $"Pending content operation '{existingPending!.OperationId}' can no longer resolve repository mapping for '{item.Repository}'. Restore the original mapping or reconcile the target manually.");
+            }
+
             Warn(warnings, $"{label}: no repository mapping for '{item.Repository}'; skipping.");
             return null;
         }
@@ -276,6 +289,12 @@ public sealed class ItemImporter
         var separator = targetRepository.IndexOf('/', StringComparison.Ordinal);
         if (separator <= 0 || separator == targetRepository.Length - 1)
         {
+            if (hasPendingOperation)
+            {
+                throw new InvalidOperationException(
+                    $"Pending content operation '{existingPending!.OperationId}' has invalid repository mapping '{targetRepository}'. Restore the original mapping or reconcile the target manually.");
+            }
+
             Warn(warnings, $"{label}: mapped repository '{targetRepository}' is not in 'owner/name' form; skipping.");
             return null;
         }
@@ -285,15 +304,21 @@ public sealed class ItemImporter
         var contentId = await ResolveIssueOrPullRequestIdAsync(owner, name, item.Number.Value, cancellationToken).ConfigureAwait(false);
         if (contentId is null)
         {
+            if (hasPendingOperation)
+            {
+                throw new InvalidOperationException(
+                    $"Pending content operation '{existingPending!.OperationId}' can no longer resolve '{targetRepository}#{item.Number.Value}'. Restore the original target content or reconcile the target manually.");
+            }
+
             Warn(warnings, string.Create(CultureInfo.InvariantCulture,
                 $"{label}: '{targetRepository}#{item.Number.Value}' was not found in the target; skipping."));
             return null;
         }
 
         PendingContentOperation pending;
-        if (log.PendingContents.TryGetValue(key, out var existingPending))
+        if (hasPendingOperation)
         {
-            pending = existingPending;
+            pending = existingPending!;
             if (!string.Equals(pending.ContentId, contentId, StringComparison.Ordinal))
             {
                 throw new InvalidOperationException(

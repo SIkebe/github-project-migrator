@@ -84,6 +84,7 @@ public sealed class ProjectImporter
             await SaveOperationLogAsync(cancellationToken).ConfigureAwait(false);
             ValidatePendingItemProject(existing.Id);
             ValidatePendingFieldOperations(snapshot, existing.Id);
+            await InvokeBeforeWriteAsync(cancellationToken).ConfigureAwait(false);
             return await ApplySnapshotAsync(snapshot, ownerLogin, existing, ProjectImportOutcome.Created, cancellationToken).ConfigureAwait(false);
         }
 

@@ -154,6 +154,40 @@ public class ItemImporterResumeTests
         }
     }
 
+    [Fact]
+    public async Task Resume_rejects_removed_repository_mapping_instead_of_skipping()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var directory = Directory.CreateTempSubdirectory("gpm-resume-").FullName;
+        try
+        {
+            using var handler = new ResumeHandler(draft: false, directory);
+            using var client = new GitHubGraphQLClient("token", baseUrl: null, handler, (_, _) => Task.CompletedTask);
+            await Assert.ThrowsAsync<AmbiguousMutationResultException>(
+                () => CreateImporter(client).ImportAsync(
+                    CreateSnapshot(draft: false, assignedDraft: false),
+                    Target,
+                    directory,
+                    cancellationToken));
+
+            var importerWithoutMapping = new ItemImporter(client);
+            var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+                () => importerWithoutMapping.ImportAsync(
+                    CreateSnapshot(draft: false, assignedDraft: false),
+                    Target,
+                    directory,
+                    cancellationToken));
+
+            Assert.Contains("repository mapping", exception.Message, StringComparison.Ordinal);
+            Assert.Equal(1, handler.CreateMutationCount);
+            Assert.Single((await ImportLog.LoadAsync(directory, cancellationToken))!.PendingContents);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
     private static ItemImporter CreateImporter(GitHubGraphQLClient client) => new(client)
     {
         RepositoryMapping = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)

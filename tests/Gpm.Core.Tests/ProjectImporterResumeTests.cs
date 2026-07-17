@@ -18,7 +18,16 @@ public class ProjectImporterResumeTests
         {
             using var handler = new ProjectResumeHandler(directory);
             using var client = CreateClient(handler);
-            var importer = new ProjectImporter(client) { OperationLogDirectory = directory };
+            var prewriteCount = 0;
+            var importer = new ProjectImporter(client)
+            {
+                OperationLogDirectory = directory,
+                BeforeWriteAsync = _ =>
+                {
+                    prewriteCount++;
+                    return Task.CompletedTask;
+                },
+            };
 
             await Assert.ThrowsAsync<AmbiguousMutationResultException>(
                 () => importer.ImportAsync(Snapshot(), "target", cancellationToken));
@@ -33,6 +42,7 @@ public class ProjectImporterResumeTests
 
             Assert.Equal("PVT_created", result.ProjectId);
             Assert.Equal(1, handler.CreateMutationCount);
+            Assert.Equal(2, prewriteCount);
             Assert.Null((await ProjectImportLog.LoadAsync(directory, cancellationToken)).PendingProject);
         }
         finally

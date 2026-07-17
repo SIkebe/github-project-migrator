@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using Gpm.Core.GitHub;
@@ -35,9 +36,13 @@ public sealed class FixtureProjectBuilder
         ArgumentException.ThrowIfNullOrWhiteSpace(title);
         ArgumentException.ThrowIfNullOrWhiteSpace(repositoryName);
 
+        var operationKey = Convert.ToHexString(
+            SHA256.HashData(Encoding.UTF8.GetBytes($"{organization}\n{title}\n{repositoryName}")))[..16]
+            .ToLowerInvariant();
+        var operationDirectory = Path.Combine(OperationLogDirectory, operationKey);
         var existing = await FindProjectByTitleAsync(organization, title, cancellationToken).ConfigureAwait(false);
-        var projectLog = await ProjectImportLog.LoadAsync(OperationLogDirectory, cancellationToken).ConfigureAwait(false);
-        var itemLog = await ImportLog.LoadAsync(OperationLogDirectory, cancellationToken).ConfigureAwait(false);
+        var projectLog = await ProjectImportLog.LoadAsync(operationDirectory, cancellationToken).ConfigureAwait(false);
+        var itemLog = await ImportLog.LoadAsync(operationDirectory, cancellationToken).ConfigureAwait(false);
         var hasPendingOperations = projectLog.PendingProject is not null
             || projectLog.PendingFields.Count > 0
             || itemLog is { PendingDrafts.Count: > 0 }
@@ -58,7 +63,7 @@ public sealed class FixtureProjectBuilder
         {
             OnProgress = OnProgress,
             OnConflict = existing is null ? ConflictAction.Fail : ConflictAction.Update,
-            OperationLogDirectory = OperationLogDirectory,
+            OperationLogDirectory = operationDirectory,
             PendingItemProjectId = itemLog is { PendingDrafts.Count: > 0 }
                 || itemLog is { PendingContents.Count: > 0 }
                     ? itemLog.ProjectId
@@ -82,7 +87,7 @@ public sealed class FixtureProjectBuilder
                 [viewerLogin] = viewerLogin,
             },
         };
-        var itemResult = await itemImporter.ImportAsync(snapshot, project, OperationLogDirectory, cancellationToken).ConfigureAwait(false);
+        var itemResult = await itemImporter.ImportAsync(snapshot, project, operationDirectory, cancellationToken).ConfigureAwait(false);
         foreach (var warning in itemResult.Warnings)
         {
             OnProgress?.Invoke("warning: " + warning);
