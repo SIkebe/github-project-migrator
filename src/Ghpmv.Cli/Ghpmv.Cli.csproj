@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="..\Ghpmv.Core\Ghpmv.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="System.CommandLine" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>ghpmv</AssemblyName>
+    <RootNamespace>Ghpmv.Cli</RootNamespace>
+    <PackAsTool>true</PackAsTool>
+    <ToolCommandName>ghpmv</ToolCommandName>
+    <PackageId>ghpmv</PackageId>
+    <Description>GitHub Projects migration CLI (org-to-org, including Views and Workflows).</Description>
+    <PackageTags>github;projects;migration;cli;dotnet-tool</PackageTags>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <!-- NU5110/NU5111: Playwright ships .ps1 helper scripts inside the tool payload; harmless for dotnet tools. -->
+    <NoWarn>$(NoWarn);NU5110;NU5111</NoWarn>
+    <RollForward>Major</RollForward>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="..\..\README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+
+</Project>

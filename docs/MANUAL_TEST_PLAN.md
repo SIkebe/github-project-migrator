@@ -1,13 +1,13 @@
-# 手動テストプラン: GEI + gpm end-to-end 移行検証
+# 手動テストプラン: GEI + ghpmv end-to-end 移行検証
 
-このドキュメントは、GitHub Enterprise Importer(GEI) でリポジトリ / Issue / Pull Request を先に移行し、その後 `gpm` で GitHub Projects V2 を移行・検証するための手動テスト手順です。
+このドキュメントは、GitHub Enterprise Importer(GEI) でリポジトリ / Issue / Pull Request を先に移行し、その後 `ghpmv` で GitHub Projects V2 を移行・検証するための手動テスト手順です。
 
 想定する主シナリオは次の通りです。
 
 - 移行元: GitHub.com の source organization / account
 - 移行先: GitHub.com または GHEC / EMU の target organization / account
 - リポジトリ移行: GEI
-- Project V2 移行: `gpm export` → `gpm import` → `gpm verify`
+- Project V2 移行: `ghpmv export` → `ghpmv import` → `ghpmv verify`
 - Views / Workflows / collaborator の export / verify: `--enable-browser-automation` を使う
 
 > 注意: トークン値、organization 名、repository 名、project number は環境ごとに置き換えてください。トークンはチャットやログに貼らないでください。
@@ -19,9 +19,9 @@
 ### 1.1 目的
 
 1. GEI で source repository を target organization へ移行できることを確認する。
-2. GEI 移行後の target repository に対して、`gpm` が source Project の Issue / PR item を repository mapping + 同一番号で再リンクできることを確認する。
-3. `gpm` が Project metadata / fields / items / values / order / archived state / linked repositories / explicit collaborators / Views / Workflows を移行できることを確認する。
-4. `gpm verify` で移行結果を検証し、既知の恒久制限以外に error が出ないことを確認する。
+2. GEI 移行後の target repository に対して、`ghpmv` が source Project の Issue / PR item を repository mapping + 同一番号で再リンクできることを確認する。
+3. `ghpmv` が Project metadata / fields / items / values / order / archived state / linked repositories / explicit collaborators / Views / Workflows を移行できることを確認する。
+4. `ghpmv verify` で移行結果を検証し、既知の恒久制限以外に error が出ないことを確認する。
 5. セッション失効、mapping 不足、browser automation 無効時など、手動運用で起きやすい失敗が分かりやすく検出されることを確認する。
 
 ### 1.2 合格基準
@@ -30,9 +30,9 @@
 
 - GEI の repository migration が `Succeeded` になる。
 - target repository に Issue #1 / Issue #2 / open PR #3 相当が存在し、source と同じ number で参照できる。
-- `gpm export --enable-browser-automation` が snapshot を作成し、Views / Workflows / explicit collaborators の warning が想定範囲内である。
-- `repository-mappings.csv` と必要に応じて `user-mappings.csv` を補完したうえで、`gpm import --enable-browser-automation` が完了する。
-- `gpm verify` が `OK: the target project matches the snapshot.`、または既知制限に由来する warning のみを出す。
+- `ghpmv export --enable-browser-automation` が snapshot を作成し、Views / Workflows / explicit collaborators の warning が想定範囲内である。
+- `repository-mappings.csv` と必要に応じて `user-mappings.csv` を補完したうえで、`ghpmv import --enable-browser-automation` が完了する。
+- `ghpmv verify` が `OK: the target project matches the snapshot.`、または既知制限に由来する warning のみを出す。
 - target Project の UI 目視確認で、少なくとも以下が一致する。
   - Project title / description / README
   - custom fields と options / iterations
@@ -51,13 +51,13 @@
 
 | 領域 | 検証方法 | 備考 |
 |---|---|---|
-| Repository / Issues / Pull Requests | GEI + 目視 / `gh` | `gpm` のスコープ外。Project item relink の前提条件。 |
-| Project metadata | `gpm verify` + 目視 | title / shortDescription / README / public / closed state。 |
-| Fields | `gpm verify` + 目視 | Text / Number / Date / Single-select / Iteration / Status options。 |
-| Items | `gpm verify` + 目視 | Draft / Issue / PR / archived / assigned draft。 |
-| Field values | `gpm verify` + 目視 | Unicode、emoji、number、date、option、iteration。 |
-| Item order | `gpm verify` + 目視 | archived item の position は GitHub API 制限により対象外。 |
-| Linked repositories | `gpm verify` warning 確認 + 目視 | `--repo-mapping` が必須。 |
+| Repository / Issues / Pull Requests | GEI + 目視 / `gh` | `ghpmv` のスコープ外。Project item relink の前提条件。 |
+| Project metadata | `ghpmv verify` + 目視 | title / shortDescription / README / public / closed state。 |
+| Fields | `ghpmv verify` + 目視 | Text / Number / Date / Single-select / Iteration / Status options。 |
+| Items | `ghpmv verify` + 目視 | Draft / Issue / PR / archived / assigned draft。 |
+| Field values | `ghpmv verify` + 目視 | Unicode、emoji、number、date、option、iteration。 |
+| Item order | `ghpmv verify` + 目視 | archived item の position は GitHub API 制限により対象外。 |
+| Linked repositories | `ghpmv verify` warning 確認 + 目視 | `--repo-mapping` が必須。 |
 | Explicit project collaborators | browser export/import + 目視 | inherited access は対象外。 |
 | Views | browser export/import + 目視 | Table / Board / Roadmap、filter、sort、slice、field sum など。 |
 | Workflows | browser export/import + 目視 | built-in workflows、Auto-add、disabled workflow。 |
@@ -85,8 +85,8 @@
 |---|---|---|
 | Source org | `gpm-source` | Project と fixture repository を作れること。 |
 | Target org | `gpm-target` | GEI の migration target にでき、Project を作れること。 |
-| Source browser profile | `source` | source Project と source repo を読めるアカウントで `gpm login`。 |
-| Target browser profile | `target` | target Project を編集できるアカウントで `gpm login`。 |
+| Source browser profile | `source` | source Project と source repo を読めるアカウントで `ghpmv login`。 |
+| Target browser profile | `target` | target Project を編集できるアカウントで `ghpmv login`。 |
 
 EMU / SAML / OIDC backed organization の場合は、PAT と browser session の両方で SSO authorization を完了してください。
 
@@ -98,7 +98,7 @@ EMU / SAML / OIDC backed organization の場合は、PAT と browser session の
 - Target repository: `fixture-repo-gei-target` または衝突しない任意名
 - Source Project: `gpm-fixture`
 
-`gpm setup --fixture` は source org に以下を作成します。
+`ghpmv setup --fixture` は source org に以下を作成します。
 
 - private repository `fixture-repo`
 - Issue 2 件
@@ -108,7 +108,7 @@ EMU / SAML / OIDC backed organization の場合は、PAT と browser session の
 - draft items、Issue item、PR item、archived draft、assigned draft
 - linked repository
 
-Views / Workflows は public API だけでは作成できませんが、`gpm setup --fixture-ui` が C# の Playwright layer で標準テスト用 View / Workflow を作成します。手動で UI をぽちぽち濃くする必要はありません。fixture setup の実装本体は C# CLI に一本化されています。
+Views / Workflows は public API だけでは作成できませんが、`ghpmv setup --fixture-ui` が C# の Playwright layer で標準テスト用 View / Workflow を作成します。手動で UI をぽちぽち濃くする必要はありません。fixture setup の実装本体は C# CLI に一本化されています。
 
 ---
 
@@ -143,19 +143,19 @@ gh extension upgrade github/gh-gei
 
 | 変数 | 用途 |
 |---|---|
-| `GPM_SOURCE_TOKEN` | `gpm export` と GEI source 用。 |
-| `GPM_TARGET_TOKEN` | `gpm import` / `gpm verify` と GEI target 用。 |
-| `GPM_TEST_TOKEN` | 既存 integration / browser E2E tests を手動で回す場合。 |
-| `GPM_TEST_ORG` | integration / browser E2E tests の source organization login。未指定時は `GPM_SOURCE_ORG`、それも無ければ `gpm-source`。CI repo variable でも指定。 |
-| `GPM_TEST_TARGET_ORG` | integration tests の target organization login。未指定時は `GPM_TARGET_ORG`、それも無ければ `gpm-target`。CI repo variable でも指定。 |
-| `GPM_TEST_PROJECT_NUMBER` | integration tests が export 元として使う fixture Project number。未指定時は現在の shared fixture `89`。CI repo variable でも指定。 |
-| `GPM_TEST_FIXTURE_REPO` | integration tests が期待する source fixture repository short name。未指定時は `GPM_FIXTURE_REPO`、それも無ければ現在の shared fixture repo `fixture-repo2`。CI repo variable でも指定。 |
-| `GPM_TEST_TARGET_FIXTURE_REPO` | integration tests が linked repository remap 先として期待する target fixture repository short name。未指定時は `fixture-repo`。CI repo variable でも指定。 |
-| `GPM_SOURCE_ORG` | source organization login。 |
-| `GPM_TARGET_ORG` | target organization login。 |
-| `GPM_FIXTURE_REPO` | source fixture repository 名。 |
-| `GPM_TARGET_REPO` | GEI で作る target repository 名。 |
-| `GPM_SNAPSHOT_DIR` | `gpm export` の出力先。 |
+| `GHPMV_SOURCE_TOKEN` | `ghpmv export` と GEI source 用。 |
+| `GHPMV_TARGET_TOKEN` | `ghpmv import` / `ghpmv verify` と GEI target 用。 |
+| `GHPMV_TEST_TOKEN` | 既存 integration / browser E2E tests を手動で回す場合。 |
+| `GHPMV_TEST_ORG` | integration / browser E2E tests の source organization login。未指定時は `GHPMV_SOURCE_ORG`、それも無ければ `gpm-source`。CI repo variable でも指定。 |
+| `GHPMV_TEST_TARGET_ORG` | integration tests の target organization login。未指定時は `GHPMV_TARGET_ORG`、それも無ければ `gpm-target`。CI repo variable でも指定。 |
+| `GHPMV_TEST_PROJECT_NUMBER` | integration tests が export 元として使う fixture Project number。未指定時は現在の shared fixture `89`。CI repo variable でも指定。 |
+| `GHPMV_TEST_FIXTURE_REPO` | integration tests が期待する source fixture repository short name。未指定時は `GHPMV_FIXTURE_REPO`、それも無ければ現在の shared fixture repo `fixture-repo2`。CI repo variable でも指定。 |
+| `GHPMV_TEST_TARGET_FIXTURE_REPO` | integration tests が linked repository remap 先として期待する target fixture repository short name。未指定時は `fixture-repo`。CI repo variable でも指定。 |
+| `GHPMV_SOURCE_ORG` | source organization login。 |
+| `GHPMV_TARGET_ORG` | target organization login。 |
+| `GHPMV_FIXTURE_REPO` | source fixture repository 名。 |
+| `GHPMV_TARGET_REPO` | GEI で作る target repository 名。 |
+| `GHPMV_SNAPSHOT_DIR` | `ghpmv export` の出力先。 |
 
 PowerShell で `.env` を読み込む例:
 
@@ -177,26 +177,26 @@ gh auth refresh -s project,read:enterprise,repo
 
 SAML SSO organization では、GitHub CLI の OAuth application または PAT の organization access を明示的に Authorize してください。認可漏れがあると `saml_failure` や GraphQL の permission error になります。
 
-### 4.4 `gpm` のビルドとブラウザー準備
+### 4.4 `ghpmv` のビルドとブラウザー準備
 
 ```powershell
 dotnet restore
 dotnet build -c Release
-dotnet run --project src/Gpm.Cli -- --version
-dotnet run --project src/Gpm.Cli -- setup --browsers
+dotnet run --project src/Ghpmv.Cli -- --version
+dotnet run --project src/Ghpmv.Cli -- setup --browsers
 ```
 
 Source / target の browser profile を作成します。
 
 ```powershell
-dotnet run --project src/Gpm.Cli -- login --profile source
-dotnet run --project src/Gpm.Cli -- login --profile target
+dotnet run --project src/Ghpmv.Cli -- login --profile source
+dotnet run --project src/Ghpmv.Cli -- login --profile target
 ```
 
 GHEC with data residency target の場合は、target profile に tenant host を指定します。
 
 ```powershell
-dotnet run --project src/Gpm.Cli -- login --profile target --base-url https://TENANT.ghe.com
+dotnet run --project src/Ghpmv.Cli -- login --profile target --base-url https://TENANT.ghe.com
 ```
 
 ---
@@ -206,12 +206,12 @@ dotnet run --project src/Gpm.Cli -- login --profile target --base-url https://TE
 ### 5.1 API で作れる部分を C# で作成
 
 ```powershell
-dotnet run --project src/Gpm.Cli -- setup `
+dotnet run --project src/Ghpmv.Cli -- setup `
   --fixture `
-  --fixture-org $env:GPM_SOURCE_ORG `
+  --fixture-org $env:GHPMV_SOURCE_ORG `
   --fixture-title gpm-fixture `
-  --fixture-repo $env:GPM_FIXTURE_REPO `
-  --token $env:GPM_SOURCE_TOKEN
+  --fixture-repo $env:GHPMV_FIXTURE_REPO `
+  --token $env:GHPMV_SOURCE_TOKEN
 ```
 
 出力された Project URL と project number を控えます。
@@ -223,28 +223,28 @@ Source project number: <source-project-number>
 
 ### 5.2 UI-only fixture を C# / Playwright で作成する
 
-`gpm setup --fixture` は public API で作れる repository / fields / items までを作ります。Views / Workflows は public API が無いため、続けて `gpm setup --fixture-ui` を実行し、C# の `ViewUiImporter` / `WorkflowUiImporter` が Playwright で GitHub UI を操作して作成します。
+`ghpmv setup --fixture` は public API で作れる repository / fields / items までを作ります。Views / Workflows は public API が無いため、続けて `ghpmv setup --fixture-ui` を実行し、C# の `ViewUiImporter` / `WorkflowUiImporter` が Playwright で GitHub UI を操作して作成します。
 
 ```powershell
-dotnet run --project src/Gpm.Cli -- setup `
+dotnet run --project src/Ghpmv.Cli -- setup `
   --fixture-ui `
-  --fixture-org $env:GPM_SOURCE_ORG `
+  --fixture-org $env:GHPMV_SOURCE_ORG `
   --fixture-project <source-project-number> `
-  --fixture-repo $env:GPM_FIXTURE_REPO `
-  --token $env:GPM_SOURCE_TOKEN `
+  --fixture-repo $env:GHPMV_FIXTURE_REPO `
+  --token $env:GHPMV_SOURCE_TOKEN `
   --browser-profile source
 ```
 
 API-backed fixture 作成と UI-only fixture 作成を 1 回で実行する場合は、`--fixture` と `--fixture-ui` を併用できます。この場合、`--fixture-project` は不要です。
 
 ```powershell
-dotnet run --project src/Gpm.Cli -- setup `
+dotnet run --project src/Ghpmv.Cli -- setup `
   --fixture `
   --fixture-ui `
-  --fixture-org $env:GPM_SOURCE_ORG `
+  --fixture-org $env:GHPMV_SOURCE_ORG `
   --fixture-title gpm-fixture `
-  --fixture-repo $env:GPM_FIXTURE_REPO `
-  --token $env:GPM_SOURCE_TOKEN `
+  --fixture-repo $env:GHPMV_FIXTURE_REPO `
+  --token $env:GHPMV_SOURCE_TOKEN `
   --browser-profile source
 ```
 
@@ -264,11 +264,11 @@ dotnet run --project src/Gpm.Cli -- setup `
 
 前提:
 
-- `dotnet run --project src/Gpm.Cli -- setup --browsers` が完了している。
-- `dotnet run --project src/Gpm.Cli -- login --profile source` で source org を編集できる browser session が保存されている。
-- 対象 Project は `gpm setup --fixture` で作成済みで、`Fixture Text` / `Fixture Number` / `Fixture Date` / `Fixture Select` / `Fixture Sprint` fields と `$env:GPM_FIXTURE_REPO` repository が存在する。
+- `dotnet run --project src/Ghpmv.Cli -- setup --browsers` が完了している。
+- `dotnet run --project src/Ghpmv.Cli -- login --profile source` で source org を編集できる browser session が保存されている。
+- 対象 Project は `ghpmv setup --fixture` で作成済みで、`Fixture Text` / `Fixture Number` / `Fixture Date` / `Fixture Select` / `Fixture Sprint` fields と `$env:GHPMV_FIXTURE_REPO` repository が存在する。
 
-`gpm setup --fixture-ui` が GitHub UI 変更などで失敗した場合のみ、フォールバックとして Source Project を開き、以下を手動で設定します。
+`ghpmv setup --fixture-ui` が GitHub UI 変更などで失敗した場合のみ、フォールバックとして Source Project を開き、以下を手動で設定します。
 
 Views:
 
@@ -297,7 +297,7 @@ Workflows:
 Collaborators:
 
 - 明示的な project collaborator を 1 人以上追加し、role を Reader / Writer / Admin のいずれかで確認する。
-- inherited access は `gpm` の対象外なので、目視確認では explicit collaborator のみを判定する。
+- inherited access は `ghpmv` の対象外なので、目視確認では explicit collaborator のみを判定する。
 
 ---
 
@@ -308,15 +308,15 @@ Collaborators:
 source repository に Issue / PR が存在することを確認します。
 
 ```powershell
-gh repo view "$env:GPM_SOURCE_ORG/$env:GPM_FIXTURE_REPO"
-gh issue list --repo "$env:GPM_SOURCE_ORG/$env:GPM_FIXTURE_REPO" --state all
-gh pr list --repo "$env:GPM_SOURCE_ORG/$env:GPM_FIXTURE_REPO" --state all
+gh repo view "$env:GHPMV_SOURCE_ORG/$env:GHPMV_FIXTURE_REPO"
+gh issue list --repo "$env:GHPMV_SOURCE_ORG/$env:GHPMV_FIXTURE_REPO" --state all
+gh pr list --repo "$env:GHPMV_SOURCE_ORG/$env:GHPMV_FIXTURE_REPO" --state all
 ```
 
 target repository 名が未使用であることを確認します。
 
 ```powershell
-gh repo view "$env:GPM_TARGET_ORG/$env:GPM_TARGET_REPO"
+gh repo view "$env:GHPMV_TARGET_ORG/$env:GHPMV_TARGET_REPO"
 ```
 
 存在する場合は、別名にするか cleanup してから進めます。
@@ -327,12 +327,12 @@ gh repo view "$env:GPM_TARGET_ORG/$env:GPM_TARGET_REPO"
 
 ```powershell
 gh gei migrate-repo `
-  --github-source-org $env:GPM_SOURCE_ORG `
-  --source-repo $env:GPM_FIXTURE_REPO `
-  --github-target-org $env:GPM_TARGET_ORG `
-  --target-repo $env:GPM_TARGET_REPO `
-  --github-source-pat $env:GPM_SOURCE_TOKEN `
-  --github-target-pat $env:GPM_TARGET_TOKEN `
+  --github-source-org $env:GHPMV_SOURCE_ORG `
+  --source-repo $env:GHPMV_FIXTURE_REPO `
+  --github-target-org $env:GHPMV_TARGET_ORG `
+  --target-repo $env:GHPMV_TARGET_REPO `
+  --github-source-pat $env:GHPMV_SOURCE_TOKEN `
+  --github-target-pat $env:GHPMV_TARGET_TOKEN `
   --target-repo-visibility private
 ```
 
@@ -343,26 +343,26 @@ gh gei migrate-repo `
 target repository が作成され、Issue / PR number が維持されていることを確認します。
 
 ```powershell
-gh repo view "$env:GPM_TARGET_ORG/$env:GPM_TARGET_REPO"
-gh issue view 1 --repo "$env:GPM_TARGET_ORG/$env:GPM_TARGET_REPO"
-gh issue view 2 --repo "$env:GPM_TARGET_ORG/$env:GPM_TARGET_REPO"
-gh pr view 3 --repo "$env:GPM_TARGET_ORG/$env:GPM_TARGET_REPO"
+gh repo view "$env:GHPMV_TARGET_ORG/$env:GHPMV_TARGET_REPO"
+gh issue view 1 --repo "$env:GHPMV_TARGET_ORG/$env:GHPMV_TARGET_REPO"
+gh issue view 2 --repo "$env:GHPMV_TARGET_ORG/$env:GHPMV_TARGET_REPO"
+gh pr view 3 --repo "$env:GHPMV_TARGET_ORG/$env:GHPMV_TARGET_REPO"
 ```
 
-PR number が異なる場合、`gpm` v1 は source issue / PR number と target issue / PR number の個別 mapping を持たないため、その item の relink はできません。この場合はテスト結果を失敗ではなく「前提条件未達」として記録します。
+PR number が異なる場合、`ghpmv` v1 は source issue / PR number と target issue / PR number の個別 mapping を持たないため、その item の relink はできません。この場合はテスト結果を失敗ではなく「前提条件未達」として記録します。
 
 ---
 
-## 7. `gpm` export / mapping / import / verify
+## 7. `ghpmv` export / mapping / import / verify
 
 ### 7.1 Source Project を export
 
 ```powershell
-dotnet run --project src/Gpm.Cli -- export `
-  --org $env:GPM_SOURCE_ORG `
+dotnet run --project src/Ghpmv.Cli -- export `
+  --org $env:GHPMV_SOURCE_ORG `
   --project <source-project-number> `
-  --out $env:GPM_SNAPSHOT_DIR `
-  --token $env:GPM_SOURCE_TOKEN `
+  --out $env:GHPMV_SNAPSHOT_DIR `
+  --token $env:GHPMV_SOURCE_TOKEN `
   --enable-browser-automation `
   --browser-profile source `
   --no-update-check
@@ -370,7 +370,7 @@ dotnet run --project src/Gpm.Cli -- export `
 
 確認ポイント:
 
-- `$env:GPM_SNAPSHOT_DIR/snapshot.json` が作成される。
+- `$env:GHPMV_SNAPSHOT_DIR/snapshot.json` が作成される。
 - `repository-mappings.csv` が生成される。
 - source UI の Views / Workflows / collaborators に関する warning がない、または想定内である。
 
@@ -388,8 +388,8 @@ PowerShell で簡易生成する場合:
 ```powershell
 @"
 source,target
-$env:GPM_SOURCE_ORG/$env:GPM_FIXTURE_REPO,$env:GPM_TARGET_ORG/$env:GPM_TARGET_REPO
-"@ | Set-Content -Encoding UTF8 "$env:GPM_SNAPSHOT_DIR/repository-mappings.csv"
+$env:GHPMV_SOURCE_ORG/$env:GHPMV_FIXTURE_REPO,$env:GHPMV_TARGET_ORG/$env:GHPMV_TARGET_REPO
+"@ | Set-Content -Encoding UTF8 "$env:GHPMV_SNAPSHOT_DIR/repository-mappings.csv"
 ```
 
 `user-mappings.csv` が生成されている場合は、EMU target login に合わせて `target-user` を補完します。`user-mappings.csv` には draft issue assignee と explicit user collaborator が含まれます。既存ファイルは re-export しても上書きされないため、collaborator 追加後にテンプレート行が増えない場合は、手動で行を追加するか、編集内容を退避してから既存 `user-mappings.csv` を削除して再 export してください。
@@ -399,12 +399,12 @@ $env:GPM_SOURCE_ORG/$env:GPM_FIXTURE_REPO,$env:GPM_TARGET_ORG/$env:GPM_TARGET_RE
 新規 Project として import します。
 
 ```powershell
-dotnet run --project src/Gpm.Cli -- import `
-  --org $env:GPM_TARGET_ORG `
-  --in $env:GPM_SNAPSHOT_DIR `
-  --token $env:GPM_TARGET_TOKEN `
-  --repo-mapping "$env:GPM_SNAPSHOT_DIR/repository-mappings.csv" `
-  --user-mapping "$env:GPM_SNAPSHOT_DIR/user-mappings.csv" `
+dotnet run --project src/Ghpmv.Cli -- import `
+  --org $env:GHPMV_TARGET_ORG `
+  --in $env:GHPMV_SNAPSHOT_DIR `
+  --token $env:GHPMV_TARGET_TOKEN `
+  --repo-mapping "$env:GHPMV_SNAPSHOT_DIR/repository-mappings.csv" `
+  --user-mapping "$env:GHPMV_SNAPSHOT_DIR/user-mappings.csv" `
   --enable-browser-automation `
   --browser-profile target `
   --project-title "gpm-fixture migrated $(Get-Date -Format yyyyMMdd-HHmmss)" `
@@ -423,13 +423,13 @@ Target project number: <target-project-number>
 ### 7.4 Verify
 
 ```powershell
-dotnet run --project src/Gpm.Cli -- verify `
-  --org $env:GPM_TARGET_ORG `
+dotnet run --project src/Ghpmv.Cli -- verify `
+  --org $env:GHPMV_TARGET_ORG `
   --project <target-project-number> `
-  --in $env:GPM_SNAPSHOT_DIR `
-  --token $env:GPM_TARGET_TOKEN `
-  --repo-mapping "$env:GPM_SNAPSHOT_DIR/repository-mappings.csv" `
-  --user-mapping "$env:GPM_SNAPSHOT_DIR/user-mappings.csv" `
+  --in $env:GHPMV_SNAPSHOT_DIR `
+  --token $env:GHPMV_TARGET_TOKEN `
+  --repo-mapping "$env:GHPMV_SNAPSHOT_DIR/repository-mappings.csv" `
+  --user-mapping "$env:GHPMV_SNAPSHOT_DIR/user-mappings.csv" `
   --enable-browser-automation `
   --browser-profile target `
   --no-update-check
@@ -451,7 +451,7 @@ warning / error が出た場合は、次の観点で切り分けます。
 |---|---|---|
 | Issue / PR item が skip | `repository-mappings.csv` 不足、target repo 不可視、Issue / PR number 不一致 | mapping、token visibility、GEI 結果を確認。 |
 | `saml_failure` | PAT の organization SSO authorization 漏れ | GitHub settings で token / GitHub CLI を Authorize。 |
-| Browser session expired | `gpm login --profile ...` 未実施または期限切れ | source / target profile で再ログイン。 |
+| Browser session expired | `ghpmv login --profile ...` 未実施または期限切れ | source / target profile で再ログイン。 |
 | Workflow 保存失敗 | target plan の Auto-add 上限、target repo 不可視、filter 不正 | warning 内容と UI を確認。 |
 | Collaborator skip | target user / team が存在しない、権限不足 | mapping と target org membership を確認。 |
 
@@ -523,7 +523,7 @@ warning / error が出た場合は、次の観点で切り分けます。
 | N-3 | target token を source token に差し替えて import | 権限不足で失敗し、Project を壊さない。 |
 | N-4 | browser profile を間違える | ログイン / 権限エラーで失敗し、再ログイン案内が出る。 |
 | N-5 | Auto-add 上限に近い Project へ import | 超過分が warning + skip される。 |
-| N-6 | `verify` 前に target field value を手動変更 | `gpm verify` が差分を error として検出する。 |
+| N-6 | `verify` 前に target field value を手動変更 | `ghpmv verify` が差分を error として検出する。 |
 
 ---
 
@@ -532,7 +532,7 @@ warning / error が出た場合は、次の観点で切り分けます。
 手動テストごとに作った target Project / target repository は、結果記録後に削除します。
 
 ```powershell
-gh repo delete "$env:GPM_TARGET_ORG/$env:GPM_TARGET_REPO" --yes
+gh repo delete "$env:GHPMV_TARGET_ORG/$env:GHPMV_TARGET_REPO" --yes
 ```
 
 Project は GitHub UI から削除するか、GraphQL mutation で削除します。誤削除防止のため、Project URL と title を確認してから実行してください。
@@ -558,7 +558,7 @@ GEI command/version:
 GEI migration status:
 GEI log URL/file:
 
-gpm commit/version:
+ghpmv commit/version:
 Export result:
 Import result:
 Verify result:
@@ -584,21 +584,21 @@ Follow-up issues:
 GHEC with data residency target を検証する場合は、通常手順に以下を追加します。
 
 1. target browser profile を tenant host で作成する。
-2. `gpm import` / `gpm verify` に `--target-base-url https://api.TENANT.ghe.com` と `--browser-base-url https://TENANT.ghe.com` を指定する。
+2. `ghpmv import` / `ghpmv verify` に `--target-base-url https://api.TENANT.ghe.com` と `--browser-base-url https://TENANT.ghe.com` を指定する。
 3. target repository mapping は tenant 内 repository にする。GHEC-DR tenant 外の repository link は不可。
 4. GEI 側の target organization / enterprise 設定が DR tenant に向いていることを GEI の公式手順で確認する。
 
 例:
 
 ```powershell
-dotnet run --project src/Gpm.Cli -- import `
-  --org $env:GPM_TARGET_ORG `
-  --in $env:GPM_SNAPSHOT_DIR `
-  --token $env:GPM_TARGET_TOKEN `
+dotnet run --project src/Ghpmv.Cli -- import `
+  --org $env:GHPMV_TARGET_ORG `
+  --in $env:GHPMV_SNAPSHOT_DIR `
+  --token $env:GHPMV_TARGET_TOKEN `
   --target-base-url https://api.TENANT.ghe.com `
   --browser-base-url https://TENANT.ghe.com `
-  --repo-mapping "$env:GPM_SNAPSHOT_DIR/repository-mappings.csv" `
-  --user-mapping "$env:GPM_SNAPSHOT_DIR/user-mappings.csv" `
+  --repo-mapping "$env:GHPMV_SNAPSHOT_DIR/repository-mappings.csv" `
+  --user-mapping "$env:GHPMV_SNAPSHOT_DIR/user-mappings.csv" `
   --enable-browser-automation `
   --browser-profile target `
   --no-update-check
@@ -607,15 +607,15 @@ dotnet run --project src/Gpm.Cli -- import `
 続けて browser-assisted verify を実行します。
 
 ```powershell
-dotnet run --project src/Gpm.Cli -- verify `
-  --org $env:GPM_TARGET_ORG `
+dotnet run --project src/Ghpmv.Cli -- verify `
+  --org $env:GHPMV_TARGET_ORG `
   --project <target-project-number> `
-  --in $env:GPM_SNAPSHOT_DIR `
-  --token $env:GPM_TARGET_TOKEN `
+  --in $env:GHPMV_SNAPSHOT_DIR `
+  --token $env:GHPMV_TARGET_TOKEN `
   --target-base-url https://api.TENANT.ghe.com `
   --browser-base-url https://TENANT.ghe.com `
-  --repo-mapping "$env:GPM_SNAPSHOT_DIR/repository-mappings.csv" `
-  --user-mapping "$env:GPM_SNAPSHOT_DIR/user-mappings.csv" `
+  --repo-mapping "$env:GHPMV_SNAPSHOT_DIR/repository-mappings.csv" `
+  --user-mapping "$env:GHPMV_SNAPSHOT_DIR/user-mappings.csv" `
   --enable-browser-automation `
   --browser-profile target `
   --no-update-check

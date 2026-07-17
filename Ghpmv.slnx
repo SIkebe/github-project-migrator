@@ -1,0 +1,11 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Ghpmv.Cli/Ghpmv.Cli.csproj" />
+    <Project Path="src/Ghpmv.Core/Ghpmv.Core.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Ghpmv.Browser.Tests/Ghpmv.Browser.Tests.csproj" />
+    <Project Path="tests/Ghpmv.Core.Tests/Ghpmv.Core.Tests.csproj" />
+    <Project Path="tests/Ghpmv.Integration.Tests/Ghpmv.Integration.Tests.csproj" />
+  </Folder>
+</Solution>

@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Playwright" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Ghpmv.Core.Tests" />
+    <InternalsVisibleTo Include="Ghpmv.Browser.Tests" />
+  </ItemGroup>
+
+</Project>

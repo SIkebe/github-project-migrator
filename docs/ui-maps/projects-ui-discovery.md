@@ -42,7 +42,7 @@
 3. **編集モードで実効差分が無いと Save ボタンは disabled のまま** → クリック待ちでハング。disabled なら Discard で抜ける(SaveWorkflowAsync 実装済み)
 4. **リポジトリ picker は入力後に非同期で再フィルター**(デバウンス+fetch)→ option は CountAsync 即時判定でなく WaitForAsync(10s) で待つ
 5. View タブの**リネーム用ダブルクリックは新規タブ作成直後に不発になることがある** → textbox 出現を 5s 待ち×3 リトライ
-6. **EMU/SAML のセッションは短命**(数時間で失効)。失効時は `/login` リダイレクトではなく **enterprise SSO インタースティシャル**("Single sign-on to <Enterprise>" + Continue)が出る。BrowserSession.GotoAsync は Continue 自動クリックで IdP セッションが生きていれば透過再認証、死んでいれば失敗 → `gpm login` 再実行が必要(IdP セッションまで失効すると素の `/login` リダイレクトになる)
+6. **EMU/SAML のセッションは短命**(数時間で失効)。失効時は `/login` リダイレクトではなく **enterprise SSO インタースティシャル**("Single sign-on to <Enterprise>" + Continue)が出る。BrowserSession.GotoAsync は Continue 自動クリックで IdP セッションが生きていれば透過再認証、死んでいれば失敗 → `ghpmv login` 再実行が必要(IdP セッションまで失効すると素の `/login` リダイレクトになる)
 7. 並列テスト実行時(browser E2E + integration 同時)は SPA ハイドレーションが遅くなる → Playwright 既定タイムアウトは 30s に設定
 
 ## Project collaborators UI export discovery (2026-07-06)
