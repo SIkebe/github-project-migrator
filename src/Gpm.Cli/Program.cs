@@ -355,7 +355,7 @@ importCommand.SetAction(async (parseResult, cancellationToken) =>
             Console.Error.WriteLine("Project already exists; skipped without making changes.");
             Console.WriteLine(result.Url);
             Console.WriteLine(string.Create(CultureInfo.InvariantCulture,
-                $"result=skipped project={result.ProjectNumber}"));
+                $"result={FormatProjectImportOutcome(result.Outcome)} project={result.ProjectNumber}"));
             await NotifyUpdateAsync(updateCheck);
             return 0;
         }
@@ -413,7 +413,7 @@ importCommand.SetAction(async (parseResult, cancellationToken) =>
 
         Console.WriteLine(result.Url);
         Console.WriteLine(string.Create(CultureInfo.InvariantCulture,
-            $"result={result.Outcome.ToString().ToLowerInvariant()} project={result.ProjectNumber}"));
+            $"result={FormatProjectImportOutcome(result.Outcome)} project={result.ProjectNumber}"));
         Console.WriteLine(string.Create(CultureInfo.InvariantCulture,
             $"items: created={itemResult.Created} skipped={itemResult.Skipped} warnings={itemResult.Warnings.Count}"));
         if (enableBrowserAutomation)
@@ -955,3 +955,11 @@ static void WriteVerifyReport(VerifyReport report)
     Console.WriteLine(string.Create(CultureInfo.InvariantCulture,
         $"{errors} error(s), {warnings} warning(s), {infos} info(s). {(errors == 0 ? "Match." : "Mismatch.")}"));
 }
+
+static string FormatProjectImportOutcome(ProjectImportOutcome outcome) => outcome switch
+{
+    ProjectImportOutcome.Created => "created",
+    ProjectImportOutcome.Updated => "updated",
+    ProjectImportOutcome.Skipped => "skipped",
+    _ => throw new ArgumentOutOfRangeException(nameof(outcome), outcome, "Unsupported project import outcome."),
+};

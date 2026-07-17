@@ -16,7 +16,80 @@ public class CliImportTests
         var directory = Path.Combine(Path.GetTempPath(), "gpm-cli-skip-" + Guid.NewGuid().ToString("N"));
         await SnapshotFile.SaveAsync(SnapshotWithDownstreamContent(), directory, cancellationToken);
 
-        using var server = new GraphQlStubServer();
+        using var server = new GraphQlStubServer(ExistingProjectResponse);
+        try
+        {
+            var result = await RunCliAsync(
+                directory,
+                server,
+                "--on-conflict", "skip",
+                "--enable-browser-automation");
+
+            Assert.Equal(0, result.ExitCode);
+            Assert.Contains("result=skipped project=42", result.Output, StringComparison.Ordinal);
+            Assert.Contains("skipped without making changes", result.Error, StringComparison.Ordinal);
+            Assert.Single(server.RequestBodies);
+            Assert.DoesNotContain("mutation", server.RequestBodies[0], StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Conflict_fail_returns_error_without_a_result_line()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var directory = Path.Combine(Path.GetTempPath(), "gpm-cli-fail-" + Guid.NewGuid().ToString("N"));
+        await SnapshotFile.SaveAsync(MinimalSnapshot(), directory, cancellationToken);
+
+        using var server = new GraphQlStubServer(ExistingProjectResponse);
+        try
+        {
+            var result = await RunCliAsync(directory, server, "--on-conflict", "fail");
+
+            Assert.Equal(1, result.ExitCode);
+            Assert.Contains("already exists", result.Error, StringComparison.Ordinal);
+            Assert.DoesNotContain("result=", result.Output, StringComparison.Ordinal);
+            Assert.Single(server.RequestBodies);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Import_into_existing_project_emits_stable_updated_result()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var directory = Path.Combine(Path.GetTempPath(), "gpm-cli-update-" + Guid.NewGuid().ToString("N"));
+        await SnapshotFile.SaveAsync(MinimalSnapshot(), directory, cancellationToken);
+
+        using var server = new GraphQlStubServer(
+            ProjectByNumberResponse,
+            UpdateProjectResponse,
+            EmptyFieldsResponse);
+        try
+        {
+            var result = await RunCliAsync(directory, server, "--project-number", "42");
+
+            Assert.Equal(0, result.ExitCode);
+            Assert.Contains("result=updated project=42", result.Output, StringComparison.Ordinal);
+            Assert.Equal(3, server.RequestBodies.Count);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    private static async Task<(int ExitCode, string Output, string Error)> RunCliAsync(
+        string directory,
+        GraphQlStubServer server,
+        params string[] additionalArguments)
+    {
         var originalOut = Console.Out;
         var originalError = Console.Error;
         using var output = new StringWriter();
@@ -27,23 +100,20 @@ public class CliImportTests
             Console.SetOut(output);
             Console.SetError(error);
 
+            var arguments = new List<string>
+            {
+                "import",
+                "--org", "target",
+                "--in", directory,
+                "--token", "dummy-token",
+                "--target-base-url", server.GraphQlUrl,
+                "--no-update-check",
+            };
+            arguments.AddRange(additionalArguments);
+
             var entryPoint = Assembly.Load("gpm").EntryPoint
                 ?? throw new InvalidOperationException("The gpm entry point was not found.");
-            var invocation = entryPoint.Invoke(
-                null,
-                [
-                    new[]
-                    {
-                        "import",
-                        "--org", "target",
-                        "--in", directory,
-                        "--token", "dummy-token",
-                        "--target-base-url", server.GraphQlUrl,
-                        "--on-conflict", "skip",
-                        "--enable-browser-automation",
-                        "--no-update-check",
-                    },
-                ]);
+            var invocation = entryPoint.Invoke(null, [arguments.ToArray()]);
             var exitCode = invocation switch
             {
                 int code => code,
@@ -51,19 +121,29 @@ public class CliImportTests
                 _ => throw new InvalidOperationException("The gpm entry point returned an unexpected result."),
             };
 
-            Assert.Equal(0, exitCode);
-            Assert.Contains("result=skipped project=42", output.ToString(), StringComparison.Ordinal);
-            Assert.Contains("skipped without making changes", error.ToString(), StringComparison.Ordinal);
-            Assert.Single(server.RequestBodies);
-            Assert.DoesNotContain("mutation", server.RequestBodies[0], StringComparison.OrdinalIgnoreCase);
+            return (exitCode, output.ToString(), error.ToString());
         }
         finally
         {
             Console.SetOut(originalOut);
             Console.SetError(originalError);
-            Directory.Delete(directory, recursive: true);
         }
     }
+
+    private static ProjectSnapshot MinimalSnapshot() => new()
+    {
+        SchemaVersion = ProjectSnapshot.CurrentSchemaVersion,
+        Project = new ProjectInfoSnapshot
+        {
+            Title = "Roadmap",
+            Public = false,
+            Closed = false,
+        },
+        Fields = [],
+        Views = [],
+        Workflows = [],
+        Items = [],
+    };
 
     private static ProjectSnapshot SnapshotWithDownstreamContent() => new()
     {
@@ -114,22 +194,37 @@ public class CliImportTests
         ],
     };
 
+    private const string ExistingProjectResponse =
+        """
+        {"data":{"organization":{"projectsV2":{
+          "nodes":[{"id":"PVT_existing","number":42,"title":"Roadmap","url":"https://github.com/orgs/target/projects/42"}],
+          "pageInfo":{"hasNextPage":false,"endCursor":null}
+        }}}}
+        """;
+
+    private const string ProjectByNumberResponse =
+        """
+        {"data":{"organization":{"projectV2":{
+          "id":"PVT_existing","number":42,"title":"Roadmap","url":"https://github.com/orgs/target/projects/42"
+        }}}}
+        """;
+
+    private const string UpdateProjectResponse =
+        """{"data":{"updateProjectV2":{"projectV2":{"id":"PVT_existing"}}}}""";
+
+    private const string EmptyFieldsResponse =
+        """{"data":{"node":{"fields":{"nodes":[]}}}}""";
+
     private sealed class GraphQlStubServer : IDisposable
     {
-        private const string ExistingProjectResponse =
-            """
-            {"data":{"organization":{"projectsV2":{
-              "nodes":[{"id":"PVT_existing","number":42,"title":"Roadmap","url":"https://github.com/orgs/target/projects/42"}],
-              "pageInfo":{"hasNextPage":false,"endCursor":null}
-            }}}}
-            """;
-
         private readonly HttpListener _listener = new();
         private readonly CancellationTokenSource _cancellation = new();
+        private readonly string[] _responses;
         private readonly Task _serverTask;
 
-        public GraphQlStubServer()
+        public GraphQlStubServer(params string[] responses)
         {
+            _responses = responses;
             using var portReservation = new TcpListener(IPAddress.Loopback, 0);
             portReservation.Start();
             var port = ((IPEndPoint)portReservation.LocalEndpoint).Port;
@@ -178,7 +273,8 @@ public class CliImportTests
                 using var reader = new StreamReader(context.Request.InputStream, context.Request.ContentEncoding);
                 RequestBodies.Add(await reader.ReadToEndAsync(cancellationToken));
 
-                var response = Encoding.UTF8.GetBytes(ExistingProjectResponse);
+                var responseIndex = Math.Min(RequestBodies.Count - 1, _responses.Length - 1);
+                var response = Encoding.UTF8.GetBytes(_responses[responseIndex]);
                 context.Response.ContentType = "application/json";
                 context.Response.ContentLength64 = response.Length;
                 await context.Response.OutputStream.WriteAsync(response, cancellationToken);
