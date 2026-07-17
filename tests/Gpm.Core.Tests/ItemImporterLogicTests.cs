@@ -69,12 +69,23 @@ public class ItemImporterLogicTests
             };
             log.Items["0"] = "PVTI_item0";
             log.Items["2"] = "PVTI_item2";
+            log.ItemStates["issue:0"] = new ImportItemState
+            {
+                TargetItemId = "PVTI_item0",
+                TargetContentIdentity = "ISSUE:target/repo:1",
+            };
+            log.ItemStates["issue:2"] = new ImportItemState
+            {
+                TargetItemId = "PVTI_item2",
+                TargetContentIdentity = "ISSUE:target/repo:2",
+            };
             log.PendingDrafts["3"] = new PendingDraftOperation
             {
                 OperationId = "operation-3",
                 AttemptedAt = DateTimeOffset.Parse("2026-07-17T05:00:00Z", System.Globalization.CultureInfo.InvariantCulture),
                 Title = "Pending draft",
                 Body = "Pending body",
+                AssigneeIds = [],
                 ExistingItemIds = ["PVTI_existing"],
             };
             log.PendingContents["4"] = new PendingContentOperation
@@ -141,6 +152,7 @@ public class ItemImporterLogicTests
                 OperationId = "operation-0",
                 AttemptedAt = DateTimeOffset.UtcNow,
                 Title = "Pending draft",
+                AssigneeIds = [],
                 ExistingItemIds = [],
             };
             await log.SaveAsync(directory, cancellationToken);
@@ -279,6 +291,14 @@ public class ItemImporterLogicTests
             var malformed = await Assert.ThrowsAsync<InvalidDataException>(
                 () => ImportLog.LoadAsync(directory, cancellationToken));
             Assert.Contains("malformed item state", malformed.Message, StringComparison.Ordinal);
+
+            await File.WriteAllTextAsync(
+                Path.Combine(directory, ImportLog.FileName),
+                """{"schemaVersion":2,"projectId":"PVT_target","sourceSnapshotFingerprint":"fingerprint","items":{"0":"PVTI_orphan"},"itemStates":{},"pendingDrafts":{},"pendingContents":{}}""",
+                cancellationToken);
+            var inconsistent = await Assert.ThrowsAsync<InvalidDataException>(
+                () => ImportLog.LoadAsync(directory, cancellationToken));
+            Assert.Contains("inconsistent item mappings", inconsistent.Message, StringComparison.Ordinal);
         }
         finally
         {

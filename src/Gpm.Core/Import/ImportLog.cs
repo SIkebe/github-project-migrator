@@ -75,12 +75,40 @@ public sealed record ImportLog
                 || log.ItemStates is null
                 || log.PendingDrafts is null
                 || log.PendingContents is null
+                || log.Items.Any(pair =>
+                    string.IsNullOrWhiteSpace(pair.Key)
+                    || string.IsNullOrWhiteSpace(pair.Value))
                 || log.ItemStates.Any(pair =>
                     string.IsNullOrWhiteSpace(pair.Key)
                     || pair.Value is null
-                    || string.IsNullOrWhiteSpace(pair.Value.TargetItemId)))
+                    || string.IsNullOrWhiteSpace(pair.Value.TargetItemId)
+                    || string.IsNullOrWhiteSpace(pair.Value.TargetContentIdentity))
+                || log.PendingDrafts.Any(pair =>
+                    string.IsNullOrWhiteSpace(pair.Key)
+                    || pair.Value is null
+                    || string.IsNullOrWhiteSpace(pair.Value.OperationId)
+                    || pair.Value.AssigneeIds is null
+                    || pair.Value.ExistingItemIds is null
+                    || pair.Value.AssigneeIds.Any(string.IsNullOrWhiteSpace)
+                    || pair.Value.ExistingItemIds.Any(string.IsNullOrWhiteSpace))
+                || log.PendingContents.Any(pair =>
+                    string.IsNullOrWhiteSpace(pair.Key)
+                    || pair.Value is null
+                    || string.IsNullOrWhiteSpace(pair.Value.OperationId)
+                    || string.IsNullOrWhiteSpace(pair.Value.ContentId)
+                    || pair.Value.ExistingItemIds is null
+                    || pair.Value.ExistingItemIds.Any(string.IsNullOrWhiteSpace)))
             {
                 throw new InvalidDataException($"{FileName} contains malformed item state and cannot be resumed safely.");
+            }
+            var mappedIds = log.Items.Values.ToHashSet(StringComparer.Ordinal);
+            var stateIds = log.ItemStates.Values.Select(state => state.TargetItemId).ToHashSet(StringComparer.Ordinal);
+            if (mappedIds.Count != log.Items.Count
+                || stateIds.Count != log.ItemStates.Count
+                || !mappedIds.SetEquals(stateIds))
+            {
+                throw new InvalidDataException(
+                    $"{FileName} contains inconsistent item mappings and cannot be resumed safely.");
             }
 
             return log;
