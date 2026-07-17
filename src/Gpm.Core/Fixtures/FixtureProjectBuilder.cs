@@ -56,6 +56,13 @@ public sealed class FixtureProjectBuilder
                 $"{ImportLog.FileName} targets project '{itemLog.ProjectId}', but that fixture project was not found.");
         }
 
+        if (existing is not null && !hasPendingOperations && itemLog is null)
+        {
+            OnProgress?.Invoke(string.Create(CultureInfo.InvariantCulture,
+                $"Fixture project already exists: {existing.Url}"));
+            return new FixtureProjectSetupResult(existing.Number, existing.Url, Created: false);
+        }
+
         var viewerLogin = await _graphQl.GetViewerLoginAsync(cancellationToken).ConfigureAwait(false);
         var repositoryFullName = $"{organization}/{repositoryName}";
         var pullRequestNumber = itemLog is null
