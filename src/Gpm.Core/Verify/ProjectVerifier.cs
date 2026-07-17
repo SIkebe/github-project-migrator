@@ -2,6 +2,7 @@ using System.Collections.ObjectModel;
 using System.Globalization;
 using Gpm.Core.Export;
 using Gpm.Core.GitHub;
+using Gpm.Core.Import;
 using Gpm.Core.Snapshot;
 
 namespace Gpm.Core.Verify;
@@ -45,6 +46,9 @@ public sealed class ProjectVerifier
     /// <summary>Source → target user mapping, used to normalize explicit user collaborators before comparison.</summary>
     public IReadOnlyDictionary<string, string> UserMapping { get; init; } = ReadOnlyDictionary<string, string>.Empty;
 
+    /// <summary>Source → target organization mapping, used to normalize View and Workflow filters.</summary>
+    public IReadOnlyDictionary<string, string> OrganizationMapping { get; init; } = ReadOnlyDictionary<string, string>.Empty;
+
     /// <summary>
     /// Optional post-processing hook for the target snapshot. Browser-assisted verification
     /// uses this to re-read UI-only settings before comparison.
@@ -64,7 +68,7 @@ public sealed class ProjectVerifier
             PostExportAsync = PostExportAsync,
         };
         var target = await exporter.ExportAsync(targetOrgLogin, targetProjectNumber, cancellationToken).ConfigureAwait(false);
-        return Compare(source, target, RepositoryMapping, UserMapping);
+        return Compare(source, target, RepositoryMapping, UserMapping, OrganizationMapping);
     }
 
     /// <summary>Pure snapshot-to-snapshot comparison (no API access).</summary>
@@ -81,11 +85,27 @@ public sealed class ProjectVerifier
         ProjectSnapshot target,
         IReadOnlyDictionary<string, string> repositoryMapping,
         IReadOnlyDictionary<string, string> userMapping)
+        => Compare(source, target, repositoryMapping, userMapping, ReadOnlyDictionary<string, string>.Empty);
+
+    /// <summary>Pure snapshot comparison with all identity-bearing source values normalized through mappings.</summary>
+    public static VerifyReport Compare(
+        ProjectSnapshot source,
+        ProjectSnapshot target,
+        IReadOnlyDictionary<string, string> repositoryMapping,
+        IReadOnlyDictionary<string, string> userMapping,
+        IReadOnlyDictionary<string, string> organizationMapping)
     {
         ArgumentNullException.ThrowIfNull(source);
         ArgumentNullException.ThrowIfNull(target);
         ArgumentNullException.ThrowIfNull(repositoryMapping);
         ArgumentNullException.ThrowIfNull(userMapping);
+        ArgumentNullException.ThrowIfNull(organizationMapping);
+
+        source = ProjectFilterTransformer.TransformSnapshot(
+            source,
+            userMapping,
+            repositoryMapping,
+            organizationMapping);
 
         if (repositoryMapping.Count > 0)
         {
@@ -134,9 +154,26 @@ public sealed class ProjectVerifier
                 ? mappedRepository
                 : repository).ToList(),
             Workflows = source.Workflows.Select(workflow => workflow.Ui?.Repository is { Length: > 0 } repository
-                ? workflow with { Ui = workflow.Ui with { Repository = ResolveRepositoryName(repository, repositoryMapping) } }
+                ? workflow with
+                {
+                    Ui = workflow.Ui with
+                    {
+                        Repository = ResolveRepositoryForVerification(repository, repositoryMapping),
+                    },
+                }
                 : workflow).ToList(),
         };
+    }
+
+    private static string ResolveRepositoryForVerification(
+        string repository,
+        IReadOnlyDictionary<string, string> repositoryMapping)
+    {
+        var resolution = ProjectFilterTransformer.ResolveRepository(repository, repositoryMapping);
+        return resolution.Status == RepositoryResolutionStatus.Ambiguous
+            ? throw new InvalidOperationException(
+                $"Auto-add repository '{repository}' has ambiguous repository mappings.")
+            : resolution.Target ?? repository;
     }
 
     private static ProjectSnapshot ApplyUserMapping(ProjectSnapshot source, IReadOnlyDictionary<string, string> userMapping)
@@ -149,25 +186,6 @@ public sealed class ProjectVerifier
                     ? collaborator with { Login = mappedLogin }
                     : collaborator).ToList(),
         };
-    }
-
-    private static string ResolveRepositoryName(string sourceRepository, IReadOnlyDictionary<string, string> mapping)
-    {
-        foreach (var (source, target) in mapping)
-        {
-            if (string.Equals(ShortName(source), sourceRepository, StringComparison.OrdinalIgnoreCase))
-            {
-                return ShortName(target);
-            }
-        }
-
-        return sourceRepository;
-
-        static string ShortName(string repository)
-        {
-            var separator = repository.LastIndexOf('/');
-            return separator < 0 ? repository : repository[(separator + 1)..];
-        }
     }
 
     // ----- project metadata -----

@@ -253,6 +253,10 @@ var userMappingOption = new Option<string?>("--user-mapping")
 {
     Description = "CSV file mapping source user logins to target logins (header: mannequin-user,mannequin-id,target-user; mannequin-id is ignored).",
 };
+var organizationMappingOption = new Option<string?>("--org-mapping")
+{
+    Description = "CSV file mapping source organizations to target organizations (header: source,target). Repository owner mappings are inferred when unambiguous.",
+};
 
 var importCommand = new Command("import", "Import a JSON snapshot into the target organization or user.")
 {
@@ -264,6 +268,7 @@ var importCommand = new Command("import", "Import a JSON snapshot into the targe
     onConflictOption,
     repoMappingOption,
     userMappingOption,
+    organizationMappingOption,
     tokenOption,
     targetBaseUrlOption,
     enableBrowserOption,
@@ -331,9 +336,63 @@ importCommand.SetAction(async (parseResult, cancellationToken) =>
         var userMapping = userMappingPath is null
             ? System.Collections.ObjectModel.ReadOnlyDictionary<string, string>.Empty
             : CsvMapping.LoadUserMapping(userMappingPath);
+        var organizationMappingPath = parseResult.GetValue(organizationMappingOption);
+        var organizationMapping = organizationMappingPath is null
+            ? System.Collections.ObjectModel.ReadOnlyDictionary<string, string>.Empty
+            : CsvMapping.Load(organizationMappingPath);
+
+        var snapshot = await SnapshotFile.LoadAsync(inDirectory, cancellationToken);
+        if (projectTitle is not null)
+        {
+            snapshot = snapshot with { Project = snapshot.Project with { Title = projectTitle } };
+        }
 
         async Task ValidateBrowserBeforeWriteAsync(CancellationToken ct)
         {
+            var filterTransforms = ProjectFilterTransformer.AnalyzeSnapshot(
+                snapshot,
+                userMapping,
+                repoMapping,
+                organizationMapping);
+            foreach (var transform in filterTransforms)
+            {
+                Console.Error.WriteLine(
+                    $"Filter preflight {transform.Location}: '{transform.Result.Original}' -> '{transform.Result.Transformed}'");
+
+                foreach (var identifier in transform.Result.Unresolved)
+                {
+                    Console.Error.WriteLine(
+                        $"warning: Filter preflight {transform.Location}: unmapped {identifier.Qualifier} value '{identifier.Value}'");
+                }
+
+                foreach (var identifier in transform.Result.Unchanged)
+                {
+                    Console.Error.WriteLine(
+                        $"Filter preflight {transform.Location}: mapping not required for {identifier.Qualifier} value '{identifier.Value}'");
+                }
+
+                foreach (var identifier in transform.Result.Unsupported)
+                {
+                    Console.Error.WriteLine(
+                        $"warning: Filter preflight {transform.Location}: unsupported qualifier '{identifier.Qualifier}' was left unchanged");
+                }
+            }
+
+            var repositoryResolutions = ProjectFilterTransformer.AnalyzeAutoAddRepositories(snapshot, repoMapping);
+            foreach (var repository in repositoryResolutions.Where(result =>
+                         result.Resolution.Status != RepositoryResolutionStatus.Mapped))
+            {
+                Console.Error.WriteLine(
+                    $"warning: Filter preflight {repository.Location}: {repository.Resolution.Status.ToString().ToLowerInvariant()} Auto-add repository '{repository.Resolution.Source}'");
+            }
+
+            if (filterTransforms.Any(transform => transform.Result.Unresolved.Count > 0)
+                || repositoryResolutions.Any(result => result.Resolution.Status != RepositoryResolutionStatus.Mapped))
+            {
+                throw new InvalidOperationException(
+                    "Filter mapping preflight failed; fill the generated mapping CSV rows before importing.");
+            }
+
             session = new BrowserSession(new BrowserSessionOptions
             {
                 BaseUrl = BrowserBaseUrl.Resolve(graphQlBaseUrl, parseResult.GetValue(browserBaseUrlOption)),
@@ -352,12 +411,6 @@ importCommand.SetAction(async (parseResult, cancellationToken) =>
             OnProgress = Console.Error.WriteLine,
             BeforeWriteAsync = enableBrowserAutomation ? ValidateBrowserBeforeWriteAsync : null,
         };
-
-        var snapshot = await SnapshotFile.LoadAsync(inDirectory, cancellationToken);
-        if (projectTitle is not null)
-        {
-            snapshot = snapshot with { Project = snapshot.Project with { Title = projectTitle } };
-        }
 
         var result = projectNumber is { } number
             ? await importer.ImportIntoAsync(snapshot, org, number, cancellationToken)
@@ -387,7 +440,13 @@ importCommand.SetAction(async (parseResult, cancellationToken) =>
         if (enableBrowserAutomation)
         {
             System.Diagnostics.Debug.Assert(session is not null);
-            var viewImporter = new ViewUiImporter(session) { OnProgress = Console.Error.WriteLine };
+            var viewImporter = new ViewUiImporter(session)
+            {
+                RepositoryMapping = repoMapping,
+                UserMapping = userMapping,
+                OrganizationMapping = organizationMapping,
+                OnProgress = Console.Error.WriteLine,
+            };
             await viewImporter.ImportAsync(snapshot, org, result.ProjectNumber, cancellationToken);
             foreach (var warning in viewImporter.Warnings)
             {
@@ -399,6 +458,8 @@ importCommand.SetAction(async (parseResult, cancellationToken) =>
             var workflowImporter = new WorkflowUiImporter(session)
             {
                 RepositoryMapping = repoMapping,
+                UserMapping = userMapping,
+                OrganizationMapping = organizationMapping,
                 OnProgress = Console.Error.WriteLine,
             };
             await workflowImporter.ImportAsync(snapshot, org, result.ProjectNumber, cancellationToken);
@@ -471,6 +532,7 @@ var verifyCommand = new Command("verify", "Verify a migrated project against the
     inOption,
     repoMappingOption,
     userMappingOption,
+    organizationMappingOption,
     tokenOption,
     targetBaseUrlOption,
     enableBrowserOption,
@@ -529,12 +591,17 @@ verifyCommand.SetAction(async (parseResult, cancellationToken) =>
         var userMapping = userMappingPath is null
             ? System.Collections.ObjectModel.ReadOnlyDictionary<string, string>.Empty
             : CsvMapping.LoadUserMapping(userMappingPath);
+        var organizationMappingPath = parseResult.GetValue(organizationMappingOption);
+        var organizationMapping = organizationMappingPath is null
+            ? System.Collections.ObjectModel.ReadOnlyDictionary<string, string>.Empty
+            : CsvMapping.Load(organizationMappingPath);
         var verifier = new ProjectVerifier(client)
         {
             OnProgress = Console.Error.WriteLine,
             OwnerType = ownerType,
             RepositoryMapping = repoMapping,
             UserMapping = userMapping,
+            OrganizationMapping = organizationMapping,
         };
         ViewUiExporter? viewExporter = null;
         WorkflowUiExporter? workflowExporter = null;

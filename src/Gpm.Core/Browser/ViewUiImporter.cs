@@ -1,4 +1,6 @@
+using System.Collections.ObjectModel;
 using System.Globalization;
+using Gpm.Core.Import;
 using Gpm.Core.Snapshot;
 using Microsoft.Playwright;
 
@@ -38,6 +40,12 @@ public sealed class ViewUiImporter
 
     /// <summary>Invoked with a human-readable progress message per view.</summary>
     public Action<string>? OnProgress { get; set; }
+
+    public IReadOnlyDictionary<string, string> RepositoryMapping { get; init; } = ReadOnlyDictionary<string, string>.Empty;
+
+    public IReadOnlyDictionary<string, string> UserMapping { get; init; } = ReadOnlyDictionary<string, string>.Empty;
+
+    public IReadOnlyDictionary<string, string> OrganizationMapping { get; init; } = ReadOnlyDictionary<string, string>.Empty;
 
     /// <summary>Warnings collected while importing (settings that could not be applied).</summary>
     public IReadOnlyList<string> Warnings => _warnings;
@@ -355,7 +363,12 @@ public sealed class ViewUiImporter
         // Filter last: it is typed into the filter bar, not the View menu.
         if (!string.IsNullOrWhiteSpace(view.Filter))
         {
-            await TrySetFilterAsync(page, view.Filter, view.Name, cancellationToken).ConfigureAwait(false);
+            var transformed = ProjectFilterTransformer.Transform(
+                view.Filter,
+                UserMapping,
+                RepositoryMapping,
+                OrganizationMapping);
+            await TrySetFilterAsync(page, transformed.Transformed, view.Name, cancellationToken).ConfigureAwait(false);
         }
     }
 

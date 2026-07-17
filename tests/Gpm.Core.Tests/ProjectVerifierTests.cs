@@ -819,6 +819,64 @@ public class ProjectVerifierTests
     }
 
     [Fact]
+    public void Identity_mappings_normalize_view_and_workflow_filters()
+    {
+        var source = BuildSnapshot() with
+        {
+            Views =
+            [
+                BuildSnapshot().Views[0] with
+                {
+                    Filter = "assignee:old-user repo:source-org/source-repo org:source-org",
+                },
+            ],
+            Workflows =
+            [
+                BuildSnapshot().Workflows[0] with
+                {
+                    Ui = new WorkflowUiSnapshot { Filter = "author:old-user" },
+                },
+            ],
+        };
+        var target = source with
+        {
+            Views =
+            [
+                source.Views[0] with
+                {
+                    Filter = "assignee:old-user_shortcode repo:target-org/target-repo org:target-org",
+                },
+            ],
+            Workflows =
+            [
+                source.Workflows[0] with
+                {
+                    Ui = source.Workflows[0].Ui! with { Filter = "author:old-user_shortcode" },
+                },
+            ],
+        };
+
+        var report = ProjectVerifier.Compare(
+            source,
+            target,
+            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["source-org/source-repo"] = "target-org/target-repo",
+            },
+            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["old-user"] = "old-user_shortcode",
+            },
+            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["source-org"] = "target-org",
+            });
+
+        Assert.Empty(report.Differences);
+        Assert.True(report.IsMatch);
+    }
+
+    [Fact]
     public void Linked_repositories_are_not_verified_when_the_source_predates_capture()
     {
         var target = BuildSnapshot() with { LinkedRepositories = ["org/repo-a"] };

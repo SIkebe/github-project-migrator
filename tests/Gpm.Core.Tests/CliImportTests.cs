@@ -86,6 +86,48 @@ public class CliImportTests
             var request = Assert.Single(server.RequestBodies);
             Assert.DoesNotContain("mutation", request, StringComparison.OrdinalIgnoreCase);
         }
+
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Browser_filter_mapping_preflight_fails_before_any_mutation_by_default()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var directory = Path.Combine(Path.GetTempPath(), "gpm-cli-filter-preflight-" + Guid.NewGuid().ToString("N"));
+        var snapshot = MinimalSnapshot() with
+        {
+            Views =
+            [
+                new ViewSnapshot
+                {
+                    Number = 1,
+                    Name = "EMU",
+                    Layout = "TABLE_LAYOUT",
+                    Filter = "assignee:old-user",
+                    GroupByFields = [],
+                    SortByFields = [],
+                    VerticalGroupByFields = [],
+                    VisibleFields = [],
+                },
+            ],
+        };
+        await SnapshotFile.SaveAsync(snapshot, directory, cancellationToken);
+
+        using var server = new GraphQlStubServer(EmptyProjectsResponse, OwnerResponse);
+        try
+        {
+            var result = await RunCliAsync(directory, server, "--enable-browser-automation");
+
+            Assert.Equal(1, result.ExitCode);
+            Assert.Contains("unmapped assignee value 'old-user'", result.Error, StringComparison.Ordinal);
+            Assert.Contains("Filter mapping preflight failed", result.Error, StringComparison.Ordinal);
+            Assert.DoesNotContain(server.RequestBodies, request =>
+                request.Contains("mutation", StringComparison.OrdinalIgnoreCase));
+        }
         finally
         {
             Directory.Delete(directory, recursive: true);
@@ -230,6 +272,7 @@ public class CliImportTests
                 Number = 1,
                 Name = "Table",
                 Layout = "TABLE_LAYOUT",
+                Filter = "assignee:old-user",
                 GroupByFields = [],
                 SortByFields = [],
                 VerticalGroupByFields = [],
@@ -275,6 +318,16 @@ public class CliImportTests
           "pageInfo":{"hasNextPage":false,"endCursor":null}
         }}}}
         """;
+
+    private const string EmptyProjectsResponse =
+        """
+        {"data":{"organization":{"projectsV2":{
+          "nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}
+        }}}}
+        """;
+
+    private const string OwnerResponse =
+        """{"data":{"organization":{"id":"O_target"}}}""";
 
     private const string UpdateProjectResponse =
         """{"data":{"updateProjectV2":{"projectV2":{"id":"PVT_existing"}}}}""";

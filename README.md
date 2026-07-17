@@ -51,11 +51,11 @@ gpm export --org source-org --project 7 --out ./snapshot --token $SOURCE_TOKEN
 
 # 2. Import the snapshot into the target organization
 gpm import --org target-org --in ./snapshot --token $TARGET_TOKEN \
-  --repo-mapping repos.csv --user-mapping users.csv
+  --repo-mapping repos.csv --user-mapping users.csv --org-mapping orgs.csv
 
 # 3. Verify the migrated project against the snapshot
 gpm verify --org target-org --project 12 --in ./snapshot --token $TARGET_TOKEN \
-  --repo-mapping repos.csv --user-mapping users.csv
+  --repo-mapping repos.csv --user-mapping users.csv --org-mapping orgs.csv
 ```
 
 Tokens are resolved from `--token`, then the `GITHUB_TOKEN` / `GPM_TOKEN` environment variables.
@@ -99,7 +99,7 @@ For fine-grained PATs, create the token for the organization or user that owns t
 
 GitHub permissions are still enforced in addition to token permissions: the token owner must be allowed to read the source project and referenced repositories, and must be allowed to create or edit the target project.
 
-`--repo-mapping` / `--user-mapping` are CSV files that map repositories (`org/repo,org/repo`) and user logins across organizations — effectively required for cross-organization moves and EMU targets (`user_shortcode` logins). Repository mappings use the `source,target` header. User mappings use the same header as GitHub Enterprise Importer mannequin reclaim CSVs (`mannequin-user,mannequin-id,target-user`); for `gpm`, the mannequin ID is ignored and rows with a blank `target-user` are ignored. If a mannequin CSV has duplicate `mannequin-user` rows, reduce it to one row per login before using it with `gpm`, because project snapshots cannot disambiguate by mannequin ID. See `examples/repos.csv` and `examples/users.csv` for small sample files. `gpm export` generates ready-to-fill templates next to the snapshot: `repository-mappings.csv` (all distinct source repositories) and `user-mappings.csv` (draft-issue assignees and explicit user collaborators, only when present). Fill in the target column and pass the files to `gpm import` — existing files are never overwritten by later exports.
+`--repo-mapping` / `--user-mapping` / `--org-mapping` map repositories, user logins, and organizations across deployments. They are especially important for EMU targets, where user logins normally gain a `_shortcode` suffix. Repository and organization mappings use the `source,target` header. User mappings use the GitHub Enterprise Importer mannequin reclaim header (`mannequin-user,mannequin-id,target-user`); the mannequin ID is ignored. `gpm export` generates ready-to-fill `repository-mappings.csv`, `organization-mappings.csv`, and, when users are present, `user-mappings.csv`. Candidates include linked and Auto-add repositories plus identifiers found in View and Workflow filters. Existing files are never overwritten, and newly discovered candidates are reported. During browser-assisted import, `assignee:`, `author:`, `repo:`, and `org:` filter values are mapped structurally; other syntax is preserved. Organization mappings are also inferred from repository owners when unambiguous. Browser-assisted import stops before any project write when a supported filter value or Auto-add repository remains unmapped or ambiguous. API-only imports do not replay or validate UI-only Workflow settings. Pass the same mappings to `gpm verify`.
 
 ### More import/export options
 
@@ -169,6 +169,7 @@ gpm import --org target-org --in ./snapshot \
   --browser-base-url https://TENANT.ghe.com \
   --repo-mapping ./snapshot/repository-mappings.csv \
   --user-mapping ./snapshot/user-mappings.csv \
+  --org-mapping ./snapshot/organization-mappings.csv \
   --enable-browser-automation --browser-profile target
 
 gpm verify --org target-org --project 12 --in ./snapshot \
@@ -176,6 +177,7 @@ gpm verify --org target-org --project 12 --in ./snapshot \
   --browser-base-url https://TENANT.ghe.com \
   --repo-mapping ./snapshot/repository-mappings.csv \
   --user-mapping ./snapshot/user-mappings.csv \
+  --org-mapping ./snapshot/organization-mappings.csv \
   --enable-browser-automation --browser-profile target
 ```
 

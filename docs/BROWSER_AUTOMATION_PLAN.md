@@ -207,7 +207,7 @@ CreateView(spec):
 | W-9 | Auto-add to project | 対象リポジトリ + フィルター文字列。**複数インスタンス可**(プラン上限: Free 1 / Pro・Team 5 / GHEC(DR 含む)20) |
 | W-10 | Auto-add sub-issues to project(存在有無を D0 確認) | 有効/無効のみ想定 |
 
-Auto-add のフィルターに使える qualifier は `is:` `label:` `reason:` `assignee:` `no:`(negation 可)のみ。**export した値をそのまま転記**し、ターゲットで保存時にエラーになったら警告してその workflow をスキップ(文字列の変換はしない)。
+Workflow filter で確認済みの qualifier は `is:` `label:` `reason:` `updated:` `assignee:` `author:` `repo:` `org:` `no:`(negation 可)。`assignee:` / `author:` / `repo:` / `org:` の識別子は user / repository / organization mapping を構造的に適用し、その他の qualifier と構文は保持する。未解決の識別子または曖昧な Auto-add repository は browser-assisted import の最初の mutation 前にエラーとする。
 
 ### 4.2 export: Workflow 詳細の UI 読み取り
 

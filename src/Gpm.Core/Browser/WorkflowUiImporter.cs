@@ -1,6 +1,7 @@
 using System.Collections.ObjectModel;
 using System.Globalization;
 using Gpm.Core.GitHub;
+using Gpm.Core.Import;
 using Gpm.Core.Snapshot;
 using Microsoft.Playwright;
 
@@ -48,6 +49,10 @@ public sealed class WorkflowUiImporter
     /// <summary>Source → target repository mapping ("owner/name" form, shared with the item importer).</summary>
     public IReadOnlyDictionary<string, string> RepositoryMapping { get; init; } = ReadOnlyDictionary<string, string>.Empty;
 
+    public IReadOnlyDictionary<string, string> UserMapping { get; init; } = ReadOnlyDictionary<string, string>.Empty;
+
+    public IReadOnlyDictionary<string, string> OrganizationMapping { get; init; } = ReadOnlyDictionary<string, string>.Empty;
+
     /// <summary>Plan limit for Auto-add workflow instances on the target.</summary>
     public int MaxAutoAddWorkflows { get; init; } = DefaultMaxAutoAddWorkflows;
 
@@ -60,29 +65,19 @@ public sealed class WorkflowUiImporter
 
     /// <summary>
     /// Resolves an Auto-add repository short name through an "owner/name" mapping:
-    /// the first entry whose key's name part matches is applied; otherwise the
-    /// source name is used unchanged (same-name repository expected on the target).
+    /// a unique target short name is applied, no match leaves the source unchanged,
+    /// and multiple distinct targets throw <see cref="InvalidOperationException"/>.
     /// </summary>
     public static string ResolveRepositoryName(string sourceRepository, IReadOnlyDictionary<string, string> mapping)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(sourceRepository);
-        ArgumentNullException.ThrowIfNull(mapping);
-
-        foreach (var (source, target) in mapping)
+        var resolution = ProjectFilterTransformer.ResolveRepository(sourceRepository, mapping);
+        if (resolution.Status == RepositoryResolutionStatus.Ambiguous)
         {
-            if (string.Equals(ShortName(source), sourceRepository, StringComparison.Ordinal))
-            {
-                return ShortName(target);
-            }
+            throw new InvalidOperationException(
+                $"Auto-add repository '{sourceRepository}' has ambiguous repository mappings.");
         }
 
-        return sourceRepository;
-
-        static string ShortName(string repository)
-        {
-            var separator = repository.LastIndexOf('/');
-            return separator < 0 ? repository : repository[(separator + 1)..];
-        }
+        return resolution.Target ?? sourceRepository;
     }
 
     /// <summary>
@@ -150,7 +145,16 @@ public sealed class WorkflowUiImporter
                         continue;
                     }
 
-                    await ApplyAutoAddAsync(page, workflow, autoAddApplied == 0, firstAutoAddName, cancellationToken).ConfigureAwait(false);
+                    if (!await ApplyAutoAddAsync(
+                            page,
+                            workflow,
+                            autoAddApplied == 0,
+                            firstAutoAddName,
+                            cancellationToken).ConfigureAwait(false))
+                    {
+                        continue;
+                    }
+
                     autoAddApplied++;
                     firstAutoAddName ??= workflow.Name;
                 }
@@ -235,7 +239,7 @@ public sealed class WorkflowUiImporter
         var needsEdit = workflow.Ui is { } ui
             && (!ContentTypesEqual(ui.ContentTypes, current.ContentTypes)
                 || !ValueEquals(ui.StatusValue, current.StatusValue)
-                || !ValueEquals(ui.Filter, current.Filter));
+                || !ValueEquals(ui.Filter is null ? null : TransformFilter(ui.Filter), current.Filter));
 
         if (needsEdit)
         {
@@ -248,15 +252,15 @@ public sealed class WorkflowUiImporter
     }
 
     /// <summary>
-    /// Mirrors a disabled snapshot workflow. A target workflow that was never saved is
-    /// invisible to GraphQL (M7 discovery), so it is saved once ("Save and turn on
-    /// workflow" is clickable even without setting changes) and then toggled off —
-    /// producing a saved-but-disabled workflow like the source. Saved workflows only
-    /// mirror the toggle state (v1 applies no setting edits to disabled workflows).
+    /// Mirrors a disabled snapshot workflow. Unsaved workflows are saved once, while
+    /// saved workflows are edited when their mapped filter differs. Saving can enable
+    /// the workflow, so the target is toggled off again afterward.
     /// </summary>
     private async Task ApplyDisabledAsync(IPage page, WorkflowSnapshot workflow, WorkflowUiState current, CancellationToken cancellationToken)
     {
-        if (!current.IsSaved && workflow.Ui is not null)
+        var mappedFilterDiffers = workflow.Ui?.Filter is { } filter
+            && !ValueEquals(TransformFilter(filter), current.Filter);
+        if (workflow.Ui is not null && (!current.IsSaved || mappedFilterDiffers))
         {
             await EditAndSaveAsync(page, workflow, current, cancellationToken).ConfigureAwait(false);
 
@@ -304,9 +308,10 @@ public sealed class WorkflowUiImporter
             await SetStatusValueAsync(page, workflow.Name, statusValue, cancellationToken).ConfigureAwait(false);
         }
 
-        if (ui.Filter is { } filter && !ValueEquals(filter, current.Filter))
+        if (ui.Filter is { } filter && !ValueEquals(TransformFilter(filter), current.Filter))
         {
-            await Sel.WorkflowFiltersCombobox(page).First.FillAsync(filter).ConfigureAwait(false);
+            var transformed = TransformFilter(filter);
+            await Sel.WorkflowFiltersCombobox(page).First.FillAsync(transformed).ConfigureAwait(false);
             await PauseAsync(cancellationToken).ConfigureAwait(false);
         }
 
@@ -315,7 +320,12 @@ public sealed class WorkflowUiImporter
 
     // ----- Auto-add workflows -----
 
-    private async Task ApplyAutoAddAsync(IPage page, WorkflowSnapshot workflow, bool isFirst, string? firstAutoAddName, CancellationToken cancellationToken)
+    private async Task<bool> ApplyAutoAddAsync(
+        IPage page,
+        WorkflowSnapshot workflow,
+        bool isFirst,
+        string? firstAutoAddName,
+        CancellationToken cancellationToken)
     {
         if (isFirst)
         {
@@ -339,7 +349,15 @@ public sealed class WorkflowUiImporter
         await PauseAsync(cancellationToken).ConfigureAwait(false);
 
         // Repository picker: search by the mapped short name and pick the exact option.
-        var targetRepository = ResolveRepositoryName(ui.Repository!, RepositoryMapping);
+        var resolution = ProjectFilterTransformer.ResolveRepository(ui.Repository!, RepositoryMapping);
+        if (resolution.Status == RepositoryResolutionStatus.Ambiguous)
+        {
+            _warnings.Add($"workflow '{workflow.Name}': repository '{ui.Repository}' has ambiguous mappings; skipped");
+            await DiscardEditAsync(page, cancellationToken).ConfigureAwait(false);
+            return false;
+        }
+
+        var targetRepository = resolution.Target ?? ui.Repository!;
         await Sel.WorkflowRepositoryButton(page).First.ClickAsync().ConfigureAwait(false);
         var dialog = Sel.WorkflowSelectDialog(page);
         await dialog.WaitForAsync().ConfigureAwait(false);
@@ -357,7 +375,7 @@ public sealed class WorkflowUiImporter
             _warnings.Add($"workflow '{workflow.Name}': repository '{targetRepository}' was not found on the target; skipped");
             await page.Keyboard.PressAsync("Escape").ConfigureAwait(false);
             await DiscardEditAsync(page, cancellationToken).ConfigureAwait(false);
-            return;
+            return false;
         }
 
         await option.First.ClickAsync().ConfigureAwait(false);
@@ -365,7 +383,7 @@ public sealed class WorkflowUiImporter
 
         if (ui.Filter is { } filter)
         {
-            await Sel.WorkflowFiltersCombobox(page).First.FillAsync(filter).ConfigureAwait(false);
+            await Sel.WorkflowFiltersCombobox(page).First.FillAsync(TransformFilter(filter)).ConfigureAwait(false);
             await PauseAsync(cancellationToken).ConfigureAwait(false);
         }
 
@@ -380,7 +398,16 @@ public sealed class WorkflowUiImporter
         {
             await ToggleAsync(page, workflow.Name, cancellationToken).ConfigureAwait(false);
         }
+
+        return true;
     }
+
+    private string TransformFilter(string filter)
+        => ProjectFilterTransformer.Transform(
+            filter,
+            UserMapping,
+            RepositoryMapping,
+            OrganizationMapping).Transformed;
 
     /// <summary>
     /// Creates an additional Auto-add instance: hover the saved Auto-add sidebar link,

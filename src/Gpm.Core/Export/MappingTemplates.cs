@@ -1,34 +1,43 @@
 using System.Text;
+using Gpm.Core.Import;
 using Gpm.Core.Snapshot;
 
 namespace Gpm.Core.Export;
 
 /// <summary>
-/// Generates the mapping CSV templates written next to exported snapshots:
-/// <c>repository-mappings.csv</c> (distinct source repositories of Issue/PR items) and
-/// <c>user-mappings.csv</c> (distinct draft-issue assignee and explicit user collaborator
-/// logins; only written when at least one user login is present). Repository mappings use <c>source,target</c>.
-/// User mappings use GitHub Enterprise Importer's mannequin reclaim CSV shape
-/// (<c>mannequin-user,mannequin-id,target-user</c>), with blank mannequin IDs because
-/// project snapshots only contain logins. The target column is left blank for the user
-/// to fill in; rows with a blank target are ignored by <see cref="Import.CsvMapping"/>.
-/// Existing files are never overwritten so user edits survive re-exports.
+/// Generates repository, organization and user mapping CSV templates next to exported
+/// snapshots. Candidates include item and linked repositories, Auto-add repositories,
+/// View/Workflow filter identities, draft assignees and explicit user collaborators.
+/// Repository and organization templates use <c>source,target</c>; user templates use
+/// GitHub Enterprise Importer's <c>mannequin-user,mannequin-id,target-user</c> shape.
+/// Existing files are preserved and newly discovered candidates are reported.
 /// </summary>
 public static class MappingTemplates
 {
     public const string RepositoryMappingFileName = "repository-mappings.csv";
     public const string UserMappingFileName = "user-mappings.csv";
+    public const string OrganizationMappingFileName = "organization-mappings.csv";
 
-    /// <summary>Distinct source repositories ("org/repo") of all Issue/PR items, in first-seen order.</summary>
+    /// <summary>
+    /// Distinct repository mapping candidates from Issue/PR items, linked repositories,
+    /// Auto-add repository short names and <c>repo:</c> filter values, in first-seen order.
+    /// Candidates are not necessarily owner-qualified.
+    /// </summary>
     public static IReadOnlyList<string> ExtractSourceRepositories(IEnumerable<ProjectSnapshot> snapshots)
     {
         ArgumentNullException.ThrowIfNull(snapshots);
+        var snapshotList = snapshots.ToList();
 
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var repositories = new List<string>();
-        foreach (var item in snapshots.SelectMany(s => s.Items))
+        foreach (var repository in snapshotList.SelectMany(s => s.Items)
+                     .Select(item => item.Repository)
+                     .Concat(snapshotList.SelectMany(s => s.LinkedRepositories ?? []))
+                     .Concat(snapshotList.SelectMany(s => s.Workflows)
+                         .Select(workflow => workflow.Ui?.Repository))
+                     .Concat(FilterIdentifiers(snapshotList, "repo").Select(identifier => identifier.Value)))
         {
-            if (item.Repository is { Length: > 0 } repository && seen.Add(repository))
+            if (repository is { Length: > 0 } && seen.Add(repository))
             {
                 repositories.Add(repository);
             }
@@ -62,7 +71,42 @@ public static class MappingTemplates
             }
         }
 
+        foreach (var identifier in FilterIdentifiers(snapshots, "assignee", "author"))
+        {
+            if (identifier.Value.Length > 0 && seen.Add(identifier.Value))
+            {
+                logins.Add(identifier.Value);
+            }
+        }
+
         return logins;
+    }
+
+    public static IReadOnlyList<string> ExtractOrganizations(IEnumerable<ProjectSnapshot> snapshots)
+    {
+        ArgumentNullException.ThrowIfNull(snapshots);
+        var snapshotList = snapshots.ToList();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var organizations = new List<string>();
+
+        foreach (var repository in ExtractSourceRepositories(snapshotList))
+        {
+            var separator = repository.IndexOf('/');
+            if (separator > 0 && seen.Add(repository[..separator]))
+            {
+                organizations.Add(repository[..separator]);
+            }
+        }
+
+        foreach (var identifier in FilterIdentifiers(snapshotList, "org"))
+        {
+            if (identifier.Value.Length > 0 && seen.Add(identifier.Value))
+            {
+                organizations.Add(identifier.Value);
+            }
+        }
+
+        return organizations;
     }
 
     /// <summary>
@@ -89,6 +133,14 @@ public static class MappingTemplates
             onProgress: onProgress,
             cancellationToken: cancellationToken).ConfigureAwait(false);
 
+        await WriteTemplateAsync(
+            Path.Combine(directory, OrganizationMappingFileName),
+            ExtractOrganizations(snapshots),
+            header: "source,target",
+            rowFactory: source => string.Concat(source, ","),
+            onProgress: onProgress,
+            cancellationToken: cancellationToken).ConfigureAwait(false);
+
         var userLogins = ExtractUserLogins(snapshots);
         if (userLogins.Count > 0)
         {
@@ -100,6 +152,20 @@ public static class MappingTemplates
                 onProgress: onProgress,
                 cancellationToken: cancellationToken).ConfigureAwait(false);
         }
+
+    }
+
+    private static IEnumerable<FilterIdentifier> FilterIdentifiers(
+        IEnumerable<ProjectSnapshot> snapshots,
+        params string[] qualifiers)
+    {
+        var allowed = new HashSet<string>(qualifiers, StringComparer.OrdinalIgnoreCase);
+        return snapshots
+            .SelectMany(snapshot => snapshot.Views.Select(view => view.Filter)
+                .Concat(snapshot.Workflows.Select(workflow => workflow.Ui?.Filter)))
+            .Where(filter => filter is not null)
+            .SelectMany(filter => ProjectFilterTransformer.ExtractIdentifiers(filter!))
+            .Where(identifier => allowed.Contains(identifier.Qualifier));
     }
 
     private static async Task WriteTemplateAsync(
@@ -112,7 +178,18 @@ public static class MappingTemplates
     {
         if (File.Exists(path))
         {
-            onProgress?.Invoke($"Mapping template {path} already exists; not overwriting (your edits are preserved).");
+            var existingSources = File.ReadLines(path)
+                .Where(line => !string.IsNullOrWhiteSpace(line))
+                .Skip(1)
+                .Select(line => line.Split(',')[0].Trim())
+                .Where(source => source.Length > 0)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var missing = sources.Where(source => !existingSources.Contains(source)).ToList();
+            var missingMessage = missing.Count == 0
+                ? string.Empty
+                : $" Missing candidates: {string.Join(", ", missing)}.";
+            onProgress?.Invoke(
+                $"Mapping template {path} already exists; not overwriting (your edits are preserved).{missingMessage}");
             return;
         }
 
