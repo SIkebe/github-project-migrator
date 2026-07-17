@@ -249,4 +249,32 @@ public class ItemImporterLogicTests
             Directory.Delete(directory, recursive: true);
         }
     }
+
+    [Fact]
+    public async Task ImportLog_replace_failure_preserves_previous_primary()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var directory = Directory.CreateTempSubdirectory("gpm-importlog-atomic-").FullName;
+        try
+        {
+            var original = new ImportLog
+            {
+                ProjectId = "PVT_original",
+                SourceSnapshotFingerprint = "original",
+            };
+            await original.SaveAsync(directory, cancellationToken);
+            Directory.CreateDirectory(Path.Combine(directory, ImportLog.BackupFileName));
+
+            var replacement = original with { SourceSnapshotFingerprint = "replacement" };
+            await Assert.ThrowsAnyAsync<IOException>(() => replacement.SaveAsync(directory, cancellationToken));
+
+            var preserved = await ImportLog.LoadAsync(directory, cancellationToken);
+            Assert.Equal("original", preserved!.SourceSnapshotFingerprint);
+            Assert.Empty(Directory.GetFiles(directory, "*.tmp"));
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
 }

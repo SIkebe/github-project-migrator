@@ -151,9 +151,45 @@ public class CliImportTests
 
             Assert.Equal(0, result.ExitCode);
             Assert.Contains("result=updated project=42", result.Output, StringComparison.Ordinal);
+            Assert.Contains(
+                "items: created=0 resumed=0 already-complete=0 skipped=0 warnings=0",
+                result.Output,
+                StringComparison.Ordinal);
             Assert.Equal(3, server.RequestBodies.Count);
             Assert.Single(server.RequestBodies, request =>
                 request.Contains("mutation", StringComparison.OrdinalIgnoreCase));
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Incomplete_item_log_forces_update_on_default_retry()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var directory = Path.Combine(Path.GetTempPath(), "gpm-cli-resume-" + Guid.NewGuid().ToString("N"));
+        var snapshot = MinimalSnapshot();
+        await SnapshotFile.SaveAsync(snapshot, directory, cancellationToken);
+        var log = new Gpm.Core.Import.ImportLog
+        {
+            ProjectId = "PVT_existing",
+            SourceSnapshotFingerprint = Gpm.Core.Import.ImportLog.ComputeSnapshotFingerprint(snapshot),
+        };
+        log.ItemStates["interrupted"] = new Gpm.Core.Import.ImportItemState { TargetItemId = "PVTI_interrupted" };
+        await log.SaveAsync(directory, cancellationToken);
+
+        using var server = new GraphQlStubServer(
+            ExistingProjectResponse,
+            UpdateProjectResponse,
+            EmptyFieldsResponse);
+        try
+        {
+            var result = await RunCliAsync(directory, server);
+
+            Assert.Equal(0, result.ExitCode);
+            Assert.Contains("result=updated project=42", result.Output, StringComparison.Ordinal);
         }
         finally
         {

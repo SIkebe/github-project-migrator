@@ -293,6 +293,81 @@ public class ItemImporterResumeTests
     }
 
     [Fact]
+    public async Task Partial_field_failure_replays_all_fields_without_recreating_item()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var directory = Directory.CreateTempSubdirectory("gpm-field-partial-").FullName;
+        try
+        {
+            using var handler = new StageResumeHandler("field", failureAttempt: 2);
+            using var client = new GitHubGraphQLClient("token", baseUrl: null, handler, (_, _) => Task.CompletedTask);
+            var original = CreateStageSnapshot(archived: false, withField: false);
+            var snapshot = original with
+            {
+                Items =
+                [
+                    original.Items[0] with
+                    {
+                        FieldValues =
+                        [
+                            new FieldValueSnapshot { FieldName = "First", Text = "one" },
+                            new FieldValueSnapshot { FieldName = "Second", Text = "two" },
+                        ],
+                    },
+                ],
+            };
+            var target = Target with
+            {
+                FieldIds = new Dictionary<string, string>
+                {
+                    ["First"] = "PVTF_first",
+                    ["Second"] = "PVTF_second",
+                },
+            };
+
+            await Assert.ThrowsAsync<GitHubGraphQLException>(
+                () => CreateImporter(client).ImportAsync(snapshot, target, directory, cancellationToken));
+            await CreateImporter(client).ImportAsync(snapshot, target, directory, cancellationToken);
+
+            Assert.Equal(1, handler.CreateMutationCount);
+            Assert.Equal(4, handler.FieldMutationCount);
+            Assert.True(Assert.Single((await ImportLog.LoadAsync(directory, cancellationToken))!.ItemStates).Value.FieldValuesApplied);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Archive_error_reconciles_already_archived_target()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var directory = Directory.CreateTempSubdirectory("gpm-archive-reconcile-").FullName;
+        try
+        {
+            using var handler = new StageResumeHandler("archive", archivedAfterFailure: true);
+            using var client = new GitHubGraphQLClient("token", baseUrl: null, handler, (_, _) => Task.CompletedTask);
+
+            var result = await CreateImporter(client).ImportAsync(
+                CreateStageSnapshot(archived: true, withField: false),
+                Target,
+                directory,
+                cancellationToken);
+
+            Assert.Empty(result.Warnings);
+            Assert.Equal(1, handler.ArchiveMutationCount);
+            var log = await ImportLog.LoadAsync(directory, cancellationToken);
+            Assert.True(Assert.Single(log!.ItemStates).Value.ArchiveApplied);
+            Assert.False(log.HasIncompleteItems);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task Resume_rejects_changed_repository_mapping_after_creation()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
@@ -485,7 +560,10 @@ public class ItemImporterResumeTests
             };
     }
 
-    private sealed class StageResumeHandler(string failedStage) : HttpMessageHandler
+    private sealed class StageResumeHandler(
+        string failedStage,
+        int failureAttempt = 1,
+        bool archivedAfterFailure = false) : HttpMessageHandler
     {
         public int CreateMutationCount { get; private set; }
 
@@ -543,11 +621,18 @@ public class ItemImporterResumeTests
                     : Json("""{"data":{"archiveProjectV2Item":{"item":{"id":"PVTI_new"}}}}""");
             }
 
+            if (query.Contains("... on ProjectV2Item { isArchived }", StringComparison.Ordinal))
+            {
+                return archivedAfterFailure
+                    ? Json("""{"data":{"node":{"isArchived":true}}}""")
+                    : Json("""{"data":{"node":{"isArchived":false}}}""");
+            }
+
             throw new InvalidOperationException($"Unexpected GraphQL operation: {query}");
         }
 
         private bool ShouldFail(string stage, int count)
-            => string.Equals(failedStage, stage, StringComparison.Ordinal) && count == 1;
+            => string.Equals(failedStage, stage, StringComparison.Ordinal) && count == failureAttempt;
 
         private static HttpResponseMessage Error()
             => Json("""{"data":null,"errors":[{"type":"FORBIDDEN","message":"Injected stage failure"}]}""");

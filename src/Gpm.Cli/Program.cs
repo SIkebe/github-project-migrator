@@ -410,7 +410,7 @@ importCommand.SetAction(async (parseResult, cancellationToken) =>
                 : null;
         var importer = new ProjectImporter(client)
         {
-            OnConflict = onConflict,
+            OnConflict = pendingItemProjectId is null ? onConflict : ConflictAction.Update,
             OwnerType = ownerType,
             RepositoryMapping = repoMapping,
             UserMapping = userMapping,

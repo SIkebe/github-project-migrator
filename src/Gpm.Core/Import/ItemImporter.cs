@@ -832,11 +832,37 @@ public sealed class ItemImporter
             }
             catch (GitHubGraphQLException exception)
             {
+                if (await IsItemArchivedAsync(state.TargetItemId, cancellationToken).ConfigureAwait(false))
+                {
+                    state.ArchiveApplied = true;
+                    state.ArchiveError = null;
+                    await log.SaveAsync(logDirectory, cancellationToken).ConfigureAwait(false);
+                    continue;
+                }
+
                 state.ArchiveError = exception.Message;
                 await log.SaveAsync(logDirectory, CancellationToken.None).ConfigureAwait(false);
                 Warn(warnings, $"{DescribeItem(item)}: could not archive: {exception.Message}");
             }
         }
+    }
+
+    private async Task<bool> IsItemArchivedAsync(string itemId, CancellationToken cancellationToken)
+    {
+        var data = await _client.QueryAsync(
+            """
+            query($itemId: ID!) {
+              node(id: $itemId) {
+                ... on ProjectV2Item { isArchived }
+              }
+            }
+            """,
+            new { itemId },
+            cancellationToken).ConfigureAwait(false);
+        var node = data.GetProperty("node");
+        return node.ValueKind == JsonValueKind.Object
+            && node.TryGetProperty("isArchived", out var archived)
+            && archived.GetBoolean();
     }
 
     private static string BuildItemStateKey(ItemSnapshot item)
