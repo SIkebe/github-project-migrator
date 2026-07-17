@@ -145,7 +145,16 @@ public sealed class WorkflowUiImporter
                         continue;
                     }
 
-                    await ApplyAutoAddAsync(page, workflow, autoAddApplied == 0, firstAutoAddName, cancellationToken).ConfigureAwait(false);
+                    if (!await ApplyAutoAddAsync(
+                            page,
+                            workflow,
+                            autoAddApplied == 0,
+                            firstAutoAddName,
+                            cancellationToken).ConfigureAwait(false))
+                    {
+                        continue;
+                    }
+
                     autoAddApplied++;
                     firstAutoAddName ??= workflow.Name;
                 }
@@ -311,7 +320,12 @@ public sealed class WorkflowUiImporter
 
     // ----- Auto-add workflows -----
 
-    private async Task ApplyAutoAddAsync(IPage page, WorkflowSnapshot workflow, bool isFirst, string? firstAutoAddName, CancellationToken cancellationToken)
+    private async Task<bool> ApplyAutoAddAsync(
+        IPage page,
+        WorkflowSnapshot workflow,
+        bool isFirst,
+        string? firstAutoAddName,
+        CancellationToken cancellationToken)
     {
         if (isFirst)
         {
@@ -340,7 +354,7 @@ public sealed class WorkflowUiImporter
         {
             _warnings.Add($"workflow '{workflow.Name}': repository '{ui.Repository}' has ambiguous mappings; skipped");
             await DiscardEditAsync(page, cancellationToken).ConfigureAwait(false);
-            return;
+            return false;
         }
 
         var targetRepository = resolution.Target ?? ui.Repository!;
@@ -361,7 +375,7 @@ public sealed class WorkflowUiImporter
             _warnings.Add($"workflow '{workflow.Name}': repository '{targetRepository}' was not found on the target; skipped");
             await page.Keyboard.PressAsync("Escape").ConfigureAwait(false);
             await DiscardEditAsync(page, cancellationToken).ConfigureAwait(false);
-            return;
+            return false;
         }
 
         await option.First.ClickAsync().ConfigureAwait(false);
@@ -384,6 +398,8 @@ public sealed class WorkflowUiImporter
         {
             await ToggleAsync(page, workflow.Name, cancellationToken).ConfigureAwait(false);
         }
+
+        return true;
     }
 
     private string TransformFilter(string filter)

@@ -106,6 +106,17 @@ public class ProjectFilterTransformerTests
     }
 
     [Fact]
+    public void Transform_recognizes_workflow_passthrough_qualifiers()
+    {
+        var result = ProjectFilterTransformer.Transform("no:status updated:<@today-7d");
+
+        Assert.Empty(result.Unsupported);
+        Assert.Equal(
+            [new FilterIdentifier("no", "status"), new FilterIdentifier("updated", "<@today-7d")],
+            result.Unchanged);
+    }
+
+    [Fact]
     public void Transform_requires_mapping_for_repo_and_org_values_that_resemble_user_shortcuts()
     {
         var result = ProjectFilterTransformer.Transform("repo:none org:@me");

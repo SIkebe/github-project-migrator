@@ -22,9 +22,11 @@ public static class ProjectFilterTransformer
         "iteration",
         "label",
         "milestone",
+        "no",
         "reason",
         "status",
         "type",
+        "updated",
     };
 
     /// <summary>Transforms supported qualifier values using source-to-target mappings.</summary>
