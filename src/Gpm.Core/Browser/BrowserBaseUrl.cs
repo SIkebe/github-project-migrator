@@ -35,7 +35,8 @@ public static class BrowserBaseUrl
     private static Uri FromApiUrl(Uri apiBaseUrl)
     {
         ArgumentNullException.ThrowIfNull(apiBaseUrl);
-        if (apiBaseUrl.Scheme != Uri.UriSchemeHttps && !apiBaseUrl.IsLoopback)
+        if (apiBaseUrl.Scheme != Uri.UriSchemeHttps
+            && (apiBaseUrl.Scheme != Uri.UriSchemeHttp || !apiBaseUrl.IsLoopback))
         {
             throw new ArgumentException(
                 $"API base URL '{apiBaseUrl.AbsoluteUri}' must use HTTPS.",

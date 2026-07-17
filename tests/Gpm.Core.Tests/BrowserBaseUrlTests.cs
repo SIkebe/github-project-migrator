@@ -51,6 +51,13 @@ public class BrowserBaseUrlTests
             BrowserBaseUrl.Resolve(new Uri("http://api.tenant.ghe.com/graphql")));
     }
 
+    [Fact]
+    public void Resolve_rejects_unsupported_scheme_on_loopback()
+    {
+        Assert.Throws<ArgumentException>(() =>
+            BrowserBaseUrl.Resolve(new Uri("ftp://localhost/graphql")));
+    }
+
     [Theory]
     [InlineData("http://localhost:8080/graphql", null, "http://localhost:8080")]
     [InlineData("http://127.0.0.1:8080/graphql", "http://127.0.0.1:8080/", "http://127.0.0.1:8080")]
