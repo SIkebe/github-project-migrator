@@ -549,6 +549,39 @@ public class ProjectVerifierTests
     }
 
     [Fact]
+    public void User_mapping_normalizes_user_collaborators_without_changing_teams()
+    {
+        var source = BuildSnapshot() with
+        {
+            Collaborators =
+            [
+                new CollaboratorSnapshot { Type = "USER", Login = "source-user", Role = "WRITER" },
+                new CollaboratorSnapshot { Type = "TEAM", Login = "source-team", Role = "READER" },
+            ],
+        };
+        var target = BuildSnapshot() with
+        {
+            Collaborators =
+            [
+                new CollaboratorSnapshot { Type = "USER", Login = "target-user", Role = "WRITER" },
+                new CollaboratorSnapshot { Type = "TEAM", Login = "source-team", Role = "READER" },
+            ],
+        };
+
+        var report = ProjectVerifier.Compare(
+            source,
+            target,
+            System.Collections.ObjectModel.ReadOnlyDictionary<string, string>.Empty,
+            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["source-user"] = "target-user",
+                ["source-team"] = "target-team",
+            });
+
+        Assert.Empty(report.Differences);
+    }
+
+    [Fact]
     public void Linked_repository_differences_are_warnings()
     {
         var source = BuildSnapshot() with { LinkedRepositories = ["org/repo-a", "org/repo-b"] };

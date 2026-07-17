@@ -429,6 +429,7 @@ dotnet run --project src/Gpm.Cli -- verify `
   --in $env:GPM_SNAPSHOT_DIR `
   --token $env:GPM_TARGET_TOKEN `
   --repo-mapping "$env:GPM_SNAPSHOT_DIR/repository-mappings.csv" `
+  --user-mapping "$env:GPM_SNAPSHOT_DIR/user-mappings.csv" `
   --enable-browser-automation `
   --browser-profile target `
   --no-update-check
@@ -436,7 +437,7 @@ dotnet run --project src/Gpm.Cli -- verify `
 
 `--enable-browser-automation` を付けた verify は、比較前に target の View / Workflow UI 設定と explicit collaborators を再取得します。選択した profile が target host に未認証、または API token と別アカウントの場合は、target の読み取り開始前に明確なエラーと非ゼロ終了になります。
 
-source / target の repository 名が異なる場合、`verify` にも import と同じ `--repo-mapping` を渡してください。これにより Issue / PR item と linked repository は target repository 名へ正規化して比較されます。
+source / target の repository 名または user login が異なる場合、`verify` にも import と同じ `--repo-mapping` / `--user-mapping` を渡してください。これにより Issue / PR item、linked repository、explicit user collaborator は target 側の名前へ正規化して比較されます。`user-mappings.csv` が存在しない場合は `--user-mapping` を外してください。
 
 期待値:
 
@@ -597,6 +598,7 @@ dotnet run --project src/Gpm.Cli -- import `
   --target-base-url https://api.TENANT.ghe.com `
   --browser-base-url https://TENANT.ghe.com `
   --repo-mapping "$env:GPM_SNAPSHOT_DIR/repository-mappings.csv" `
+  --user-mapping "$env:GPM_SNAPSHOT_DIR/user-mappings.csv" `
   --enable-browser-automation `
   --browser-profile target `
   --no-update-check

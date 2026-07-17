@@ -443,6 +443,7 @@ var verifyCommand = new Command("verify", "Verify a migrated project against the
     ownerTypeOption,
     inOption,
     repoMappingOption,
+    userMappingOption,
     tokenOption,
     targetBaseUrlOption,
     enableBrowserOption,
@@ -493,11 +494,16 @@ verifyCommand.SetAction(async (parseResult, cancellationToken) =>
         var repoMapping = repoMappingPath is null
             ? System.Collections.ObjectModel.ReadOnlyDictionary<string, string>.Empty
             : CsvMapping.Load(repoMappingPath);
+        var userMappingPath = parseResult.GetValue(userMappingOption);
+        var userMapping = userMappingPath is null
+            ? System.Collections.ObjectModel.ReadOnlyDictionary<string, string>.Empty
+            : CsvMapping.LoadUserMapping(userMappingPath);
         var verifier = new ProjectVerifier(client)
         {
             OnProgress = Console.Error.WriteLine,
             OwnerType = ownerType,
             RepositoryMapping = repoMapping,
+            UserMapping = userMapping,
         };
         ViewUiExporter? viewExporter = null;
         WorkflowUiExporter? workflowExporter = null;

@@ -55,7 +55,7 @@ gpm import --org target-org --in ./snapshot --token $TARGET_TOKEN \
 
 # 3. Verify the migrated project against the snapshot
 gpm verify --org target-org --project 12 --in ./snapshot --token $TARGET_TOKEN \
-  --repo-mapping repos.csv
+  --repo-mapping repos.csv --user-mapping users.csv
 ```
 
 Tokens are resolved from `--token`, then the `GITHUB_TOKEN` / `GPM_TOKEN` environment variables.
@@ -248,7 +248,7 @@ Workflows are migrated through the GitHub Projects web UI because GitHub has no 
 4. **Fill in `user-mappings.csv` if generated.** This is important for Enterprise Managed Users where target logins usually have a `_shortcode` suffix.
 5. **Use browser automation only when you need Views or Workflows.** Run `gpm setup --browsers` and `gpm login` first, then pass `--enable-browser-automation` to both export and import.
 
-When source and target repository names differ, pass the same `--repo-mapping` file to `gpm verify` as well. This lets verification compare imported Issue / Pull Request items and linked repositories after repository remapping.
+When source and target repository or user names differ, pass the same `--repo-mapping` and `--user-mapping` files to `gpm verify` as well. This lets verification compare imported Issue / Pull Request items, linked repositories, and explicit user collaborators after remapping.
 
 If you do not enable browser automation, `gpm` still migrates projects, fields, items, values, ordering, archived state and linked repositories, but **Views and Workflows will not be fully recreated**.
 
