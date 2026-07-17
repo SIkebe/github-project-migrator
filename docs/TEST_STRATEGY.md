@@ -18,7 +18,7 @@
 |---|---|---|---|---|
 | 単体・ロジックテスト | `tests/Ghpmv.Core.Tests`、`tests/Ghpmv.Browser.Tests` の非 E2E テスト | CSV 解析、snapshot model、mapping、verify 差分、import conflict、UI snapshot serialization を検証する。 | なし | すべてのローカル変更と PR。 |
 | 実 API 統合テスト | `tests/Ghpmv.Integration.Tests` | GraphQL 接続、export/import/verify、collaborator/repository link、user-owned project、item resume/relink を実 GitHub API で検証する。 | `GHPMV_TEST_TOKEN` と fixture 用 org/project 変数。未設定時は skip。 | secrets が使えるリポジトリ CI の PR。API 変更時のローカル検証。 |
-| ブラウザー E2E テスト | `tests/Ghpmv.Browser.Tests` の E2E テスト | Playwright と GitHub Projects UI 経由で collaborator export、View round-trip、Workflow round-trip を検証する。 | `GHPMV_BROWSER_STATE`、`GHPMV_TEST_TOKEN`、source/target fixture org。未設定時は skip。 | `src/Ghpmv.Core/Browser` 変更時、リリース前、可能なら scheduled/nightly。 |
+| ブラウザー E2E テスト | `tests/Ghpmv.Browser.Tests` の E2E テスト | Playwright と GitHub Projects UI 経由で collaborator export、View round-trip、Workflow round-trip を検証する。 | `GHPMV_BROWSER_STATE`、`GHPMV_TEST_TOKEN`、source/target fixture org。未設定時は skip。 | `src/Ghpmv.Core/Browser` 変更時とリリース前に手動実行。scheduled/nightly は未実装。 |
 | 手動移行テスト | [MANUAL_TEST_PLAN.md](MANUAL_TEST_PLAN.md) | GEI repository migration、`ghpmv export`、mapping CSV 補完、`ghpmv import`、`ghpmv verify`、UI 目視確認までの実運用フローを検証する。 | source/target org、PAT、browser profile、必要に応じて EMU/GHEC-DR 環境。 | リリース候補前、移行手順の検証前。 |
 | CI packaging smoke test | `.github/workflows/ci.yml` | Release build、self-contained publish、framework-dependent publish、`--version` 起動を確認する。 | GitHub Actions runner、`global.json` で指定した .NET SDK。 | build/test 成功後のすべての PR。 |
 

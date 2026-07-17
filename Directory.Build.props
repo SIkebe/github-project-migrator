@@ -12,8 +12,8 @@
     <Version>0.1.0</Version>
     <Authors>SIkebe</Authors>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
-    <PackageProjectUrl>https://github.com/SIkebe/github-project-migrator</PackageProjectUrl>
-    <RepositoryUrl>https://github.com/SIkebe/github-project-migrator</RepositoryUrl>
+    <PackageProjectUrl>https://github.com/SIkebe/ghpmv</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/SIkebe/ghpmv</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
     <PublishRepositoryUrl>true</PublishRepositoryUrl>
     <!-- Keep the version output as a clean SemVer (no +commit metadata). -->

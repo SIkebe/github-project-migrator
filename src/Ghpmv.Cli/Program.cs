@@ -1037,7 +1037,7 @@ static async Task NotifyUpdateAsync(Task<string?> updateCheck)
     var latest = await updateCheck;
     if (latest is not null)
     {
-        Console.Error.WriteLine($"note: ghpmv {latest} is available: https://github.com/SIkebe/github-project-migrator/releases/latest (disable this check with --no-update-check or GHPMV_NO_UPDATE_CHECK=1)");
+        Console.Error.WriteLine($"note: ghpmv {latest} is available: https://github.com/SIkebe/ghpmv/releases/latest (disable this check with --no-update-check or GHPMV_NO_UPDATE_CHECK=1)");
     }
 }
 
