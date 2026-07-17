@@ -363,6 +363,16 @@ importCommand.SetAction(async (parseResult, cancellationToken) =>
             ? await importer.ImportIntoAsync(snapshot, org, number, cancellationToken)
             : await importer.ImportAsync(snapshot, org, cancellationToken);
 
+        if (result.Outcome == ProjectImportOutcome.Skipped)
+        {
+            Console.Error.WriteLine("Project already exists; skipped without making changes.");
+            Console.WriteLine(result.Url);
+            Console.WriteLine(string.Create(CultureInfo.InvariantCulture,
+                $"result=skipped project={result.ProjectNumber}"));
+            await NotifyUpdateAsync(updateCheck);
+            return 0;
+        }
+
         var itemImporter = new ItemImporter(client)
         {
             RepositoryMapping = repoMapping,
@@ -402,6 +412,8 @@ importCommand.SetAction(async (parseResult, cancellationToken) =>
         }
 
         Console.WriteLine(result.Url);
+        Console.WriteLine(string.Create(CultureInfo.InvariantCulture,
+            $"result={result.Outcome.ToString().ToLowerInvariant()} project={result.ProjectNumber}"));
         Console.WriteLine(string.Create(CultureInfo.InvariantCulture,
             $"items: created={itemResult.Created} skipped={itemResult.Skipped} warnings={itemResult.Warnings.Count}"));
         if (enableBrowserAutomation)
