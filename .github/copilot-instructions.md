@@ -33,6 +33,7 @@ Browser E2E tests require both `GPM_BROWSER_STATE` and `GPM_TEST_TOKEN`. Create 
 ```powershell
 dotnet run --project src/Gpm.Cli -- setup --browsers
 dotnet run --project src/Gpm.Cli -- login --profile source
+$env:GPM_BROWSER_STATE = Join-Path $env:APPDATA 'gpm\browser-state.source.json'
 dotnet test tests/Gpm.Browser.Tests/Gpm.Browser.Tests.csproj -c Release --filter "Category=E2E"
 ```
 
