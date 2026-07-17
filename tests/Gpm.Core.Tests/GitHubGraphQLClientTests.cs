@@ -293,6 +293,27 @@ public class GitHubGraphQLClientTests
     }
 
     [Fact]
+    public async Task Create_temporary_conflict_with_mutation_payload_is_ambiguous()
+    {
+        const string conflict = """{"data":{"createThing":{"thing":null}},"errors":[{"type":"UNPROCESSABLE","message":"A child field created a temporary conflict. Please try again."}]}""";
+        using var handler = new StubHandler(
+            JsonResponse(HttpStatusCode.OK, conflict),
+            JsonResponse(HttpStatusCode.OK, """{"data":{"createThing":{"thing":{"id":"duplicate"}}}}"""));
+        var delays = new List<TimeSpan>();
+        using var client = CreateClient(handler, delays);
+
+        await Assert.ThrowsAsync<AmbiguousMutationResultException>(
+            () => client.MutationAsync(
+                "createThing",
+                "mutation($clientMutationId: String!) { createThing(input: { clientMutationId: $clientMutationId }) { thing { id } } }",
+                requiredResultPath: "thing.id",
+                cancellationToken: TestContext.Current.CancellationToken));
+
+        Assert.Single(handler.RequestBodies);
+        Assert.Empty(delays);
+    }
+
+    [Fact]
     public async Task Create_mutation_transport_failure_is_not_retried()
     {
         using var handler = new FlakyHandler(

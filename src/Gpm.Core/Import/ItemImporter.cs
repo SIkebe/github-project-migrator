@@ -51,6 +51,12 @@ public sealed class ItemImporter
         var log = await ImportLog.LoadAsync(logDirectory, cancellationToken).ConfigureAwait(false);
         if (log is not null && !string.Equals(log.ProjectId, target.ProjectId, StringComparison.Ordinal))
         {
+            if (log.PendingDrafts.Count > 0 || log.PendingContents.Count > 0)
+            {
+                throw new InvalidOperationException(
+                    $"{ImportLog.FileName} in '{logDirectory}' contains pending operations for project '{log.ProjectId}'. Resume that project or reconcile it manually before importing into project '{target.ProjectId}'.");
+            }
+
             OnProgress?.Invoke($"warning: {ImportLog.FileName} in '{logDirectory}' belongs to a different project; starting a fresh log.");
             log = null;
         }

@@ -25,7 +25,11 @@ public class ProjectImporterLogicTests
             new Uri("https://example.test/graphql"),
             handler,
             delayAsync: null);
-        var importer = new ProjectImporter(client) { OnConflict = ConflictAction.Skip };
+        var importer = new ProjectImporter(client)
+        {
+            OnConflict = ConflictAction.Skip,
+            OperationLogDirectory = Path.Combine(Path.GetTempPath(), $"gpm-project-import-{Guid.NewGuid():N}"),
+        };
 
         var result = await importer.ImportAsync(
             MinimalSnapshot("Roadmap"),
@@ -64,6 +68,7 @@ public class ProjectImporterLogicTests
         {
             OnConflict = ConflictAction.Update,
             BeforeWriteAsync = _ => throw new InvalidOperationException("authentication failed"),
+            OperationLogDirectory = Path.Combine(Path.GetTempPath(), $"gpm-project-import-{Guid.NewGuid():N}"),
         };
 
         var exception = await Assert.ThrowsAsync<InvalidOperationException>(

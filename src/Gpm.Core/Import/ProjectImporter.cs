@@ -54,7 +54,7 @@ public sealed class ProjectImporter
     public Func<CancellationToken, Task>? BeforeWriteAsync { get; set; }
 
     /// <summary>Directory for durable project and field creation operation state.</summary>
-    public string? OperationLogDirectory { get; init; }
+    public required string OperationLogDirectory { get; init; }
 
     /// <summary>Imports the snapshot into <paramref name="ownerLogin"/> and returns the target project identity and field mappings.</summary>
     public async Task<ImportResult> ImportAsync(ProjectSnapshot snapshot, string ownerLogin, CancellationToken cancellationToken = default)
@@ -645,14 +645,15 @@ public sealed class ProjectImporter
 
     private async Task LoadOperationLogAsync(CancellationToken cancellationToken)
     {
-        if (_operationLog is null && OperationLogDirectory is not null)
+        ArgumentException.ThrowIfNullOrWhiteSpace(OperationLogDirectory);
+        if (_operationLog is null)
         {
             _operationLog = await ProjectImportLog.LoadAsync(OperationLogDirectory, cancellationToken).ConfigureAwait(false);
         }
     }
 
     private Task SaveOperationLogAsync(CancellationToken cancellationToken)
-        => _operationLog is not null && OperationLogDirectory is not null
+        => _operationLog is not null
             ? _operationLog.SaveAsync(OperationLogDirectory, cancellationToken)
             : Task.CompletedTask;
 

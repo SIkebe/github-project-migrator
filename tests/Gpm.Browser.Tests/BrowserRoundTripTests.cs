@@ -26,6 +26,9 @@ public class BrowserRoundTripTests
 
     private static string TargetOrg => Environment.GetEnvironmentVariable("GPM_TEST_TARGET_ORG") ?? "gpm-target";
 
+    private static string CreateOperationLogDirectory()
+        => Path.Combine(Path.GetTempPath(), $"gpm-browser-project-import-{Guid.NewGuid():N}");
+
     [Fact]
     public async Task Explicit_collaborators_are_exported_through_browser_automation()
     {
@@ -65,7 +68,10 @@ public class BrowserRoundTripTests
                 LinkedRepositories = [],
                 Collaborators = [collaborator],
             };
-            var result = await new ProjectImporter(client).ImportAsync(
+            var result = await new ProjectImporter(client)
+            {
+                OperationLogDirectory = CreateOperationLogDirectory(),
+            }.ImportAsync(
                 verificationSnapshot,
                 TargetOrg,
                 cancellationToken);
@@ -160,7 +166,10 @@ public class BrowserRoundTripTests
         var title = "gpm-browser-test-" + Guid.NewGuid().ToString("N");
         var snapshot = source with { Project = source.Project with { Title = title } };
 
-        var importer = new ProjectImporter(client);
+        var importer = new ProjectImporter(client)
+        {
+            OperationLogDirectory = CreateOperationLogDirectory(),
+        };
         var result = await importer.ImportAsync(snapshot, TargetOrg, cancellationToken);
         try
         {
@@ -273,7 +282,10 @@ public class BrowserRoundTripTests
         var title = "gpm-browser-wf-test-" + Guid.NewGuid().ToString("N");
         var snapshot = source with { Project = source.Project with { Title = title } };
 
-        var importer = new ProjectImporter(client);
+        var importer = new ProjectImporter(client)
+        {
+            OperationLogDirectory = CreateOperationLogDirectory(),
+        };
         var result = await importer.ImportAsync(snapshot, TargetOrg, cancellationToken);
         try
         {

@@ -23,6 +23,8 @@ public sealed class FixtureProjectBuilder
 
     public Action<string>? OnProgress { get; set; }
 
+    public required string OperationLogDirectory { get; init; }
+
     public async Task<FixtureProjectSetupResult> CreateAsync(
         string organization,
         string title = "gpm-fixture",
@@ -49,6 +51,7 @@ public sealed class FixtureProjectBuilder
         var projectImporter = new ProjectImporter(_graphQl)
         {
             OnProgress = OnProgress,
+            OperationLogDirectory = OperationLogDirectory,
             RepositoryMapping = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
             {
                 [repositoryFullName] = repositoryFullName,
@@ -68,29 +71,10 @@ public sealed class FixtureProjectBuilder
                 [viewerLogin] = viewerLogin,
             },
         };
-        var logDirectory = Path.Combine(Path.GetTempPath(), $"gpm-fixture-{Guid.NewGuid():N}");
-        try
+        var itemResult = await itemImporter.ImportAsync(snapshot, project, OperationLogDirectory, cancellationToken).ConfigureAwait(false);
+        foreach (var warning in itemResult.Warnings)
         {
-            var itemResult = await itemImporter.ImportAsync(snapshot, project, logDirectory, cancellationToken).ConfigureAwait(false);
-            foreach (var warning in itemResult.Warnings)
-            {
-                OnProgress?.Invoke("warning: " + warning);
-            }
-        }
-        finally
-        {
-            try
-            {
-                Directory.Delete(logDirectory, recursive: true);
-            }
-            catch (IOException)
-            {
-                // Best effort cleanup only.
-            }
-            catch (UnauthorizedAccessException)
-            {
-                // Best effort cleanup only.
-            }
+            OnProgress?.Invoke("warning: " + warning);
         }
 
         return new FixtureProjectSetupResult(project.ProjectNumber, project.Url, Created: true);

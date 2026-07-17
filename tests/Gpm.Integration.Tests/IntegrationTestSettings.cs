@@ -23,6 +23,9 @@ internal static class IntegrationTestSettings
 
     public static string TargetFixtureRepositoryFullName => $"{TargetOrg}/{TargetFixtureRepositoryName}";
 
+    public static string CreateOperationLogDirectory()
+        => Path.Combine(Path.GetTempPath(), $"gpm-project-import-{Guid.NewGuid():N}");
+
     public static int FixtureProjectNumber
     {
         get

@@ -878,7 +878,15 @@ setupCommand.SetAction(async (parseResult, cancellationToken) =>
         using var graphQl = new GitHubGraphQLClient(token, graphQlBaseUri);
         graphQl.OnRetry = Console.Error.WriteLine;
         using var rest = new GitHubRestClient(token, graphQlBaseUri is null ? null : GitHubRestClient.ToRestBaseUri(graphQlBaseUri));
-        var builder = new FixtureProjectBuilder(graphQl, rest) { OnProgress = Console.Error.WriteLine };
+        var fixtureOperationDirectory = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+            "gpm",
+            "fixture-operations");
+        var builder = new FixtureProjectBuilder(graphQl, rest)
+        {
+            OnProgress = Console.Error.WriteLine,
+            OperationLogDirectory = fixtureOperationDirectory,
+        };
         try
         {
             var result = await builder.CreateAsync(

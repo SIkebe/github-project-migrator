@@ -45,7 +45,10 @@ public class ProjectImporterTests
         var title = NewTestTitle();
         var snapshot = source with { Project = source.Project with { Title = title } };
 
-        var importer = new ProjectImporter(client);
+        var importer = new ProjectImporter(client)
+        {
+            OperationLogDirectory = IntegrationTestSettings.CreateOperationLogDirectory(),
+        };
         var result = await importer.ImportAsync(snapshot, TargetOrg, cancellationToken);
         try
         {
@@ -124,7 +127,10 @@ public class ProjectImporterTests
         var title = NewTestTitle();
         var snapshot = MinimalSnapshot(title);
 
-        var importer = new ProjectImporter(client); // OnConflict defaults to Fail.
+        var importer = new ProjectImporter(client)
+        {
+            OperationLogDirectory = IntegrationTestSettings.CreateOperationLogDirectory(),
+        }; // OnConflict defaults to Fail.
         var first = await importer.ImportAsync(snapshot, TargetOrg, cancellationToken);
         try
         {
@@ -146,10 +152,17 @@ public class ProjectImporterTests
         var title = NewTestTitle();
         var snapshot = MinimalSnapshot(title);
 
-        var first = await new ProjectImporter(client).ImportAsync(snapshot, TargetOrg, cancellationToken);
+        var first = await new ProjectImporter(client)
+        {
+            OperationLogDirectory = IntegrationTestSettings.CreateOperationLogDirectory(),
+        }.ImportAsync(snapshot, TargetOrg, cancellationToken);
         try
         {
-            var second = await new ProjectImporter(client) { OnConflict = ConflictAction.Skip }
+            var second = await new ProjectImporter(client)
+            {
+                OnConflict = ConflictAction.Skip,
+                OperationLogDirectory = IntegrationTestSettings.CreateOperationLogDirectory(),
+            }
                 .ImportAsync(snapshot, TargetOrg, cancellationToken);
 
             Assert.False(second.Created);
@@ -199,7 +212,10 @@ public class ProjectImporterTests
             var exported = await exporter.ExportAsync(SourceOrg, FixtureProjectNumber, cancellationToken);
             var snapshot = IntegrationFixtureSnapshot.SelectCanonicalItems(exported);
 
-            var importer = new ProjectImporter(client);
+            var importer = new ProjectImporter(client)
+            {
+                OperationLogDirectory = logDirectory,
+            };
             var result = await importer.ImportIntoAsync(snapshot, TargetOrg, emptyProjectNumber, cancellationToken);
 
             Assert.False(result.Created);
@@ -238,7 +254,10 @@ public class ProjectImporterTests
         var cancellationToken = TestContext.Current.CancellationToken;
         using var client = new GitHubGraphQLClient(Token);
 
-        var importer = new ProjectImporter(client);
+        var importer = new ProjectImporter(client)
+        {
+            OperationLogDirectory = IntegrationTestSettings.CreateOperationLogDirectory(),
+        };
         var exception = await Assert.ThrowsAsync<InvalidOperationException>(
             () => importer.ImportIntoAsync(MinimalSnapshot(NewTestTitle()), TargetOrg, 999_999, cancellationToken));
         Assert.Contains("999999", exception.Message, StringComparison.Ordinal);
@@ -255,7 +274,10 @@ public class ProjectImporterTests
         var snapshot = MinimalSnapshot("gpm-original-title");
         snapshot = snapshot with { Project = snapshot.Project with { Title = overriddenTitle } };
 
-        var result = await new ProjectImporter(client).ImportAsync(snapshot, TargetOrg, cancellationToken);
+        var result = await new ProjectImporter(client)
+        {
+            OperationLogDirectory = IntegrationTestSettings.CreateOperationLogDirectory(),
+        }.ImportAsync(snapshot, TargetOrg, cancellationToken);
         try
         {
             Assert.True(result.Created);

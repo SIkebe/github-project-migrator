@@ -152,6 +152,14 @@ public sealed class GitHubGraphQLClient : IDisposable
 
             var errorsJson = errors.GetRawText();
 
+            if (mutation is { RetryPolicy: MutationRetryPolicy.Create }
+                && HasMutationPayload(document.RootElement, mutation.OperationName))
+            {
+                throw CreateAmbiguousMutationException(
+                    mutation,
+                    "GitHub returned a GraphQL error that may have occurred after the create side effect.");
+            }
+
             // Projects V2 mutations occasionally fail with UNPROCESSABLE
             // "…temporary conflict. Please try again." — the API explicitly asks
             // for a retry and the failed attempt has no side effects.
@@ -168,8 +176,7 @@ public sealed class GitHubGraphQLClient : IDisposable
             }
 
             if (mutation is { RetryPolicy: MutationRetryPolicy.Create }
-                && (HasMutationPayload(document.RootElement, mutation.OperationName)
-                    || !ContainsOnlyKnownPreSideEffectErrors(errors)))
+                && !ContainsOnlyKnownPreSideEffectErrors(errors))
             {
                 throw CreateAmbiguousMutationException(
                     mutation,

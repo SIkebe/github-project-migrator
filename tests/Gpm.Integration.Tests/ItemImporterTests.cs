@@ -63,7 +63,11 @@ public class ItemImporterTests
             [FixtureRepo] = IntegrationTestSettings.TargetFixtureRepositoryFullName,
         };
 
-        var projectImporter = new ProjectImporter(client) { RepositoryMapping = linkMapping };
+        var projectImporter = new ProjectImporter(client)
+        {
+            RepositoryMapping = linkMapping,
+            OperationLogDirectory = IntegrationTestSettings.CreateOperationLogDirectory(),
+        };
         var result = await projectImporter.ImportAsync(snapshot, TargetOrg, cancellationToken);
         var logDirectory = Directory.CreateTempSubdirectory("gpm-m4-").FullName;
         try
@@ -185,7 +189,10 @@ public class ItemImporterTests
                 Project = exported.Project with { Title = NewTestTitle() },
                 Items = [sourceIssue with { Position = 0 }],
             };
-            var result = await new ProjectImporter(client).ImportAsync(snapshot, TargetOrg, cancellationToken);
+            var result = await new ProjectImporter(client)
+            {
+                OperationLogDirectory = IntegrationTestSettings.CreateOperationLogDirectory(),
+            }.ImportAsync(snapshot, TargetOrg, cancellationToken);
             targetProjectId = result.ProjectId;
 
             // Without a repository mapping the issue item is skipped with a warning.

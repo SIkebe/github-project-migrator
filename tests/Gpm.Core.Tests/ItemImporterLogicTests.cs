@@ -1,3 +1,4 @@
+using Gpm.Core.GitHub;
 using Gpm.Core.Import;
 using Gpm.Core.Snapshot;
 
@@ -94,6 +95,63 @@ public class ItemImporterLogicTests
             Assert.Equal(["PVTI_existing"], pending.Value.ExistingItemIds);
             Assert.Equal("I_issue", Assert.Single(loaded.PendingContents).Value.ContentId);
             Assert.Empty(Directory.GetFiles(directory, "*.tmp"));
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Import_rejects_target_switch_when_log_has_pending_operations()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var directory = Directory.CreateTempSubdirectory("gpm-importlog-switch-").FullName;
+        try
+        {
+            var log = new ImportLog { ProjectId = "PVT_original" };
+            log.PendingDrafts["0"] = new PendingDraftOperation
+            {
+                OperationId = "operation-0",
+                AttemptedAt = DateTimeOffset.UtcNow,
+                Title = "Pending draft",
+                ExistingItemIds = [],
+            };
+            await log.SaveAsync(directory, cancellationToken);
+            using var client = new GitHubGraphQLClient("dummy-token");
+            var importer = new ItemImporter(client);
+            var snapshot = new ProjectSnapshot
+            {
+                SchemaVersion = ProjectSnapshot.CurrentSchemaVersion,
+                Project = new ProjectInfoSnapshot
+                {
+                    Title = "Snapshot",
+                    Public = false,
+                    Closed = false,
+                },
+                Fields = [],
+                Views = [],
+                Workflows = [],
+                Items = [],
+            };
+            var target = new ImportResult
+            {
+                ProjectId = "PVT_different",
+                ProjectNumber = 1,
+                Url = "https://example.test/project/1",
+                Outcome = ProjectImportOutcome.Created,
+                FieldIds = new Dictionary<string, string>(),
+                OptionIds = new Dictionary<string, IReadOnlyDictionary<string, string>>(),
+                IterationIds = new Dictionary<string, IReadOnlyDictionary<string, string>>(),
+            };
+
+            var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+                () => importer.ImportAsync(snapshot, target, directory, cancellationToken));
+
+            Assert.Contains("pending operations", exception.Message, StringComparison.Ordinal);
+            var preserved = await ImportLog.LoadAsync(directory, cancellationToken);
+            Assert.Equal("PVT_original", preserved!.ProjectId);
+            Assert.Single(preserved.PendingDrafts);
         }
         finally
         {
