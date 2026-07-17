@@ -231,6 +231,7 @@ dotnet run --project src/Gpm.Cli -- setup `
   --fixture-org $env:GPM_SOURCE_ORG `
   --fixture-project <source-project-number> `
   --fixture-repo $env:GPM_FIXTURE_REPO `
+  --token $env:GPM_SOURCE_TOKEN `
   --browser-profile source
 ```
 
