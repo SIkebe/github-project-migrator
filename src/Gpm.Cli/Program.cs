@@ -322,19 +322,6 @@ importCommand.SetAction(async (parseResult, cancellationToken) =>
 
     try
     {
-        await using var session = enableBrowserAutomation
-            ? new BrowserSession(new BrowserSessionOptions
-            {
-                BaseUrl = BrowserBaseUrl.Resolve(graphQlBaseUrl, parseResult.GetValue(browserBaseUrlOption)),
-                Profile = parseResult.GetValue(browserProfileOption),
-            })
-            : null;
-        if (session is not null)
-        {
-            var apiLogin = await client.GetViewerLoginAsync(cancellationToken);
-            await session.ValidateAuthenticationAsync(apiLogin, cancellationToken);
-        }
-
         var repoMappingPath = parseResult.GetValue(repoMappingOption);
         var userMappingPath = parseResult.GetValue(userMappingOption);
         var repoMapping = repoMappingPath is null
@@ -371,6 +358,19 @@ importCommand.SetAction(async (parseResult, cancellationToken) =>
                 $"result=skipped project={result.ProjectNumber}"));
             await NotifyUpdateAsync(updateCheck);
             return 0;
+        }
+
+        await using var session = enableBrowserAutomation
+            ? new BrowserSession(new BrowserSessionOptions
+            {
+                BaseUrl = BrowserBaseUrl.Resolve(graphQlBaseUrl, parseResult.GetValue(browserBaseUrlOption)),
+                Profile = parseResult.GetValue(browserProfileOption),
+            })
+            : null;
+        if (session is not null)
+        {
+            var apiLogin = await client.GetViewerLoginAsync(cancellationToken);
+            await session.ValidateAuthenticationAsync(apiLogin, cancellationToken);
         }
 
         var itemImporter = new ItemImporter(client)
