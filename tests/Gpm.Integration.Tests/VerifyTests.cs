@@ -66,35 +66,35 @@ public class VerifyTests
         {
             [FixtureRepo] = targetFixtureRepo,
         };
+        var itemMapping = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            [FixtureRepo] = FixtureRepo,
+        };
 
         var result = await new ProjectImporter(client) { RepositoryMapping = repoMapping }
             .ImportAsync(snapshot, TargetOrg, cancellationToken);
         var logDirectory = Directory.CreateTempSubdirectory("gpm-m5-").FullName;
         try
         {
-            await new ItemImporter(client) { RepositoryMapping = repoMapping }
+            var itemResult = await new ItemImporter(client) { RepositoryMapping = itemMapping }
                 .ImportAsync(snapshot, result, logDirectory, cancellationToken);
+            Assert.Equal(snapshot.Items.Count, itemResult.Created);
+            Assert.Empty(itemResult.Warnings);
             var importLog = await ImportLog.LoadAsync(logDirectory, cancellationToken);
             Assert.NotNull(importLog);
             var verificationSnapshot = snapshot with
             {
-                Items = snapshot.Items.Where(item =>
-                    importLog.Items.ContainsKey(item.Position.ToString(CultureInfo.InvariantCulture))).ToList(),
-            };
-            var targetSnapshot = verificationSnapshot with
-            {
-                Items = verificationSnapshot.Items.Select(item =>
-                    string.Equals(item.Repository, FixtureRepo, StringComparison.OrdinalIgnoreCase)
-                        ? item with { Repository = targetFixtureRepo }
-                        : item).ToList(),
+                LinkedRepositories = snapshot.LinkedRepositories?.Select(repository =>
+                    string.Equals(repository, FixtureRepo, StringComparison.OrdinalIgnoreCase)
+                        ? targetFixtureRepo
+                        : repository).ToList(),
             };
             await IntegrationFixtureSnapshot.RemoveUnexpectedItemsAsync(
-                client, TargetOrg, result.ProjectNumber, targetSnapshot, cancellationToken);
+                client, TargetOrg, result.ProjectNumber, verificationSnapshot, cancellationToken);
 
             var postExportCalled = false;
             var verifier = new ProjectVerifier(client)
             {
-                RepositoryMapping = repoMapping,
                 PostExportAsync = (target, _) =>
                 {
                     postExportCalled = true;

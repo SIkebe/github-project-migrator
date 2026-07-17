@@ -2,12 +2,67 @@ using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
+using System.Text.Json;
 using Gpm.Core.Snapshot;
 
 namespace Gpm.Core.Tests;
 
 public class CliImportTests
 {
+    [Fact]
+    public async Task Verify_reports_category_statuses_and_writes_consistent_json()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var directory = Path.Combine(Path.GetTempPath(), "gpm-cli-verify-" + Guid.NewGuid().ToString("N"));
+        var reportPath = Path.Combine(directory, "report.json");
+        await SnapshotFile.SaveAsync(VerifySnapshot(), directory, cancellationToken);
+
+        using var server = new GraphQlStubServer(VerifyProjectResponse, VerifyItemsResponse);
+        try
+        {
+            var result = await RunVerifyCliAsync(directory, server, "--report-json", reportPath);
+
+            Assert.Equal(0, result.ExitCode);
+            Assert.Contains("Project: Match", result.Output, StringComparison.Ordinal);
+            Assert.Contains("LinkedRepository: PartialMatch", result.Output, StringComparison.Ordinal);
+            Assert.Contains("Collaborator: NotVerified", result.Output, StringComparison.Ordinal);
+            Assert.Contains("1 warning(s)", result.Output, StringComparison.Ordinal);
+            Assert.EndsWith("NotVerified." + Environment.NewLine, result.Output, StringComparison.Ordinal);
+
+            using var report = JsonDocument.Parse(await File.ReadAllTextAsync(reportPath, cancellationToken));
+            Assert.Equal("NotVerified", report.RootElement.GetProperty("status").GetString());
+            Assert.Equal(1, report.RootElement.GetProperty("warningCount").GetInt32());
+            Assert.Equal(1, report.RootElement.GetProperty("notVerifiedCount").GetInt32());
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Theory]
+    [InlineData("--strict")]
+    [InlineData("--fail-on-warning")]
+    public async Task Verify_exit_policy_options_fail_incomplete_or_warning_results(string option)
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var directory = Path.Combine(Path.GetTempPath(), "gpm-cli-verify-policy-" + Guid.NewGuid().ToString("N"));
+        await SnapshotFile.SaveAsync(VerifySnapshot(), directory, cancellationToken);
+
+        using var server = new GraphQlStubServer(VerifyProjectResponse, VerifyItemsResponse);
+        try
+        {
+            var result = await RunVerifyCliAsync(directory, server, option);
+
+            Assert.Equal(1, result.ExitCode);
+            Assert.Contains("NotVerified.", result.Output, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
     [Fact]
     public async Task Conflict_skip_with_browser_automation_does_not_run_downstream_importers()
     {
@@ -126,6 +181,46 @@ public class CliImportTests
         return (process.ExitCode, await output, await error);
     }
 
+    private static async Task<(int ExitCode, string Output, string Error)> RunVerifyCliAsync(
+        string directory,
+        GraphQlStubServer server,
+        params string[] additionalArguments)
+    {
+        var startInfo = new ProcessStartInfo("dotnet")
+        {
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+        };
+        foreach (var argument in new[]
+        {
+            Path.Combine(AppContext.BaseDirectory, "gpm.dll"),
+            "verify",
+            "--org", "target",
+            "--project", "42",
+            "--in", directory,
+            "--token", "dummy-token",
+            "--target-base-url", server.GraphQlUrl,
+            "--no-update-check",
+        })
+        {
+            startInfo.ArgumentList.Add(argument);
+        }
+
+        foreach (var argument in additionalArguments)
+        {
+            startInfo.ArgumentList.Add(argument);
+        }
+
+        using var process = Process.Start(startInfo)
+            ?? throw new InvalidOperationException("Failed to start the gpm process.");
+        var output = process.StandardOutput.ReadToEndAsync(TestContext.Current.CancellationToken);
+        var error = process.StandardError.ReadToEndAsync(TestContext.Current.CancellationToken);
+        await process.WaitForExitAsync(TestContext.Current.CancellationToken);
+
+        return (process.ExitCode, await output, await error);
+    }
+
     private static ProjectSnapshot MinimalSnapshot() => new()
     {
         SchemaVersion = ProjectSnapshot.CurrentSchemaVersion,
@@ -190,6 +285,12 @@ public class CliImportTests
         ],
     };
 
+    private static ProjectSnapshot VerifySnapshot() => MinimalSnapshot() with
+    {
+        Collaborators = null,
+        LinkedRepositories = [],
+    };
+
     private const string ExistingProjectResponse =
         """
         {"data":{"organization":{"projectsV2":{
@@ -203,6 +304,22 @@ public class CliImportTests
 
     private const string EmptyFieldsResponse =
         """{"data":{"node":{"fields":{"nodes":[]}}}}""";
+
+    private const string VerifyProjectResponse =
+        """
+        {"data":{"organization":{"projectV2":{
+          "title":"Roadmap","shortDescription":null,"readme":null,"public":false,"closed":false,
+          "fields":{"nodes":[]},"views":{"nodes":[]},"workflows":{"nodes":[]},
+          "repositories":{"nodes":[{"nameWithOwner":"target/extra"}]}
+        }}}}
+        """;
+
+    private const string VerifyItemsResponse =
+        """
+        {"data":{"organization":{"projectV2":{
+          "items":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}
+        }}}}
+        """;
 
     private sealed class GraphQlStubServer : IDisposable
     {

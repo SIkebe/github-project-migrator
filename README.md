@@ -71,6 +71,18 @@ Tokens are resolved from `--token`, then the `GITHUB_TOKEN` / `GPM_TOKEN` enviro
 
 Errors always produce exit code 1. `--strict` also fails on `NotVerified`, and `--fail-on-warning` also fails when warnings exist. Use `--report-json <path>` for the same overall/category results and counts in machine-readable form. Without browser automation, GraphQL-readable View settings are still compared, but UI-only View/Workflow settings and explicit collaborators are reported as `NotVerified`; use `--enable-browser-automation --strict` when verification must prove those areas too.
 
+| Category | Verification coverage |
+|---|---|
+| Project | Description, README, visibility, and closed state. A changed title is informational because import supports title overrides. |
+| Field | Field presence/type, single-select option order/name/color/description, and iteration dates/durations. |
+| Item | Counts/types, issue and pull request identity, draft body, field values, active-item order, and archived state. Archived-item order is excluded because GitHub cannot restore it. |
+| View | Name/layout plus GraphQL filter, visible fields/order, grouping, and sorting. Browser mode adds slice, swimlanes, field sums, and roadmap dates/zoom/markers. |
+| Workflow | Name/enabled state. Browser mode adds content types, status, filter, and repository. |
+| Collaborator | Browser-captured explicit user/team collaborators and roles. Inherited and base-role access is excluded. |
+| LinkedRepository | Linked repository identities after repository mapping. |
+
+Insights charts, item/field-value history, and inherited/base-role access are not verified.
+
 ### Token permissions
 
 You can use either a classic PAT or a fine-grained PAT. Fine-grained PATs are scoped to a single resource owner, so cross-organization or cross-account migrations usually need separate source and target tokens.
