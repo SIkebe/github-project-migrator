@@ -46,6 +46,8 @@ internal static class IntegrationFixtureSnapshot
     {
         var expectedKeys = expected.Items.Select(ItemKey).ToHashSet(StringComparer.OrdinalIgnoreCase);
         HashSet<string> unexpectedKeys = [];
+        // Keep observing for the full window: Auto-add can create an unexpected item
+        // several seconds after an initially clean read.
         for (var attempt = 0; attempt < 8; attempt++)
         {
             var (projectId, nodes) = await QueryItemsAsync();
