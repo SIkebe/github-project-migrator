@@ -46,7 +46,8 @@ public sealed class FixtureProjectBuilder
         var hasPendingOperations = projectLog.PendingProject is not null
             || projectLog.PendingFields.Count > 0
             || itemLog is { PendingDrafts.Count: > 0 }
-            || itemLog is { PendingContents.Count: > 0 };
+            || itemLog is { PendingContents.Count: > 0 }
+            || itemLog is { HasIncompleteItems: true };
         if (existing is not null && !hasPendingOperations)
         {
             OnProgress?.Invoke(string.Create(CultureInfo.InvariantCulture,
@@ -66,6 +67,7 @@ public sealed class FixtureProjectBuilder
             OperationLogDirectory = operationDirectory,
             PendingItemProjectId = itemLog is { PendingDrafts.Count: > 0 }
                 || itemLog is { PendingContents.Count: > 0 }
+                || itemLog is { HasIncompleteItems: true }
                     ? itemLog.ProjectId
                     : null,
             RepositoryMapping = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)

@@ -38,6 +38,10 @@ public sealed record ImportLog
     /// <summary>Issue/PR additions persisted before sending so an ambiguous result can be reconciled safely.</summary>
     public Dictionary<string, PendingContentOperation> PendingContents { get; init; } = new(StringComparer.Ordinal);
 
+    [JsonIgnore]
+    public bool HasIncompleteItems => ItemStates.Values.Any(state =>
+        !state.FieldValuesApplied || !state.PositionApplied || !state.ArchiveApplied);
+
     /// <summary>Loads the log from <paramref name="directory"/>, or returns null when missing.</summary>
     public static async Task<ImportLog?> LoadAsync(string directory, CancellationToken cancellationToken = default)
     {
@@ -128,7 +132,14 @@ public sealed record ImportItemState
 
     public bool ArchiveApplied { get; set; }
 
-    public string? LastError { get; set; }
+    public string? FieldValuesError { get; set; }
+
+    public string? PositionError { get; set; }
+
+    public string? ArchiveError { get; set; }
+
+    [JsonIgnore]
+    public string? LastError => FieldValuesError ?? PositionError ?? ArchiveError;
 }
 
 public sealed record PendingDraftOperation

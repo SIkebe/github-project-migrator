@@ -225,7 +225,7 @@ public class ItemImporterResumeTests
             Assert.Equal("PVTI_new", interruptedState.TargetItemId);
             Assert.NotNull(interruptedState.LastError);
 
-            await importer.ImportAsync(snapshot, target, directory, cancellationToken);
+            var resumedResult = await importer.ImportAsync(snapshot, target, directory, cancellationToken);
 
             var completed = await ImportLog.LoadAsync(directory, cancellationToken);
             var completedState = Assert.Single(completed!.ItemStates).Value;
@@ -233,6 +233,11 @@ public class ItemImporterResumeTests
             Assert.True(completedState.PositionApplied);
             Assert.True(completedState.ArchiveApplied);
             Assert.Null(completedState.LastError);
+            Assert.False(completed.HasIncompleteItems);
+            Assert.Equal(0, resumedResult.Created);
+            Assert.Equal(1, resumedResult.Resumed);
+            Assert.Equal(0, resumedResult.AlreadyComplete);
+            Assert.Equal(0, resumedResult.Skipped);
             Assert.Equal(1, handler.CreateMutationCount);
             Assert.Equal(2, failedStage switch
             {
@@ -240,6 +245,12 @@ public class ItemImporterResumeTests
                 "position" => handler.PositionMutationCount,
                 _ => handler.ArchiveMutationCount,
             });
+
+            var completeResult = await importer.ImportAsync(snapshot, target, directory, cancellationToken);
+            Assert.Equal(0, completeResult.Created);
+            Assert.Equal(0, completeResult.Resumed);
+            Assert.Equal(1, completeResult.AlreadyComplete);
+            Assert.Equal(0, completeResult.Skipped);
         }
         finally
         {
@@ -260,15 +271,18 @@ public class ItemImporterResumeTests
 
             var first = await CreateImporter(client).ImportAsync(snapshot, Target, directory, cancellationToken);
             Assert.Single(first.Warnings);
-            Assert.False(Assert.Single((await ImportLog.LoadAsync(directory, cancellationToken))!.ItemStates).Value.FieldValuesApplied);
+            var incomplete = await ImportLog.LoadAsync(directory, cancellationToken);
+            Assert.True(incomplete!.HasIncompleteItems);
+            Assert.NotNull(Assert.Single(incomplete.ItemStates).Value.FieldValuesError);
 
             var targetWithField = Target with
             {
                 FieldIds = new Dictionary<string, string> { ["Text"] = "PVTF_text" },
             };
-            await CreateImporter(client).ImportAsync(snapshot, targetWithField, directory, cancellationToken);
+            var resumed = await CreateImporter(client).ImportAsync(snapshot, targetWithField, directory, cancellationToken);
 
             Assert.True(Assert.Single((await ImportLog.LoadAsync(directory, cancellationToken))!.ItemStates).Value.FieldValuesApplied);
+            Assert.Equal(1, resumed.Resumed);
             Assert.Equal(1, handler.CreateMutationCount);
             Assert.Equal(1, handler.FieldMutationCount);
         }

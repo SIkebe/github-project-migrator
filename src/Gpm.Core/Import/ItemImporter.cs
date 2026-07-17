@@ -68,6 +68,8 @@ public sealed class ItemImporter
         var items = snapshot.Items.OrderBy(i => i.Position).ToList();
         var total = items.Count;
         var created = 0;
+        var resumed = 0;
+        var alreadyComplete = 0;
         var skipped = 0;
 
         for (var index = 0; index < items.Count; index++)
@@ -89,8 +91,16 @@ public sealed class ItemImporter
             if (log.ItemStates.TryGetValue(stateKey, out var completedState)
                 && completedState.FieldValuesApplied)
             {
-                OnProgress?.Invoke($"{prefix} {label}: content and field values already complete; resuming later stages.");
-                skipped++;
+                if (completedState.PositionApplied && completedState.ArchiveApplied)
+                {
+                    OnProgress?.Invoke($"{prefix} {label}: already complete.");
+                    alreadyComplete++;
+                }
+                else
+                {
+                    OnProgress?.Invoke($"{prefix} {label}: content and field values already complete; resuming later stages.");
+                    resumed++;
+                }
                 continue;
             }
 
@@ -194,13 +204,17 @@ public sealed class ItemImporter
                     label,
                     warnings,
                     cancellationToken).ConfigureAwait(false);
-                itemState.LastError = itemState.FieldValuesApplied
+                itemState.FieldValuesError = itemState.FieldValuesApplied
                     ? null
                     : "One or more field values could not be applied; resume will retry this stage.";
                 await log.SaveAsync(logDirectory, cancellationToken).ConfigureAwait(false);
                 if (completedState is null)
                 {
                     created++;
+                }
+                else
+                {
+                    resumed++;
                 }
             }
             catch (AmbiguousMutationResultException)
@@ -216,7 +230,7 @@ public sealed class ItemImporter
                 }
                 else if (log.ItemStates.TryGetValue(stateKey, out var itemState))
                 {
-                    itemState.LastError = exception.Message;
+                    itemState.FieldValuesError = exception.Message;
                     await log.SaveAsync(logDirectory, CancellationToken.None).ConfigureAwait(false);
                 }
 
@@ -228,9 +242,16 @@ public sealed class ItemImporter
         await ArchiveItemsAsync(items, target.ProjectId, log, logDirectory, warnings, cancellationToken).ConfigureAwait(false);
 
         OnProgress?.Invoke(string.Create(CultureInfo.InvariantCulture,
-            $"Item import finished: {created} created, {skipped} skipped, {warnings.Count} warnings."));
+            $"Item import finished: {created} created, {resumed} resumed, {alreadyComplete} already complete, {skipped} skipped, {warnings.Count} warnings."));
 
-        return new ItemImportResult { Created = created, Skipped = skipped, Warnings = warnings };
+        return new ItemImportResult
+        {
+            Created = created,
+            Resumed = resumed,
+            AlreadyComplete = alreadyComplete,
+            Skipped = skipped,
+            Warnings = warnings,
+        };
     }
 
     /// <summary>
@@ -742,12 +763,12 @@ public sealed class ItemImporter
                         requiredResultPath: "clientMutationId",
                         cancellationToken: cancellationToken).ConfigureAwait(false);
                     state.PositionApplied = true;
-                    state.LastError = null;
+                    state.PositionError = null;
                     await log.SaveAsync(logDirectory, cancellationToken).ConfigureAwait(false);
                 }
                 catch (Exception exception)
                 {
-                    state.LastError = exception.Message;
+                    state.PositionError = exception.Message;
                     await log.SaveAsync(logDirectory, CancellationToken.None).ConfigureAwait(false);
                     throw;
                 }
@@ -784,7 +805,7 @@ public sealed class ItemImporter
             if (!item.IsArchived)
             {
                 state.ArchiveApplied = true;
-                state.LastError = null;
+                state.ArchiveError = null;
                 await log.SaveAsync(logDirectory, cancellationToken).ConfigureAwait(false);
                 continue;
             }
@@ -806,12 +827,12 @@ public sealed class ItemImporter
                     requiredResultPath: "item.id",
                     cancellationToken: cancellationToken).ConfigureAwait(false);
                 state.ArchiveApplied = true;
-                state.LastError = null;
+                state.ArchiveError = null;
                 await log.SaveAsync(logDirectory, cancellationToken).ConfigureAwait(false);
             }
             catch (GitHubGraphQLException exception)
             {
-                state.LastError = exception.Message;
+                state.ArchiveError = exception.Message;
                 await log.SaveAsync(logDirectory, CancellationToken.None).ConfigureAwait(false);
                 Warn(warnings, $"{DescribeItem(item)}: could not archive: {exception.Message}");
             }

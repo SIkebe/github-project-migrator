@@ -405,6 +405,7 @@ importCommand.SetAction(async (parseResult, cancellationToken) =>
         var itemLog = await ImportLog.LoadAsync(inDirectory, cancellationToken);
         var pendingItemProjectId = itemLog is { PendingDrafts.Count: > 0 }
             || itemLog is { PendingContents.Count: > 0 }
+            || itemLog is { HasIncompleteItems: true }
                 ? itemLog.ProjectId
                 : null;
         var importer = new ProjectImporter(client)
@@ -483,7 +484,7 @@ importCommand.SetAction(async (parseResult, cancellationToken) =>
         Console.WriteLine(string.Create(CultureInfo.InvariantCulture,
             $"result={FormatProjectImportOutcome(result.Outcome)} project={result.ProjectNumber}"));
         Console.WriteLine(string.Create(CultureInfo.InvariantCulture,
-            $"items: created={itemResult.Created} skipped={itemResult.Skipped} warnings={itemResult.Warnings.Count}"));
+            $"items: created={itemResult.Created} resumed={itemResult.Resumed} already-complete={itemResult.AlreadyComplete} skipped={itemResult.Skipped} warnings={itemResult.Warnings.Count}"));
         if (enableBrowserAutomation)
         {
             Console.WriteLine(string.Create(CultureInfo.InvariantCulture,
