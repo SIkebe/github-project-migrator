@@ -1,6 +1,6 @@
 # Projects UI Discovery (D0) — 2026-07-05
 
-実 UI(GHEC, gpm-source/projects/3)での Playwright 操作から得た確定情報。M6/M7 実装の一次資料。
+実 UI(GHEC, ghpmv-source/projects/3)での Playwright 操作から得た確定情報。M6/M7 実装の一次資料。
 
 ## セレクター確定事項
 
@@ -26,14 +26,14 @@
 5. View 系の設定変更は SPA 内で「Unsaved changes」になり、明示保存が必要(タブ名変更は例外で即時保存)
 6. GraphQL read-back: views { number name layout } / workflows { number name enabled } は UI 操作直後に反映される(遅延なし)
 
-## フィクスチャー最終状態(gpm-source/projects/3)
+## フィクスチャー最終状態(ghpmv-source/projects/3)
 
 - Views:
   - 1=View 1 (TABLE): filter=`status:Todo`, Sort by=Fixture Number (asc), Slice by=Fixture Select, visibleFields=既定 5 + Fixture Text + Fixture Date(Fixture Number はソート由来の仮想列のため visibleFields に入らない — 下記 E2E 知見 8)
   - 2=Fixture Board (BOARD): Column by=Fixture Select, Swimlanes=Status(GraphQL groupByFields に反映), Field sum=[Fixture Number](Count は uncheck 済み)
   - 3=Fixture Roadmap (ROADMAP): Dates=Fixture Date → Fixture Sprint end, Zoom=Quarter, Markers=[Fixture Date]
 - Workflows 9(GraphQL 可視分): 既定 6 enabled + Auto-add to project (#7: repo=fixture-repo, filter=`is:issue is:open`) + **Auto-add secondary**(repo=fixture-repo, filter=`is:issue label:bug`, enabled)+ **Code changes requested**(保存済み disabled, Set value=In Progress)
-- fixture-repo: private, Issue #1/#2(gpm-target 側にも同名 repo あり — workflow E2E 用)
+- fixture-repo: private, Issue #1/#2(ghpmv-target 側にも同名 repo あり — workflow E2E 用)
 
 ## M7 E2E 実走で確定した追加知見(2026-07-05)
 
@@ -42,7 +42,7 @@
 3. **編集モードで実効差分が無いと Save ボタンは disabled のまま** → クリック待ちでハング。disabled なら Discard で抜ける(SaveWorkflowAsync 実装済み)
 4. **リポジトリ picker は入力後に非同期で再フィルター**(デバウンス+fetch)→ option は CountAsync 即時判定でなく WaitForAsync(10s) で待つ
 5. View タブの**リネーム用ダブルクリックは新規タブ作成直後に不発になることがある** → textbox 出現を 5s 待ち×3 リトライ
-6. **EMU/SAML のセッションは短命**(数時間で失効)。失効時は `/login` リダイレクトではなく **enterprise SSO インタースティシャル**("Single sign-on to <Enterprise>" + Continue)が出る。BrowserSession.GotoAsync は Continue 自動クリックで IdP セッションが生きていれば透過再認証、死んでいれば失敗 → `gpm login` 再実行が必要(IdP セッションまで失効すると素の `/login` リダイレクトになる)
+6. **EMU/SAML のセッションは短命**(数時間で失効)。失効時は `/login` リダイレクトではなく **enterprise SSO インタースティシャル**("Single sign-on to <Enterprise>" + Continue)が出る。BrowserSession.GotoAsync は Continue 自動クリックで IdP セッションが生きていれば透過再認証、死んでいれば失敗 → `ghpmv login` 再実行が必要(IdP セッションまで失効すると素の `/login` リダイレクトになる)
 7. 並列テスト実行時(browser E2E + integration 同時)は SPA ハイドレーションが遅くなる → Playwright 既定タイムアウトは 30s に設定
 
 ## Project collaborators UI export discovery (2026-07-06)
@@ -51,7 +51,7 @@ GraphQL has `updateProjectV2Collaborators` but no read field for current project
 
 `/orgs/{org}/projects/{number}/settings/access`
 
-Confirmed with `ravel-maurice-uo_sde` temporarily added as a WRITER collaborator to `gpm-source/projects/3`:
+Confirmed with `ravel-maurice-uo_sde` temporarily added as a WRITER collaborator to `ghpmv-source/projects/3`:
 
 ```yaml
 - heading "Manage access" [level=3]

@@ -85,15 +85,15 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-nuget-
       - name: Restore
-        run: dotnet restore src/Gpm.Cli -r ${{ matrix.rid }}
+        run: dotnet restore src/Ghpmv.Cli -r ${{ matrix.rid }}
       - name: Publish self-contained (${{ matrix.rid }})
         shell: pwsh
-        run: dotnet publish src/Gpm.Cli -c Release --no-restore --self-contained true -r ${{ matrix.rid }} -o "stage/gpm-${{ github.ref_name }}-${{ matrix.rid }}"
+        run: dotnet publish src/Ghpmv.Cli -c Release --no-restore --self-contained true -r ${{ matrix.rid }} -o "stage/ghpmv-${{ github.ref_name }}-${{ matrix.rid }}"
       - name: Smoke test
         if: ${{ matrix.smoke }}
         shell: pwsh
         run: |
-          $exe = Join-Path 'stage' "gpm-${{ github.ref_name }}-${{ matrix.rid }}" ($IsWindows ? 'gpm.exe' : 'gpm')
+          $exe = Join-Path 'stage' "ghpmv-${{ github.ref_name }}-${{ matrix.rid }}" ($IsWindows ? 'ghpmv.exe' : 'ghpmv')
           & $exe --version
           if ($LASTEXITCODE -ne 0) { exit 1 }
           & $exe export --help
@@ -103,13 +103,13 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Path dist | Out-Null
-          Compress-Archive -Path "stage/gpm-${{ github.ref_name }}-${{ matrix.rid }}" -DestinationPath "dist/gpm-${{ github.ref_name }}-${{ matrix.rid }}.zip"
+          Compress-Archive -Path "stage/ghpmv-${{ github.ref_name }}-${{ matrix.rid }}" -DestinationPath "dist/ghpmv-${{ github.ref_name }}-${{ matrix.rid }}.zip"
       - name: Archive (tar.gz)
         if: ${{ runner.os != 'Windows' }}
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Path dist | Out-Null
-          tar -czf "dist/gpm-${{ github.ref_name }}-${{ matrix.rid }}.tar.gz" -C stage "gpm-${{ github.ref_name }}-${{ matrix.rid }}"
+          tar -czf "dist/ghpmv-${{ github.ref_name }}-${{ matrix.rid }}.tar.gz" -C stage "ghpmv-${{ github.ref_name }}-${{ matrix.rid }}"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: sc-${{ matrix.rid }}
@@ -137,23 +137,23 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-nuget-
       - name: Restore
-        run: dotnet restore src/Gpm.Cli
+        run: dotnet restore src/Ghpmv.Cli
       - name: Publish framework-dependent (portable)
         shell: pwsh
-        run: dotnet publish src/Gpm.Cli -c Release --no-restore --self-contained false -o "stage/gpm-${{ github.ref_name }}-portable"
+        run: dotnet publish src/Ghpmv.Cli -c Release --no-restore --self-contained false -o "stage/ghpmv-${{ github.ref_name }}-portable"
       - name: Smoke test
         shell: pwsh
         run: |
-          dotnet "stage/gpm-${{ github.ref_name }}-portable/gpm.dll" --version
+          dotnet "stage/ghpmv-${{ github.ref_name }}-portable/ghpmv.dll" --version
           if ($LASTEXITCODE -ne 0) { exit 1 }
-          dotnet "stage/gpm-${{ github.ref_name }}-portable/gpm.dll" export --help
+          dotnet "stage/ghpmv-${{ github.ref_name }}-portable/ghpmv.dll" export --help
           if ($LASTEXITCODE -ne 0) { exit 1 }
       - name: Archive (zip)
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Path dist | Out-Null
           Push-Location stage
-          zip -r "../dist/gpm-${{ github.ref_name }}-portable.zip" "gpm-${{ github.ref_name }}-portable"
+          zip -r "../dist/ghpmv-${{ github.ref_name }}-portable.zip" "ghpmv-${{ github.ref_name }}-portable"
           Pop-Location
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -182,16 +182,16 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-nuget-
       - name: Restore
-        run: dotnet restore Gpm.slnx
+        run: dotnet restore Ghpmv.slnx
       - name: Pack NuGet global tool
-        run: dotnet pack src/Gpm.Cli -c Release --no-restore -o dist
+        run: dotnet pack src/Ghpmv.Cli -c Release --no-restore -o dist
       - name: Smoke test (install from local package)
         shell: pwsh
         run: |
-          dotnet tool install --global gpm --add-source dist
-          gpm --version
+          dotnet tool install --global ghpmv --add-source dist
+          ghpmv --version
           if ($LASTEXITCODE -ne 0) { exit 1 }
-          gpm export --help
+          ghpmv export --help
           if ($LASTEXITCODE -ne 0) { exit 1 }
       # NuGet.org publishing is prepared but disabled until the NUGET_API_KEY secret is configured.
       - name: Push to NuGet.org (disabled)
