@@ -28,7 +28,7 @@ dotnet test tests/Gpm.Core.Tests/Gpm.Core.Tests.csproj -c Release --filter "Full
 dotnet test tests/Gpm.Integration.Tests/Gpm.Integration.Tests.csproj -c Release
 ```
 
-Browser E2E tests require both `GPM_BROWSER_STATE` and `GPM_TEST_TOKEN`. Create browser state through the CLI rather than editing it:
+Browser E2E tests require both `GPM_BROWSER_STATE` and `GPM_TEST_TOKEN`. `BrowserRoundTripTests` also expects source project `#3` to contain the collaborator, View, and Workflow fixture data asserted by the tests, and the target organization must permit temporary project creation/deletion. `GPM_TEST_ORG` and `GPM_TEST_TARGET_ORG` select those organizations; `GPM_TEST_PROJECT_NUMBER` does not change this suite's hardcoded project number. Create browser state through the CLI rather than editing it:
 
 ```powershell
 dotnet run --project src/Gpm.Cli -- setup --browsers
