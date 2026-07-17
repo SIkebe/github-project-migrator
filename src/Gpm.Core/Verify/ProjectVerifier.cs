@@ -666,8 +666,34 @@ public sealed class ProjectVerifier
                     }
                 }
             }
+            else
+            {
+                if (s.Any(workflow => workflow.Ui is null) || t.Any(workflow => workflow.Ui is null))
+                {
+                    notVerified.Add(WorkflowCategory);
+                    if (s.All(workflow => workflow.Ui is not null) && t.Any(workflow => workflow.Ui is null))
+                    {
+                        Add(differences, VerifySeverity.Warning, WorkflowCategory,
+                            $"workflows named '{name}': UI settings were captured in the source but could not all be read from the target");
+                    }
+                }
+                else if (!MultisetEquals(s, t, WorkflowEquals))
+                {
+                    AddError(differences, WorkflowCategory,
+                        $"workflows named '{name}': UI settings do not match");
+                }
+            }
         }
     }
+
+    private static bool WorkflowEquals(WorkflowSnapshot source, WorkflowSnapshot target)
+        => source.Enabled == target.Enabled
+            && source.Ui is not null
+            && target.Ui is not null
+            && UiListEquals(source.Ui.ContentTypes, target.Ui.ContentTypes)
+            && string.Equals(source.Ui.StatusValue, target.Ui.StatusValue, StringComparison.Ordinal)
+            && string.Equals(source.Ui.Filter, target.Ui.Filter, StringComparison.Ordinal)
+            && string.Equals(source.Ui.Repository, target.Ui.Repository, StringComparison.Ordinal);
 
     private static void CompareWorkflowUi(string name, WorkflowUiSnapshot source, WorkflowUiSnapshot target, List<VerifyDifference> differences)
     {

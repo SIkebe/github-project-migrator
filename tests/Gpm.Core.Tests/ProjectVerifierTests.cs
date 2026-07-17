@@ -457,6 +457,42 @@ public class ProjectVerifierTests
             category.Category == "Workflow" && category.Status == VerifyStatus.NotVerified);
     }
 
+    [Fact]
+    public void Duplicate_workflow_names_are_compared_as_setting_multisets()
+    {
+        var baseline = BuildSnapshot();
+        var first = baseline.Workflows[0] with
+        {
+            Number = 1,
+            Ui = new WorkflowUiSnapshot { Filter = "is:issue", StatusValue = "Todo" },
+        };
+        var second = baseline.Workflows[0] with
+        {
+            Number = 2,
+            Ui = new WorkflowUiSnapshot { Filter = "is:pr", StatusValue = "Done" },
+        };
+        var source = baseline with { Workflows = [first, second] };
+        var reordered = baseline with { Workflows = [second with { Number = 8 }, first with { Number = 9 }] };
+
+        Assert.DoesNotContain(ProjectVerifier.Compare(source, reordered).Differences, difference =>
+            difference.Category == "Workflow");
+
+        var drifted = baseline with
+        {
+            Workflows =
+            [
+                second with { Number = 8 },
+                first with { Number = 9, Ui = first.Ui! with { Filter = "is:open" } },
+            ],
+        };
+        var report = ProjectVerifier.Compare(source, drifted);
+
+        Assert.Contains(report.Differences, difference =>
+            difference.Severity == VerifySeverity.Error
+            && difference.Category == "Workflow"
+            && difference.Message.Contains("UI settings", StringComparison.Ordinal));
+    }
+
     // ----- items -----
 
     [Fact]

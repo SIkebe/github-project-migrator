@@ -961,7 +961,6 @@ static void WriteVerifyReport(VerifyReport report)
     if (report.Status == VerifyStatus.Match && report.Differences.Count == 0)
     {
         Console.WriteLine("OK: the target project matches the snapshot.");
-        return;
     }
 
     if (report.Differences.Count > 0)
