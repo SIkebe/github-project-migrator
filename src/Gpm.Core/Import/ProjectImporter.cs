@@ -234,16 +234,19 @@ public sealed class ProjectImporter
 
         OnProgress?.Invoke(string.Create(CultureInfo.InvariantCulture,
             $"Applying {inputs.Count} project collaborators..."));
-        await _client.QueryAsync(
+        await _client.MutationAsync(
+            "updateProjectV2Collaborators",
             """
-            mutation($projectId: ID!, $collaborators: [ProjectV2Collaborator!]!) {
-              updateProjectV2Collaborators(input: { projectId: $projectId, collaborators: $collaborators }) {
+            mutation($projectId: ID!, $collaborators: [ProjectV2Collaborator!]!, $clientMutationId: String!) {
+              updateProjectV2Collaborators(input: { projectId: $projectId, collaborators: $collaborators, clientMutationId: $clientMutationId }) {
                 collaborators(first: 100) { nodes { __typename } }
               }
             }
             """,
             new { projectId, collaborators = inputs.ToArray() },
-            cancellationToken).ConfigureAwait(false);
+            MutationRetryPolicy.Idempotent,
+            target: projectId,
+            cancellationToken: cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -279,16 +282,19 @@ public sealed class ProjectImporter
 
             try
             {
-                await _client.QueryAsync(
+                await _client.MutationAsync(
+                    "linkProjectV2ToRepository",
                     """
-                    mutation($projectId: ID!, $repositoryId: ID!) {
-                      linkProjectV2ToRepository(input: { projectId: $projectId, repositoryId: $repositoryId }) {
+                    mutation($projectId: ID!, $repositoryId: ID!, $clientMutationId: String!) {
+                      linkProjectV2ToRepository(input: { projectId: $projectId, repositoryId: $repositoryId, clientMutationId: $clientMutationId }) {
                         repository { nameWithOwner }
                       }
                     }
                     """,
                     new { projectId, repositoryId },
-                    cancellationToken).ConfigureAwait(false);
+                    MutationRetryPolicy.Idempotent,
+                    target: projectId,
+                    cancellationToken: cancellationToken).ConfigureAwait(false);
                 OnProgress?.Invoke($"Linked repository '{mapped}'.");
             }
             catch (GitHubGraphQLException exception)
@@ -428,26 +434,29 @@ public sealed class ProjectImporter
 
     private async Task<ProjectRef> CreateProjectAsync(string ownerId, string title, CancellationToken cancellationToken)
     {
-        var data = await _client.QueryAsync(
+        var data = await _client.MutationAsync(
+            "createProjectV2",
             """
-            mutation($ownerId: ID!, $title: String!) {
-              createProjectV2(input: { ownerId: $ownerId, title: $title }) {
+            mutation($ownerId: ID!, $title: String!, $clientMutationId: String!) {
+              createProjectV2(input: { ownerId: $ownerId, title: $title, clientMutationId: $clientMutationId }) {
                 projectV2 { id number title url }
               }
             }
             """,
             new { ownerId, title },
-            cancellationToken).ConfigureAwait(false);
+            target: title,
+            cancellationToken: cancellationToken).ConfigureAwait(false);
 
         return ParseProjectRef(data.GetProperty("createProjectV2").GetProperty("projectV2"));
     }
 
     private async Task UpdateProjectMetadataAsync(string projectId, ProjectInfoSnapshot info, CancellationToken cancellationToken)
     {
-        await _client.QueryAsync(
+        await _client.MutationAsync(
+            "updateProjectV2",
             """
-            mutation($projectId: ID!, $shortDescription: String, $readme: String, $public: Boolean, $closed: Boolean) {
-              updateProjectV2(input: { projectId: $projectId, shortDescription: $shortDescription, readme: $readme, public: $public, closed: $closed }) {
+            mutation($projectId: ID!, $shortDescription: String, $readme: String, $public: Boolean, $closed: Boolean, $clientMutationId: String!) {
+              updateProjectV2(input: { projectId: $projectId, shortDescription: $shortDescription, readme: $readme, public: $public, closed: $closed, clientMutationId: $clientMutationId }) {
                 projectV2 { id }
               }
             }
@@ -460,7 +469,9 @@ public sealed class ProjectImporter
                 @public = info.Public,
                 closed = info.Closed,
             },
-            cancellationToken).ConfigureAwait(false);
+            MutationRetryPolicy.Idempotent,
+            target: projectId,
+            cancellationToken: cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>Fetches the target project's fields, registers them in the maps and returns them by name.</summary>
@@ -480,7 +491,8 @@ public sealed class ProjectImporter
 
     private async Task CreateFieldAsync(string projectId, FieldSnapshot field, FieldMaps maps, CancellationToken cancellationToken)
     {
-        var data = await _client.QueryAsync(
+        var data = await _client.MutationAsync(
+            "createProjectV2Field",
             CreateFieldMutation,
             new
             {
@@ -492,17 +504,19 @@ public sealed class ProjectImporter
                     ? BuildIterationConfigurationInput(field.Name, configuration)
                     : null,
             },
-            cancellationToken).ConfigureAwait(false);
+            target: $"{projectId}/{field.Name}",
+            cancellationToken: cancellationToken).ConfigureAwait(false);
 
         maps.Register(data.GetProperty("createProjectV2Field").GetProperty("projectV2Field"));
     }
 
     private async Task UpdateSingleSelectOptionsAsync(string fieldId, IReadOnlyList<SingleSelectOptionSnapshot> options, FieldMaps maps, CancellationToken cancellationToken)
     {
-        var data = await _client.QueryAsync(
+        var data = await _client.MutationAsync(
+            "updateProjectV2Field",
             """
-            mutation($fieldId: ID!, $options: [ProjectV2SingleSelectFieldOptionInput!]!) {
-              updateProjectV2Field(input: { fieldId: $fieldId, singleSelectOptions: $options }) {
+            mutation($fieldId: ID!, $options: [ProjectV2SingleSelectFieldOptionInput!]!, $clientMutationId: String!) {
+              updateProjectV2Field(input: { fieldId: $fieldId, singleSelectOptions: $options, clientMutationId: $clientMutationId }) {
                 projectV2Field {
                   ... on ProjectV2FieldCommon { id name dataType }
                   ... on ProjectV2SingleSelectField { options { id name } }
@@ -511,7 +525,9 @@ public sealed class ProjectImporter
             }
             """,
             new { fieldId, options = BuildOptionInputs(options) },
-            cancellationToken).ConfigureAwait(false);
+            MutationRetryPolicy.Idempotent,
+            target: fieldId,
+            cancellationToken: cancellationToken).ConfigureAwait(false);
 
         maps.Register(data.GetProperty("updateProjectV2Field").GetProperty("projectV2Field"));
     }
@@ -663,8 +679,8 @@ public sealed class ProjectImporter
 
     private const string CreateFieldMutation =
         """
-        mutation($projectId: ID!, $name: String!, $dataType: ProjectV2CustomFieldType!, $options: [ProjectV2SingleSelectFieldOptionInput!], $iterationConfiguration: ProjectV2IterationFieldConfigurationInput) {
-          createProjectV2Field(input: { projectId: $projectId, name: $name, dataType: $dataType, singleSelectOptions: $options, iterationConfiguration: $iterationConfiguration }) {
+        mutation($projectId: ID!, $name: String!, $dataType: ProjectV2CustomFieldType!, $options: [ProjectV2SingleSelectFieldOptionInput!], $iterationConfiguration: ProjectV2IterationFieldConfigurationInput, $clientMutationId: String!) {
+          createProjectV2Field(input: { projectId: $projectId, name: $name, dataType: $dataType, singleSelectOptions: $options, iterationConfiguration: $iterationConfiguration, clientMutationId: $clientMutationId }) {
             projectV2Field {
               ... on ProjectV2FieldCommon { id name dataType }
               ... on ProjectV2SingleSelectField { options { id name } }

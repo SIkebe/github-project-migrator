@@ -6,7 +6,7 @@ namespace Gpm.Core.GitHub;
 /// Thrown when a GitHub GraphQL request fails, either at the HTTP level
 /// (after retries are exhausted) or because the response contains GraphQL errors.
 /// </summary>
-public sealed class GitHubGraphQLException : Exception
+public class GitHubGraphQLException : Exception
 {
     public GitHubGraphQLException()
     {

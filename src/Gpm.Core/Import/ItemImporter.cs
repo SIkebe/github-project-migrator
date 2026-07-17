@@ -172,16 +172,18 @@ public sealed class ItemImporter
             return null;
         }
 
-        var data = await _client.QueryAsync(
+        var data = await _client.MutationAsync(
+            "addProjectV2ItemById",
             """
-            mutation($projectId: ID!, $contentId: ID!) {
-              addProjectV2ItemById(input: { projectId: $projectId, contentId: $contentId }) {
+            mutation($projectId: ID!, $contentId: ID!, $clientMutationId: String!) {
+              addProjectV2ItemById(input: { projectId: $projectId, contentId: $contentId, clientMutationId: $clientMutationId }) {
                 item { id }
               }
             }
             """,
             new { projectId, contentId },
-            cancellationToken).ConfigureAwait(false);
+            target: $"{projectId}/{contentId}",
+            cancellationToken: cancellationToken).ConfigureAwait(false);
 
         return data.GetProperty("addProjectV2ItemById").GetProperty("item").GetProperty("id").GetString();
     }
@@ -190,16 +192,18 @@ public sealed class ItemImporter
     {
         var assigneeIds = await ResolveAssigneeIdsAsync(draft, warnings, cancellationToken).ConfigureAwait(false);
 
-        var data = await _client.QueryAsync(
+        var data = await _client.MutationAsync(
+            "addProjectV2DraftIssue",
             """
-            mutation($projectId: ID!, $title: String!, $body: String, $assigneeIds: [ID!]) {
-              addProjectV2DraftIssue(input: { projectId: $projectId, title: $title, body: $body, assigneeIds: $assigneeIds }) {
+            mutation($projectId: ID!, $title: String!, $body: String, $assigneeIds: [ID!], $clientMutationId: String!) {
+              addProjectV2DraftIssue(input: { projectId: $projectId, title: $title, body: $body, assigneeIds: $assigneeIds, clientMutationId: $clientMutationId }) {
                 projectItem { id }
               }
             }
             """,
             new { projectId, title = draft.Title, body = BuildDraftBody(draft), assigneeIds },
-            cancellationToken).ConfigureAwait(false);
+            target: $"{projectId}/{draft.Title}",
+            cancellationToken: cancellationToken).ConfigureAwait(false);
 
         return data.GetProperty("addProjectV2DraftIssue").GetProperty("projectItem").GetProperty("id").GetString();
     }
@@ -283,16 +287,19 @@ public sealed class ItemImporter
                 continue; // Empty value: nothing to set.
             }
 
-            await _client.QueryAsync(
+            await _client.MutationAsync(
+                "updateProjectV2ItemFieldValue",
                 """
-                mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $value: ProjectV2FieldValue!) {
-                  updateProjectV2ItemFieldValue(input: { projectId: $projectId, itemId: $itemId, fieldId: $fieldId, value: $value }) {
+                mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $value: ProjectV2FieldValue!, $clientMutationId: String!) {
+                  updateProjectV2ItemFieldValue(input: { projectId: $projectId, itemId: $itemId, fieldId: $fieldId, value: $value, clientMutationId: $clientMutationId }) {
                     projectV2Item { id }
                   }
                 }
                 """,
                 new { projectId = target.ProjectId, itemId, fieldId, value = valueInput },
-                cancellationToken).ConfigureAwait(false);
+                MutationRetryPolicy.Idempotent,
+                target: itemId,
+                cancellationToken: cancellationToken).ConfigureAwait(false);
         }
     }
 
@@ -309,16 +316,19 @@ public sealed class ItemImporter
                 continue;
             }
 
-            await _client.QueryAsync(
+            await _client.MutationAsync(
+                "updateProjectV2ItemPosition",
                 """
-                mutation($projectId: ID!, $itemId: ID!, $afterId: ID) {
-                  updateProjectV2ItemPosition(input: { projectId: $projectId, itemId: $itemId, afterId: $afterId }) {
+                mutation($projectId: ID!, $itemId: ID!, $afterId: ID, $clientMutationId: String!) {
+                  updateProjectV2ItemPosition(input: { projectId: $projectId, itemId: $itemId, afterId: $afterId, clientMutationId: $clientMutationId }) {
                     clientMutationId
                   }
                 }
                 """,
                 new { projectId, itemId, afterId },
-                cancellationToken).ConfigureAwait(false);
+                MutationRetryPolicy.Idempotent,
+                target: itemId,
+                cancellationToken: cancellationToken).ConfigureAwait(false);
 
             afterId = itemId;
         }
@@ -336,16 +346,19 @@ public sealed class ItemImporter
 
             try
             {
-                await _client.QueryAsync(
+                await _client.MutationAsync(
+                    "archiveProjectV2Item",
                     """
-                    mutation($projectId: ID!, $itemId: ID!) {
-                      archiveProjectV2Item(input: { projectId: $projectId, itemId: $itemId }) {
+                    mutation($projectId: ID!, $itemId: ID!, $clientMutationId: String!) {
+                      archiveProjectV2Item(input: { projectId: $projectId, itemId: $itemId, clientMutationId: $clientMutationId }) {
                         item { id }
                       }
                     }
                     """,
                     new { projectId, itemId },
-                    cancellationToken).ConfigureAwait(false);
+                    MutationRetryPolicy.Idempotent,
+                    target: itemId,
+                    cancellationToken: cancellationToken).ConfigureAwait(false);
             }
             catch (GitHubGraphQLException exception)
             {

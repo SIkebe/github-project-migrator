@@ -128,6 +128,12 @@ When a project with the same title already exists, `--on-conflict` controls the 
 
 Creating a new project emits `result=created`. The result line also includes the target project number for machine-readable automation, for example `result=skipped project=42`.
 
+### Recovering from an ambiguous mutation result
+
+Read-only GraphQL queries and explicitly idempotent updates are retried after transient network or server failures. Resource-creation mutations are not: if GitHub may have accepted a mutation but its response was lost, `gpm` exits with `Mutation result is ambiguous` instead of risking a duplicate. The error includes the operation, target, and a non-secret client mutation ID; mutation variables and tokens are never included.
+
+Inspect the named target operation in GitHub before retrying. If the resource exists, rerun the import with the same snapshot directory so `import-log.json` can resume completed items. If the result cannot be determined safely—especially for draft issues with identical content—do not rerun until the target state has been reconciled manually.
+
 ### User-owned projects
 
 `export` / `import` / `verify` accept `--owner-type user` to migrate projects owned by a user account instead of an organization (URLs use the `/users/<login>/projects/<n>` form):
