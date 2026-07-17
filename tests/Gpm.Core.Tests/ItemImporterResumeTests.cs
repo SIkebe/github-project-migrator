@@ -75,9 +75,16 @@ public class ItemImporterResumeTests
                     cancellationToken));
 
             var log = await ImportLog.LoadAsync(directory, cancellationToken);
-            Assert.NotNull(log);
-            Assert.Empty(log.PendingDrafts);
-            Assert.Empty(log.PendingContents);
+            if (failBeforeMutation)
+            {
+                Assert.Null(log);
+            }
+            else
+            {
+                Assert.NotNull(log);
+                Assert.Empty(log.PendingDrafts);
+                Assert.Empty(log.PendingContents);
+            }
             Assert.Equal(failBeforeMutation ? 0 : 1, handler.CreateMutationCount);
         }
         finally
@@ -109,6 +116,37 @@ public class ItemImporterResumeTests
             Assert.Single(log.PendingDrafts);
             Assert.Empty(log.PendingContents);
             Assert.Equal(mutationCount, handler.CreateMutationCount);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Resume_rejects_changed_draft_assignee_identity()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var directory = Directory.CreateTempSubdirectory("gpm-resume-").FullName;
+        try
+        {
+            using var handler = new ResumeHandler(draft: true, directory);
+            using var client = new GitHubGraphQLClient("token", baseUrl: null, handler, (_, _) => Task.CompletedTask);
+            var importer = CreateImporter(client);
+            var snapshot = CreateSnapshot(draft: true, assignedDraft: false);
+
+            await Assert.ThrowsAsync<AmbiguousMutationResultException>(
+                () => importer.ImportAsync(snapshot, Target, directory, cancellationToken));
+            var log = await ImportLog.LoadAsync(directory, cancellationToken);
+            var pending = Assert.Single(log!.PendingDrafts);
+            log.PendingDrafts[pending.Key] = pending.Value with { AssigneeIds = ["changed-id"] };
+            await log.SaveAsync(directory, cancellationToken);
+
+            await Assert.ThrowsAsync<InvalidOperationException>(
+                () => importer.ImportAsync(snapshot, Target, directory, cancellationToken));
+
+            Assert.Equal(1, handler.CreateMutationCount);
+            Assert.Single((await ImportLog.LoadAsync(directory, cancellationToken))!.PendingDrafts);
         }
         finally
         {

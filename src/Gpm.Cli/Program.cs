@@ -402,6 +402,11 @@ importCommand.SetAction(async (parseResult, cancellationToken) =>
             await session.ValidateAuthenticationAsync(apiLogin, ct);
         }
 
+        var itemLog = await ImportLog.LoadAsync(inDirectory, cancellationToken);
+        var pendingItemProjectId = itemLog is { PendingDrafts.Count: > 0 }
+            || itemLog is { PendingContents.Count: > 0 }
+                ? itemLog.ProjectId
+                : null;
         var importer = new ProjectImporter(client)
         {
             OnConflict = onConflict,
@@ -411,6 +416,7 @@ importCommand.SetAction(async (parseResult, cancellationToken) =>
             OnProgress = Console.Error.WriteLine,
             BeforeWriteAsync = enableBrowserAutomation ? ValidateBrowserBeforeWriteAsync : null,
             OperationLogDirectory = inDirectory,
+            PendingItemProjectId = pendingItemProjectId,
         };
 
         var result = projectNumber is { } number
@@ -489,7 +495,7 @@ importCommand.SetAction(async (parseResult, cancellationToken) =>
         await NotifyUpdateAsync(updateCheck);
         return 0;
     }
-    catch (Exception exception) when (exception is GitHubGraphQLException or InvalidOperationException or IOException or FormatException or PlaywrightException or ArgumentException)
+    catch (Exception exception) when (exception is GitHubGraphQLException or InvalidOperationException or IOException or FormatException or PlaywrightException or ArgumentException or System.Text.Json.JsonException)
     {
         Console.Error.WriteLine($"error: {exception.Message}");
         return 1;
@@ -900,7 +906,7 @@ setupCommand.SetAction(async (parseResult, cancellationToken) =>
             createdFixtureProjectNumber = result.ProjectNumber;
             fixtureAlreadyExisted = !result.Created;
         }
-        catch (Exception exception) when (exception is GitHubGraphQLException or InvalidOperationException or IOException or HttpRequestException)
+        catch (Exception exception) when (exception is GitHubGraphQLException or InvalidOperationException or IOException or HttpRequestException or System.Text.Json.JsonException)
         {
             Console.Error.WriteLine($"error: {exception.Message}");
             return 1;

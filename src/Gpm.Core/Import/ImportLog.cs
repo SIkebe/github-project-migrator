@@ -25,7 +25,7 @@ public sealed record ImportLog
     /// <summary>Issue/PR additions persisted before sending so an ambiguous result can be reconciled safely.</summary>
     public Dictionary<string, PendingContentOperation> PendingContents { get; init; } = new(StringComparer.Ordinal);
 
-    /// <summary>Loads the log from <paramref name="directory"/>, or returns null when missing or unreadable.</summary>
+    /// <summary>Loads the log from <paramref name="directory"/>, or returns null when missing.</summary>
     public static async Task<ImportLog?> LoadAsync(string directory, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(directory);
@@ -36,17 +36,11 @@ public sealed record ImportLog
             return null;
         }
 
-        try
+        var stream = File.OpenRead(path);
+        await using (stream.ConfigureAwait(false))
         {
-            var stream = File.OpenRead(path);
-            await using (stream.ConfigureAwait(false))
-            {
-                return await JsonSerializer.DeserializeAsync(stream, ImportLogJsonContext.Default.ImportLog, cancellationToken).ConfigureAwait(false);
-            }
-        }
-        catch (JsonException)
-        {
-            return null; // Corrupt log: start fresh rather than fail the import.
+            return await JsonSerializer.DeserializeAsync(stream, ImportLogJsonContext.Default.ImportLog, cancellationToken).ConfigureAwait(false)
+                ?? throw new JsonException($"{FileName} contained null.");
         }
     }
 
@@ -93,6 +87,8 @@ public sealed record PendingDraftOperation
     public required string Title { get; init; }
 
     public string? Body { get; init; }
+
+    public string[]? AssigneeIds { get; init; }
 
     public required string[] ExistingItemIds { get; init; }
 }

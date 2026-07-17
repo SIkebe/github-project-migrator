@@ -138,6 +138,35 @@ public class ProjectImporterResumeTests
         }
     }
 
+    [Fact]
+    public async Task Field_reconciliation_rejects_multiple_same_named_candidates()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var directory = Directory.CreateTempSubdirectory("gpm-field-duplicates-").FullName;
+        try
+        {
+            using var handler = new FieldResumeHandler(directory);
+            using var client = CreateClient(handler);
+            var importer = new ProjectImporter(client) { OperationLogDirectory = directory };
+
+            await Assert.ThrowsAsync<AmbiguousMutationResultException>(
+                () => importer.ImportIntoAsync(Snapshot(withField: true), "target", 7, cancellationToken));
+
+            handler.Resume = true;
+            handler.ReturnDuplicateFields = true;
+            var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+                () => importer.ImportIntoAsync(Snapshot(withField: true), "target", 7, cancellationToken));
+
+            Assert.Contains("multiple new fields", exception.Message, StringComparison.Ordinal);
+            Assert.Equal(1, handler.CreateMutationCount);
+            Assert.Single((await ProjectImportLog.LoadAsync(directory, cancellationToken)).PendingFields);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
     private static GitHubGraphQLClient CreateClient(HttpMessageHandler handler)
         => new("token", new Uri("https://example.test/graphql"), handler, (_, _) => Task.CompletedTask);
 
@@ -222,6 +251,8 @@ public class ProjectImporterResumeTests
 
     private sealed class FieldResumeHandler(string directory) : ResumeHandler(directory)
     {
+        public bool ReturnDuplicateFields { get; set; }
+
         protected override async Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request,
             CancellationToken cancellationToken)
@@ -239,9 +270,14 @@ public class ProjectImporterResumeTests
 
             if (query.Contains("fields(first:", StringComparison.Ordinal))
             {
-                return Resume
-                    ? Json("""{"data":{"node":{"fields":{"nodes":[{"id":"PVTF_created","name":"Custom","dataType":"TEXT"}]}}}}""")
-                    : Json("""{"data":{"node":{"fields":{"nodes":[]}}}}""");
+                if (!Resume)
+                {
+                    return Json("""{"data":{"node":{"fields":{"nodes":[]}}}}""");
+                }
+
+                return ReturnDuplicateFields
+                    ? Json("""{"data":{"node":{"fields":{"nodes":[{"id":"PVTF_created_1","name":"Custom","dataType":"TEXT"},{"id":"PVTF_created_2","name":"Custom","dataType":"TEXT"}]}}}}""")
+                    : Json("""{"data":{"node":{"fields":{"nodes":[{"id":"PVTF_created","name":"Custom","dataType":"TEXT"}]}}}}""");
             }
 
             if (query.Contains("createProjectV2Field", StringComparison.Ordinal))

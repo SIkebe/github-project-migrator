@@ -197,7 +197,7 @@ public class ItemImporterLogicTests
     }
 
     [Fact]
-    public async Task ImportLog_load_returns_null_when_missing_or_corrupt()
+    public async Task ImportLog_load_returns_null_when_missing_and_rejects_corrupt_content()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
         var directory = Directory.CreateTempSubdirectory("gpm-importlog-").FullName;
@@ -206,7 +206,8 @@ public class ItemImporterLogicTests
             Assert.Null(await ImportLog.LoadAsync(directory, cancellationToken));
 
             await File.WriteAllTextAsync(Path.Combine(directory, ImportLog.FileName), "{ not json", cancellationToken);
-            Assert.Null(await ImportLog.LoadAsync(directory, cancellationToken));
+            await Assert.ThrowsAsync<System.Text.Json.JsonException>(
+                () => ImportLog.LoadAsync(directory, cancellationToken));
         }
         finally
         {

@@ -579,9 +579,7 @@ public sealed class GitHubGraphQLClient : IDisposable
     private static bool HasMutationPayload(JsonElement root, string operationName)
         => root.TryGetProperty("data", out var data)
             && data.ValueKind == JsonValueKind.Object
-            && data.TryGetProperty(operationName, out var payload)
-            && payload.ValueKind == JsonValueKind.Object
-            && payload.EnumerateObject().Any();
+            && data.TryGetProperty(operationName, out _);
 
     /// <summary>Converts an arbitrary variables object into a mutable map so the cursor can be injected.</summary>
     private static Dictionary<string, object?> ToVariableMap(object? variables)

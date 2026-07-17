@@ -104,10 +104,13 @@ public sealed class ItemImporter
                 if (item is { Type: "DRAFT_ISSUE", Draft: not null })
                 {
                     var body = BuildDraftBody(item.Draft);
+                    var assigneeIds = await ResolveAssigneeIdsAsync(item.Draft, warnings, cancellationToken).ConfigureAwait(false);
                     if (log.PendingDrafts.TryGetValue(key, out pendingDraft))
                     {
                         if (!string.Equals(pendingDraft.Title, item.Draft.Title, StringComparison.Ordinal)
-                            || !string.Equals(NormalizeDraftBody(pendingDraft.Body), NormalizeDraftBody(body), StringComparison.Ordinal))
+                            || !string.Equals(NormalizeDraftBody(pendingDraft.Body), NormalizeDraftBody(body), StringComparison.Ordinal)
+                            || pendingDraft.AssigneeIds is null
+                            || !pendingDraft.AssigneeIds.SequenceEqual(assigneeIds, StringComparer.Ordinal))
                         {
                             throw new InvalidOperationException(
                                 $"Pending draft operation '{pendingDraft.OperationId}' no longer matches {label}. Restore the original snapshot or reconcile the target manually.");
@@ -133,6 +136,7 @@ public sealed class ItemImporter
                             AttemptedAt = DateTimeOffset.UtcNow,
                             Title = item.Draft.Title,
                             Body = body,
+                            AssigneeIds = [.. assigneeIds],
                             ExistingItemIds = [.. existingIds],
                         };
                         log.PendingDrafts[key] = pendingDraft;
@@ -146,6 +150,7 @@ public sealed class ItemImporter
                     label,
                     warnings,
                     pendingDraft?.OperationId,
+                    pendingDraft?.AssigneeIds,
                     log,
                     key,
                     logDirectory,
@@ -218,6 +223,7 @@ public sealed class ItemImporter
         string label,
         List<string> warnings,
         string? clientMutationId,
+        IReadOnlyList<string>? draftAssigneeIds,
         ImportLog log,
         string key,
         string logDirectory,
@@ -237,7 +243,7 @@ public sealed class ItemImporter
                     cancellationToken).ConfigureAwait(false);
 
             case "DRAFT_ISSUE" when item.Draft is not null:
-                return await CreateDraftItemAsync(item.Draft, projectId, warnings, clientMutationId, cancellationToken).ConfigureAwait(false);
+                return await CreateDraftItemAsync(item.Draft, projectId, draftAssigneeIds ?? [], clientMutationId, cancellationToken).ConfigureAwait(false);
 
             default:
                 Warn(warnings, $"{label}: unsupported or incomplete item (type '{item.Type}'); skipping.");
@@ -333,12 +339,10 @@ public sealed class ItemImporter
     private async Task<string?> CreateDraftItemAsync(
         DraftIssueSnapshot draft,
         string projectId,
-        List<string> warnings,
+        IReadOnlyList<string> assigneeIds,
         string? clientMutationId,
         CancellationToken cancellationToken)
     {
-        var assigneeIds = await ResolveAssigneeIdsAsync(draft, warnings, cancellationToken).ConfigureAwait(false);
-
         var data = await _client.MutationAsync(
             "addProjectV2DraftIssue",
             """

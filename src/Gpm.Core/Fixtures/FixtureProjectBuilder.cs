@@ -59,6 +59,10 @@ public sealed class FixtureProjectBuilder
             OnProgress = OnProgress,
             OnConflict = existing is null ? ConflictAction.Fail : ConflictAction.Update,
             OperationLogDirectory = OperationLogDirectory,
+            PendingItemProjectId = itemLog is { PendingDrafts.Count: > 0 }
+                || itemLog is { PendingContents.Count: > 0 }
+                    ? itemLog.ProjectId
+                    : null,
             RepositoryMapping = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
             {
                 [repositoryFullName] = repositoryFullName,
