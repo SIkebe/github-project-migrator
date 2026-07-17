@@ -100,12 +100,14 @@ public static class ProjectFilterTransformer
                     var identity = item.Trim();
                     var leadingWhitespace = item[..(item.Length - item.TrimStart().Length)];
                     var trailingWhitespace = item[item.TrimEnd().Length..];
-                    if (mapping.TryGetValue(identity, out var mapped))
+                    var mappingIdentity = MappingIdentity(qualifier, identity, out var mappedPrefix);
+                    if (mapping.TryGetValue(mappingIdentity, out var mapped))
                     {
-                        builder.Append(leadingWhitespace).Append(mapped).Append(trailingWhitespace);
-                        if (!string.Equals(identity, mapped, StringComparison.Ordinal))
+                        var mappedValue = string.Concat(mappedPrefix, mapped);
+                        builder.Append(leadingWhitespace).Append(mappedValue).Append(trailingWhitespace);
+                        if (!string.Equals(identity, mappedValue, StringComparison.Ordinal))
                         {
-                            changes.Add(new FilterTokenChange(qualifier, identity, mapped));
+                            changes.Add(new FilterTokenChange(qualifier, identity, mappedValue));
                         }
                         else
                         {
@@ -117,7 +119,7 @@ public static class ProjectFilterTransformer
                         builder.Append(item);
                         if (IsMappingRequired(qualifier, identity))
                         {
-                            unresolved.Add(new FilterIdentifier(qualifier, identity));
+                            unresolved.Add(new FilterIdentifier(qualifier, mappingIdentity));
                         }
                         else if (identity.Length > 0)
                         {
@@ -398,8 +400,23 @@ public static class ProjectFilterTransformer
     private static bool IsMappingRequired(string qualifier, string value)
         => value.Length > 0
             && (!UserQualifiers.Contains(qualifier)
-                || value[0] != '@'
+                || !string.Equals(value, "@me", StringComparison.OrdinalIgnoreCase)
                 && !string.Equals(value, "none", StringComparison.OrdinalIgnoreCase));
+
+    private static string MappingIdentity(string qualifier, string value, out string prefix)
+    {
+        if (UserQualifiers.Contains(qualifier)
+            && value.Length > 1
+            && value[0] == '@'
+            && !string.Equals(value, "@me", StringComparison.OrdinalIgnoreCase))
+        {
+            prefix = "@";
+            return value[1..];
+        }
+
+        prefix = string.Empty;
+        return value;
+    }
 
 }
 

@@ -117,6 +117,20 @@ public class ProjectFilterTransformerTests
     }
 
     [Fact]
+    public void Transform_maps_at_prefixed_user_logins_but_not_at_me()
+    {
+        var result = ProjectFilterTransformer.Transform(
+            "assignee:@old-user author:@missing assignee:@me",
+            Users);
+
+        Assert.Equal(
+            "assignee:@old-user_shortcode author:@missing assignee:@me",
+            result.Transformed);
+        Assert.Equal([new FilterIdentifier("author", "missing")], result.Unresolved);
+        Assert.Equal([new FilterIdentifier("assignee", "@me")], result.Unchanged);
+    }
+
+    [Fact]
     public void Transform_maps_comma_separated_values_independently()
     {
         var result = ProjectFilterTransformer.Transform(
