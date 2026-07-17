@@ -177,7 +177,18 @@ public static class MappingTemplates
     {
         if (File.Exists(path))
         {
-            onProgress?.Invoke($"Mapping template {path} already exists; not overwriting (your edits are preserved).");
+            var existingSources = File.ReadLines(path)
+                .Where(line => !string.IsNullOrWhiteSpace(line))
+                .Skip(1)
+                .Select(line => line.Split(',')[0].Trim())
+                .Where(source => source.Length > 0)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var missing = sources.Where(source => !existingSources.Contains(source)).ToList();
+            var missingMessage = missing.Count == 0
+                ? string.Empty
+                : $" Missing candidates: {string.Join(", ", missing)}.";
+            onProgress?.Invoke(
+                $"Mapping template {path} already exists; not overwriting (your edits are preserved).{missingMessage}");
             return;
         }
 

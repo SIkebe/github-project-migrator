@@ -257,10 +257,6 @@ var organizationMappingOption = new Option<string?>("--org-mapping")
 {
     Description = "CSV file mapping source organizations to target organizations (header: source,target). Repository owner mappings are inferred when unambiguous.",
 };
-var strictFilterMappingOption = new Option<bool>("--strict-filter-mapping")
-{
-    Description = "Stop before writing when a View or Workflow filter contains an unmapped assignee, author, repository or organization.",
-};
 
 var importCommand = new Command("import", "Import a JSON snapshot into the target organization or user.")
 {
@@ -273,7 +269,6 @@ var importCommand = new Command("import", "Import a JSON snapshot into the targe
     repoMappingOption,
     userMappingOption,
     organizationMappingOption,
-    strictFilterMappingOption,
     tokenOption,
     targetBaseUrlOption,
     enableBrowserOption,
@@ -310,7 +305,6 @@ importCommand.SetAction(async (parseResult, cancellationToken) =>
     var baseUrl = parseResult.GetValue(targetBaseUrlOption);
     var updateCheck = StartUpdateCheck(parseResult.GetValue(noUpdateCheckOption));
     var enableBrowserAutomation = parseResult.GetValue(enableBrowserOption);
-    var strictFilterMapping = parseResult.GetValue(strictFilterMappingOption);
     if (!ConflictActions.TryParse(parseResult.GetValue(onConflictOption), out var onConflict))
     {
         Console.Error.WriteLine("error: --on-conflict must be one of: skip, update, fail.");
@@ -374,7 +368,6 @@ importCommand.SetAction(async (parseResult, cancellationToken) =>
             snapshot = snapshot with { Project = snapshot.Project with { Title = projectTitle } };
         }
 
-        if (enableBrowserAutomation || strictFilterMapping)
         {
             var filterTransforms = ProjectFilterTransformer.AnalyzeSnapshot(
                 snapshot,
@@ -394,12 +387,27 @@ importCommand.SetAction(async (parseResult, cancellationToken) =>
                     Console.Error.WriteLine(
                         $"warning: Filter preflight {transform.Location}: unmapped {identifier.Qualifier} value '{identifier.Value}'");
                 }
+
+                foreach (var identifier in transform.Result.Unsupported)
+                {
+                    Console.Error.WriteLine(
+                        $"warning: Filter preflight {transform.Location}: unsupported qualifier '{identifier.Qualifier}' was left unchanged");
+                }
             }
 
-            if (strictFilterMapping && filterTransforms.Any(transform => transform.Result.Unresolved.Count > 0))
+            var repositoryResolutions = ProjectFilterTransformer.AnalyzeAutoAddRepositories(snapshot, repoMapping);
+            foreach (var repository in repositoryResolutions.Where(result =>
+                         result.Resolution.Status != RepositoryResolutionStatus.Mapped))
+            {
+                Console.Error.WriteLine(
+                    $"warning: Filter preflight {repository.Location}: {repository.Resolution.Status.ToString().ToLowerInvariant()} Auto-add repository '{repository.Resolution.Source}'");
+            }
+
+            if (filterTransforms.Any(transform => transform.Result.Unresolved.Count > 0)
+                || repositoryResolutions.Any(result => result.Resolution.Status != RepositoryResolutionStatus.Mapped))
             {
                 throw new InvalidOperationException(
-                    "Strict filter mapping preflight failed; fill the generated mapping CSV rows before importing.");
+                    "Filter mapping preflight failed; fill the generated mapping CSV rows before importing.");
             }
         }
 

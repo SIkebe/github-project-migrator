@@ -160,6 +160,7 @@ public class MappingTemplatesTests
 
             Assert.Equal(UserEdited, await File.ReadAllTextAsync(repoPath, TestContext.Current.CancellationToken));
             Assert.Contains(messages, m => m.Contains("already exists", StringComparison.Ordinal));
+            Assert.Contains(messages, m => m.Contains("Missing candidates: org-a/repo-9", StringComparison.Ordinal));
         }
         finally
         {

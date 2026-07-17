@@ -158,11 +158,22 @@ public sealed class ProjectVerifier
                 {
                     Ui = workflow.Ui with
                     {
-                        Repository = ProjectFilterTransformer.ResolveRepositoryName(repository, repositoryMapping),
+                        Repository = ResolveRepositoryForVerification(repository, repositoryMapping),
                     },
                 }
                 : workflow).ToList(),
         };
+    }
+
+    private static string ResolveRepositoryForVerification(
+        string repository,
+        IReadOnlyDictionary<string, string> repositoryMapping)
+    {
+        var resolution = ProjectFilterTransformer.ResolveRepository(repository, repositoryMapping);
+        return resolution.Status == RepositoryResolutionStatus.Ambiguous
+            ? throw new InvalidOperationException(
+                $"Auto-add repository '{repository}' has ambiguous repository mappings.")
+            : resolution.Target ?? repository;
     }
 
     private static ProjectSnapshot ApplyUserMapping(ProjectSnapshot source, IReadOnlyDictionary<string, string> userMapping)

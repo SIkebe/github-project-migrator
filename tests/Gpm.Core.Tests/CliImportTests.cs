@@ -94,7 +94,7 @@ public class CliImportTests
     }
 
     [Fact]
-    public async Task Strict_filter_mapping_fails_before_any_api_request()
+    public async Task Filter_mapping_preflight_fails_before_any_api_request_by_default()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
         var directory = Path.Combine(Path.GetTempPath(), "gpm-cli-filter-preflight-" + Guid.NewGuid().ToString("N"));
@@ -120,14 +120,11 @@ public class CliImportTests
         using var server = new GraphQlStubServer(ExistingProjectResponse);
         try
         {
-            var result = await RunCliAsync(
-                directory,
-                server,
-                "--strict-filter-mapping");
+            var result = await RunCliAsync(directory, server);
 
             Assert.Equal(1, result.ExitCode);
             Assert.Contains("unmapped assignee value 'old-user'", result.Error, StringComparison.Ordinal);
-            Assert.Contains("Strict filter mapping preflight failed", result.Error, StringComparison.Ordinal);
+            Assert.Contains("Filter mapping preflight failed", result.Error, StringComparison.Ordinal);
             Assert.Empty(server.RequestBodies);
         }
         finally

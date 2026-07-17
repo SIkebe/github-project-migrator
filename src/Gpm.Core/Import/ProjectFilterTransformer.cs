@@ -1,6 +1,5 @@
 using System.Collections.ObjectModel;
 using System.Text;
-using System.Text.RegularExpressions;
 using Gpm.Core.Snapshot;
 
 namespace Gpm.Core.Import;
@@ -9,12 +8,23 @@ namespace Gpm.Core.Import;
 /// Structurally maps identity-bearing GitHub Projects filter qualifier values while
 /// preserving all other text exactly.
 /// </summary>
-public static partial class ProjectFilterTransformer
+public static class ProjectFilterTransformer
 {
     private static readonly HashSet<string> UserQualifiers = new(StringComparer.OrdinalIgnoreCase)
     {
         "assignee",
         "author",
+    };
+
+    private static readonly HashSet<string> PassthroughQualifiers = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "is",
+        "iteration",
+        "label",
+        "milestone",
+        "reason",
+        "status",
+        "type",
     };
 
     /// <summary>Transforms supported qualifier values using source-to-target mappings.</summary>
@@ -31,23 +41,40 @@ public static partial class ProjectFilterTransformer
 
         var changes = new List<FilterTokenChange>();
         var unresolved = new List<FilterIdentifier>();
+        var unsupported = new List<FilterIdentifier>();
         var builder = new StringBuilder(filter.Length);
-        var lastIndex = 0;
-
-        foreach (Match match in QualifierValueRegex().Matches(filter))
+        var position = 0;
+        while (position < filter.Length)
         {
-            builder.Append(filter, lastIndex, match.Index - lastIndex);
-            builder.Append(match.Groups["qualifier"].Value).Append(':');
+            if (filter[position] == '"')
+            {
+                var literalEnd = FindQuotedValueEnd(filter, position);
+                builder.Append(filter, position, literalEnd - position);
+                position = literalEnd;
+                continue;
+            }
 
-            var rawValue = match.Groups["value"].Value;
+            if (!IsQualifierBoundary(filter, position)
+                || !IsQualifierStart(filter[position])
+                || !TryReadQualifierValue(filter, position, out var qualifier, out var rawValue, out var tokenEnd))
+            {
+                builder.Append(filter[position]);
+                position++;
+                continue;
+            }
+
+            builder.Append(qualifier).Append(':');
             var quoted = rawValue.Length >= 2 && rawValue[0] == '"' && rawValue[^1] == '"';
             var value = quoted ? rawValue[1..^1] : rawValue;
-            var qualifier = match.Groups["qualifier"].Value;
             var mapping = MappingFor(qualifier, userMapping, repositoryMapping, organizationMapping);
 
             if (mapping is null)
             {
                 builder.Append(rawValue);
+                if (!PassthroughQualifiers.Contains(qualifier))
+                {
+                    unsupported.Add(new FilterIdentifier(qualifier, value));
+                }
             }
             else
             {
@@ -89,11 +116,10 @@ public static partial class ProjectFilterTransformer
                 }
             }
 
-            lastIndex = match.Index + match.Length;
+            position = tokenEnd;
         }
 
-        builder.Append(filter, lastIndex, filter.Length - lastIndex);
-        return new FilterTransformResult(filter, builder.ToString(), changes, unresolved);
+        return new FilterTransformResult(filter, builder.ToString(), changes, unresolved, unsupported);
     }
 
     /// <summary>Applies filter mappings to all Views and Workflows in a snapshot.</summary>
@@ -145,6 +171,21 @@ public static partial class ProjectFilterTransformer
         return results;
     }
 
+    /// <summary>Returns Auto-add repository mapping results with their workflow locations.</summary>
+    public static IReadOnlyList<SnapshotRepositoryResolution> AnalyzeAutoAddRepositories(
+        ProjectSnapshot snapshot,
+        IReadOnlyDictionary<string, string> repositoryMapping)
+    {
+        ArgumentNullException.ThrowIfNull(snapshot);
+        ArgumentNullException.ThrowIfNull(repositoryMapping);
+        return snapshot.Workflows
+            .Where(workflow => workflow.Ui?.Repository is { Length: > 0 })
+            .Select(workflow => new SnapshotRepositoryResolution(
+                $"workflow '{workflow.Name}'",
+                ResolveRepository(workflow.Ui!.Repository!, repositoryMapping)))
+            .ToList();
+    }
+
     /// <summary>
     /// Infers source-to-target organization mappings only when every repository mapping
     /// for a source owner points to the same target owner.
@@ -176,8 +217,8 @@ public static partial class ProjectFilterTransformer
             .ToDictionary(pair => pair.Key, pair => pair.Value.Single(), StringComparer.OrdinalIgnoreCase);
     }
 
-    /// <summary>Maps an Auto-add repository short name only when the target is unambiguous.</summary>
-    public static string ResolveRepositoryName(
+    /// <summary>Resolves an Auto-add repository short name without guessing ambiguous targets.</summary>
+    public static RepositoryResolution ResolveRepository(
         string sourceRepository,
         IReadOnlyDictionary<string, string> repositoryMapping)
     {
@@ -189,7 +230,12 @@ public static partial class ProjectFilterTransformer
             .Select(pair => ShortName(pair.Value))
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
-        return targets.Count == 1 ? targets[0] : sourceRepository;
+        return targets.Count switch
+        {
+            0 => new RepositoryResolution(sourceRepository, null, RepositoryResolutionStatus.Unmapped),
+            1 => new RepositoryResolution(sourceRepository, targets[0], RepositoryResolutionStatus.Mapped),
+            _ => new RepositoryResolution(sourceRepository, null, RepositoryResolutionStatus.Ambiguous),
+        };
 
         static string ShortName(string repository)
         {
@@ -216,6 +262,86 @@ public static partial class ProjectFilterTransformer
     /// <summary>Enumerates supported identity-bearing tokens without changing the filter.</summary>
     public static IReadOnlyList<FilterIdentifier> ExtractIdentifiers(string filter)
         => Transform(filter).Unresolved;
+
+    private static bool TryReadQualifierValue(
+        string filter,
+        int start,
+        out string qualifier,
+        out string rawValue,
+        out int tokenEnd)
+    {
+        var separator = start + 1;
+        while (separator < filter.Length && IsQualifierPart(filter[separator]))
+        {
+            separator++;
+        }
+
+        if (separator >= filter.Length || filter[separator] != ':' || separator + 1 >= filter.Length)
+        {
+            qualifier = string.Empty;
+            rawValue = string.Empty;
+            tokenEnd = start;
+            return false;
+        }
+
+        var valueStart = separator + 1;
+        tokenEnd = filter[valueStart] == '"'
+            ? FindQuotedValueEnd(filter, valueStart)
+            : FindUnquotedValueEnd(filter, valueStart);
+        qualifier = filter[start..separator];
+        rawValue = filter[valueStart..tokenEnd];
+        return rawValue.Length > 0;
+    }
+
+    private static int FindQuotedValueEnd(string filter, int quoteStart)
+    {
+        var escaped = false;
+        for (var index = quoteStart + 1; index < filter.Length; index++)
+        {
+            if (!escaped && filter[index] == '"')
+            {
+                return index + 1;
+            }
+
+            escaped = !escaped && filter[index] == '\\';
+            if (filter[index] != '\\')
+            {
+                escaped = false;
+            }
+        }
+
+        return filter.Length;
+    }
+
+    private static int FindUnquotedValueEnd(string filter, int valueStart)
+    {
+        var index = valueStart;
+        while (index < filter.Length
+            && !char.IsWhiteSpace(filter[index])
+            && filter[index] is not '(' and not ')')
+        {
+            index++;
+        }
+
+        return index;
+    }
+
+    private static bool IsQualifierBoundary(string filter, int index)
+    {
+        if (index == 0 || char.IsWhiteSpace(filter[index - 1]) || filter[index - 1] == '(')
+        {
+            return true;
+        }
+
+        return filter[index - 1] == '-'
+            && (index == 1 || char.IsWhiteSpace(filter[index - 2]) || filter[index - 2] == '(');
+    }
+
+    private static bool IsQualifierStart(char value)
+        => value is >= 'A' and <= 'Z' or >= 'a' and <= 'z';
+
+    private static bool IsQualifierPart(char value)
+        => IsQualifierStart(value) || char.IsDigit(value) || value is '_' or '-';
 
     private static IReadOnlyDictionary<string, string>? MappingFor(
         string qualifier,
@@ -258,8 +384,6 @@ public static partial class ProjectFilterTransformer
             && value[0] != '@'
             && !string.Equals(value, "none", StringComparison.OrdinalIgnoreCase);
 
-    [GeneratedRegex(@"(?<qualifier>[A-Za-z][A-Za-z0-9_-]*):(?<value>""(?:\\.|[^""])*""|[^\s()]+)", RegexOptions.CultureInvariant)]
-    private static partial Regex QualifierValueRegex();
 }
 
 public sealed record FilterIdentifier(string Qualifier, string Value);
@@ -270,6 +394,21 @@ public sealed record FilterTransformResult(
     string Original,
     string Transformed,
     IReadOnlyList<FilterTokenChange> Changes,
-    IReadOnlyList<FilterIdentifier> Unresolved);
+    IReadOnlyList<FilterIdentifier> Unresolved,
+    IReadOnlyList<FilterIdentifier> Unsupported);
 
 public sealed record SnapshotFilterTransform(string Location, FilterTransformResult Result);
+
+public enum RepositoryResolutionStatus
+{
+    Mapped,
+    Unmapped,
+    Ambiguous,
+}
+
+public sealed record RepositoryResolution(
+    string Source,
+    string? Target,
+    RepositoryResolutionStatus Status);
+
+public sealed record SnapshotRepositoryResolution(string Location, RepositoryResolution Resolution);

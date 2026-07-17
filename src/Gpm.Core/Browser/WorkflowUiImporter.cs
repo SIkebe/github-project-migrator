@@ -69,7 +69,16 @@ public sealed class WorkflowUiImporter
     /// source name is used unchanged (same-name repository expected on the target).
     /// </summary>
     public static string ResolveRepositoryName(string sourceRepository, IReadOnlyDictionary<string, string> mapping)
-        => ProjectFilterTransformer.ResolveRepositoryName(sourceRepository, mapping);
+    {
+        var resolution = ProjectFilterTransformer.ResolveRepository(sourceRepository, mapping);
+        if (resolution.Status == RepositoryResolutionStatus.Ambiguous)
+        {
+            throw new InvalidOperationException(
+                $"Auto-add repository '{sourceRepository}' has ambiguous repository mappings.");
+        }
+
+        return resolution.Target ?? sourceRepository;
+    }
 
     /// <summary>
     /// Pure pre-flight check: warns about Auto-add instances beyond the plan limit
@@ -326,7 +335,15 @@ public sealed class WorkflowUiImporter
         await PauseAsync(cancellationToken).ConfigureAwait(false);
 
         // Repository picker: search by the mapped short name and pick the exact option.
-        var targetRepository = ResolveRepositoryName(ui.Repository!, RepositoryMapping);
+        var resolution = ProjectFilterTransformer.ResolveRepository(ui.Repository!, RepositoryMapping);
+        if (resolution.Status == RepositoryResolutionStatus.Ambiguous)
+        {
+            _warnings.Add($"workflow '{workflow.Name}': repository '{ui.Repository}' has ambiguous mappings; skipped");
+            await DiscardEditAsync(page, cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
+        var targetRepository = resolution.Target ?? ui.Repository!;
         await Sel.WorkflowRepositoryButton(page).First.ClickAsync().ConfigureAwait(false);
         var dialog = Sel.WorkflowSelectDialog(page);
         await dialog.WaitForAsync().ConfigureAwait(false);

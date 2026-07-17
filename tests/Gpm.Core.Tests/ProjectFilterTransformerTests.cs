@@ -41,6 +41,48 @@ public class ProjectFilterTransformerTests
 
         Assert.Equal(Filter, result.Transformed);
         Assert.Equal([new FilterIdentifier("assignee", "old-user-2")], result.Unresolved);
+        Assert.Equal([new FilterIdentifier("custom", "source-org/source-repo")], result.Unsupported);
+    }
+
+    [Fact]
+    public void Transform_does_not_parse_qualifiers_inside_quoted_literals()
+    {
+        const string Filter = "\"assignee:old-user\" label:\"text author:alice\" assignee:old-user";
+
+        var result = ProjectFilterTransformer.Transform(Filter, Users);
+
+        Assert.Equal(
+            "\"assignee:old-user\" label:\"text author:alice\" assignee:old-user_shortcode",
+            result.Transformed);
+        Assert.Empty(result.Unresolved);
+        Assert.Empty(result.Unsupported);
+    }
+
+    [Fact]
+    public void AnalyzeAutoAddRepositories_reports_mapped_unmapped_and_ambiguous_values()
+    {
+        var snapshot = Snapshot("is:open", "is:issue") with
+        {
+            Workflows =
+            [
+                new WorkflowSnapshot
+                {
+                    Number = 1,
+                    Name = "Auto-add",
+                    Enabled = true,
+                    Ui = new WorkflowUiSnapshot { Repository = "source-repo", Filter = "is:issue" },
+                },
+            ],
+        };
+        var ambiguous = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["one/source-repo"] = "target/one",
+            ["two/source-repo"] = "target/two",
+        };
+
+        var result = Assert.Single(ProjectFilterTransformer.AnalyzeAutoAddRepositories(snapshot, ambiguous));
+
+        Assert.Equal(RepositoryResolutionStatus.Ambiguous, result.Resolution.Status);
     }
 
     [Fact]

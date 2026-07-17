@@ -99,7 +99,7 @@ For fine-grained PATs, create the token for the organization or user that owns t
 
 GitHub permissions are still enforced in addition to token permissions: the token owner must be allowed to read the source project and referenced repositories, and must be allowed to create or edit the target project.
 
-`--repo-mapping` / `--user-mapping` / `--org-mapping` map repositories, user logins, and organizations across deployments. They are especially important for EMU targets, where user logins normally gain a `_shortcode` suffix. Repository and organization mappings use the `source,target` header. User mappings use the GitHub Enterprise Importer mannequin reclaim header (`mannequin-user,mannequin-id,target-user`); the mannequin ID is ignored. `gpm export` generates ready-to-fill `repository-mappings.csv`, `organization-mappings.csv`, and, when users are present, `user-mappings.csv`. Candidates include linked and Auto-add repositories plus identifiers found in View and Workflow filters. Existing files are never overwritten. During browser import, `assignee:`, `author:`, `repo:`, and `org:` filter values are mapped structurally; other syntax is preserved. Organization mappings are also inferred from repository owners when unambiguous. Use `--strict-filter-mapping` to stop before any project write if a supported filter value remains unmapped, and pass the same mappings to `gpm verify`.
+`--repo-mapping` / `--user-mapping` / `--org-mapping` map repositories, user logins, and organizations across deployments. They are especially important for EMU targets, where user logins normally gain a `_shortcode` suffix. Repository and organization mappings use the `source,target` header. User mappings use the GitHub Enterprise Importer mannequin reclaim header (`mannequin-user,mannequin-id,target-user`); the mannequin ID is ignored. `gpm export` generates ready-to-fill `repository-mappings.csv`, `organization-mappings.csv`, and, when users are present, `user-mappings.csv`. Candidates include linked and Auto-add repositories plus identifiers found in View and Workflow filters. Existing files are never overwritten, and newly discovered candidates are reported. During import, `assignee:`, `author:`, `repo:`, and `org:` filter values are mapped structurally; other syntax is preserved. Organization mappings are also inferred from repository owners when unambiguous. Import stops before any project write when a supported filter value or Auto-add repository remains unmapped or ambiguous. Pass the same mappings to `gpm verify`.
 
 ### More import/export options
 
@@ -170,7 +170,6 @@ gpm import --org target-org --in ./snapshot \
   --repo-mapping ./snapshot/repository-mappings.csv \
   --user-mapping ./snapshot/user-mappings.csv \
   --org-mapping ./snapshot/organization-mappings.csv \
-  --strict-filter-mapping \
   --enable-browser-automation --browser-profile target
 
 gpm verify --org target-org --project 12 --in ./snapshot \

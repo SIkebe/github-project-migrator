@@ -87,7 +87,7 @@ public class WorkflowUiLogicTests
             "fixture-repo", new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)));
 
     [Fact]
-    public void ResolveRepositoryName_does_not_guess_when_short_name_mapping_is_ambiguous()
+    public void ResolveRepositoryName_rejects_ambiguous_short_name_mapping()
     {
         var mapping = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
@@ -95,7 +95,9 @@ public class WorkflowUiLogicTests
             ["source-b/fixture-repo"] = "target/renamed-b",
         };
 
-        Assert.Equal("fixture-repo", WorkflowUiImporter.ResolveRepositoryName("fixture-repo", mapping));
+        var exception = Assert.Throws<InvalidOperationException>(
+            () => WorkflowUiImporter.ResolveRepositoryName("fixture-repo", mapping));
+        Assert.Contains("ambiguous", exception.Message, StringComparison.OrdinalIgnoreCase);
     }
 
     // ----- pre-flight: Auto-add plan limit -----
