@@ -1,5 +1,6 @@
 using System.Collections.ObjectModel;
 using System.Globalization;
+using Gpm.Core.GitHub;
 using Gpm.Core.Snapshot;
 using Microsoft.Playwright;
 
@@ -171,6 +172,44 @@ public sealed class WorkflowUiImporter
                 _warnings.Add($"workflow '{workflow.Name}': import failed — {exception.Message}");
             }
         }
+    }
+
+    internal async Task UpdateExistingFilterAsync(
+        string ownerLogin,
+        ProjectOwnerType ownerType,
+        int projectNumber,
+        WorkflowSnapshot workflow,
+        string filter,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(ownerLogin);
+        ArgumentNullException.ThrowIfNull(workflow);
+        ArgumentNullException.ThrowIfNull(filter);
+
+        var page = await _session.GetPageAsync(cancellationToken).ConfigureAwait(false);
+        var url = BrowserProjectUrl.Build(
+            _session.BaseUrl,
+            ownerLogin,
+            ownerType,
+            projectNumber,
+            "workflows");
+        await _session.GotoAsync(url, cancellationToken).ConfigureAwait(false);
+        await Sel.WorkflowsSidebar(page).WaitForAsync().ConfigureAwait(false);
+        await WorkflowUiExporter.OpenWorkflowAsync(
+            page,
+            workflow.Name,
+            workflow.Number,
+            cancellationToken).ConfigureAwait(false);
+
+        if (await Sel.SaveWorkflowButton(page).CountAsync().ConfigureAwait(false) == 0)
+        {
+            await Sel.EditWorkflowButton(page).First.ClickAsync().ConfigureAwait(false);
+        }
+
+        await Sel.SaveWorkflowButton(page).First.WaitForAsync().ConfigureAwait(false);
+        await Sel.WorkflowFiltersCombobox(page).First.FillAsync(filter).ConfigureAwait(false);
+        await PauseAsync(cancellationToken).ConfigureAwait(false);
+        await SaveWorkflowAsync(page, cancellationToken).ConfigureAwait(false);
     }
 
     // ----- built-in workflows (matched by name) -----

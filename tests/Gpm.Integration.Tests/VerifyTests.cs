@@ -70,15 +70,24 @@ public class VerifyTests
         {
             [FixtureRepo] = FixtureRepo,
         };
+        var userMapping = snapshot.Items
+            .SelectMany(item => item.Draft?.Assignees ?? [])
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(login => login, login => login, StringComparer.OrdinalIgnoreCase);
 
         var result = await new ProjectImporter(client) { RepositoryMapping = repoMapping }
             .ImportAsync(snapshot, TargetOrg, cancellationToken);
         var logDirectory = Directory.CreateTempSubdirectory("gpm-m5-").FullName;
         try
         {
-            var itemResult = await new ItemImporter(client) { RepositoryMapping = itemMapping }
+            var itemResult = await new ItemImporter(client)
+            {
+                RepositoryMapping = itemMapping,
+                UserMapping = userMapping,
+            }
                 .ImportAsync(snapshot, result, logDirectory, cancellationToken);
             Assert.Equal(snapshot.Items.Count, itemResult.Created);
+            Assert.Empty(itemResult.Warnings);
             var importLog = await ImportLog.LoadAsync(logDirectory, cancellationToken);
             Assert.NotNull(importLog);
             Assert.Equal(snapshot.Items.Count, importLog.Items.Count);

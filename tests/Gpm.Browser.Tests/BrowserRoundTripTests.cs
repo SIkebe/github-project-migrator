@@ -319,14 +319,14 @@ public class BrowserRoundTripTests
                 Assert.Equal(expected.Ui.Repository, actual.Ui.Repository); // short names ("fixture-repo" on both sides)
             }
 
-            var driftedSnapshot = snapshot with
-            {
-                Workflows = snapshot.Workflows.Select(workflow =>
-                    workflow.Name == "Auto-add secondary"
-                        ? workflow with { Ui = workflow.Ui! with { Filter = "is:issue label:documentation" } }
-                        : workflow).ToList(),
-            };
-            await workflowImporter.ImportAsync(driftedSnapshot, TargetOrg, result.ProjectNumber, cancellationToken);
+            var targetWorkflow = Assert.Single(target.Workflows, workflow => workflow.Name == "Auto-add secondary");
+            await workflowImporter.UpdateExistingFilterAsync(
+                TargetOrg,
+                ProjectOwnerType.Organization,
+                result.ProjectNumber,
+                targetWorkflow,
+                "is:issue label:documentation",
+                cancellationToken);
             var driftReport = await verifier.VerifyAsync(snapshot, TargetOrg, result.ProjectNumber, cancellationToken);
             Assert.Contains(driftReport.Differences, difference =>
                 difference.Severity == VerifySeverity.Error
