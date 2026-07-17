@@ -1,4 +1,3 @@
-using System.Globalization;
 using Gpm.Core.GitHub;
 using Gpm.Core.Snapshot;
 using Microsoft.Playwright;
@@ -55,10 +54,13 @@ public sealed class WorkflowUiExporter
         IPage page;
         try
         {
-            var ownerPath = ownerType == ProjectOwnerType.User ? "users" : "orgs";
             page = await _session.GetPageAsync(cancellationToken).ConfigureAwait(false);
-            var url = string.Create(CultureInfo.InvariantCulture,
-                $"{_session.BaseUrl}/{ownerPath}/{ownerLogin}/projects/{projectNumber}/workflows");
+            var url = BrowserProjectUrl.Build(
+                _session.BaseUrl,
+                ownerLogin,
+                ownerType,
+                projectNumber,
+                "workflows");
             await _session.GotoAsync(url, cancellationToken).ConfigureAwait(false);
             await Sel.WorkflowsSidebar(page).WaitForAsync().ConfigureAwait(false);
         }
@@ -79,7 +81,7 @@ public sealed class WorkflowUiExporter
             WorkflowUiSnapshot? ui = null;
             try
             {
-                await OpenWorkflowAsync(page, workflow.Name, cancellationToken).ConfigureAwait(false);
+                await OpenWorkflowAsync(page, workflow.Name, workflow.Number, cancellationToken).ConfigureAwait(false);
                 var state = await ReadCurrentWorkflowAsync(page, workflow.Name).ConfigureAwait(false);
                 ui = new WorkflowUiSnapshot
                 {
@@ -105,6 +107,18 @@ public sealed class WorkflowUiExporter
     internal static async Task OpenWorkflowAsync(IPage page, string name, CancellationToken cancellationToken)
     {
         await Sel.WorkflowLink(page, name).First.ClickAsync().ConfigureAwait(false);
+        await Sel.WorkflowHeading(page, name).First.WaitForAsync().ConfigureAwait(false);
+        await Task.Delay(300, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>Navigates to the saved workflow identified by its GraphQL number.</summary>
+    internal static async Task OpenWorkflowAsync(
+        IPage page,
+        string name,
+        int number,
+        CancellationToken cancellationToken)
+    {
+        await Sel.WorkflowLink(page, number).ClickAsync().ConfigureAwait(false);
         await Sel.WorkflowHeading(page, name).First.WaitForAsync().ConfigureAwait(false);
         await Task.Delay(300, cancellationToken).ConfigureAwait(false);
     }

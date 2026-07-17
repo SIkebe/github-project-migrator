@@ -88,9 +88,12 @@ public sealed class ViewUiExporter
         ViewSnapshot view,
         CancellationToken cancellationToken)
     {
-        var ownerPath = ownerType == ProjectOwnerType.User ? "users" : "orgs";
-        var url = string.Create(CultureInfo.InvariantCulture,
-            $"{_session.BaseUrl}/{ownerPath}/{ownerLogin}/projects/{projectNumber}/views/{view.Number}");
+        var url = BrowserProjectUrl.Build(
+            _session.BaseUrl,
+            ownerLogin,
+            ownerType,
+            projectNumber,
+            string.Create(CultureInfo.InvariantCulture, $"views/{view.Number}"));
         await _session.GotoAsync(url, cancellationToken).ConfigureAwait(false);
 
         await Sel.ViewMenuButton(page).ClickAsync().ConfigureAwait(false);
