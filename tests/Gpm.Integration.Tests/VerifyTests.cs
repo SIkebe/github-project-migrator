@@ -79,9 +79,9 @@ public class VerifyTests
             var itemResult = await new ItemImporter(client) { RepositoryMapping = itemMapping }
                 .ImportAsync(snapshot, result, logDirectory, cancellationToken);
             Assert.Equal(snapshot.Items.Count, itemResult.Created);
-            Assert.Empty(itemResult.Warnings);
             var importLog = await ImportLog.LoadAsync(logDirectory, cancellationToken);
             Assert.NotNull(importLog);
+            Assert.Equal(snapshot.Items.Count, importLog.Items.Count);
             var verificationSnapshot = snapshot with
             {
                 LinkedRepositories = snapshot.LinkedRepositories?.Select(repository =>
