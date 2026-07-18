@@ -1,0 +1,191 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1900" viewBox="0 0 1600 1900" role="img" aria-labelledby="title desc">
+  <title id="title">ghpmv と GitHub Enterprise Importer による移行フロー</title>
+  <desc id="desc">Enterprise Importer によるリポジトリ移行を前段とし、ghpmv の setup、login、export、import、verify の役割とデータの流れを説明する図。</desc>
+  <defs>
+    <linearGradient id="header" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#24292f"/>
+      <stop offset="1" stop-color="#0969da"/>
+    </linearGradient>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="130%">
+      <feDropShadow dx="0" dy="5" stdDeviation="7" flood-color="#1f2328" flood-opacity=".14"/>
+    </filter>
+    <marker id="arrow-blue" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto">
+      <path d="M0,0 L12,6 L0,12 Z" fill="#0969da"/>
+    </marker>
+    <marker id="arrow-purple" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto">
+      <path d="M0,0 L12,6 L0,12 Z" fill="#8250df"/>
+    </marker>
+    <marker id="arrow-green" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto">
+      <path d="M0,0 L12,6 L0,12 Z" fill="#1a7f37"/>
+    </marker>
+    <style>
+      text { font-family: "Yu Gothic UI", "Meiryo", "Noto Sans JP", sans-serif; fill: #1f2328; }
+      .title { font-size: 42px; font-weight: 700; fill: #fff; }
+      .subtitle { font-size: 21px; fill: #dbeafe; }
+      .section { font-size: 25px; font-weight: 700; }
+      .box-title { font-size: 22px; font-weight: 700; }
+      .body { font-size: 17px; }
+      .small { font-size: 15px; }
+      .code { font-family: "Cascadia Mono", "Consolas", monospace; font-size: 16px; font-weight: 700; }
+      .label { font-size: 15px; font-weight: 700; }
+      .card { fill: #fff; stroke: #d0d7de; stroke-width: 2; rx: 16; filter: url(#shadow); }
+      .api { fill: #ddf4ff; stroke: #54aeff; stroke-width: 2; rx: 12; }
+      .ui { fill: #fbefff; stroke: #bf7af0; stroke-width: 2; rx: 12; }
+      .file { fill: #fff8c5; stroke: #d4a72c; stroke-width: 2; rx: 12; }
+      .ok { fill: #dafbe1; stroke: #4ac26b; stroke-width: 2; rx: 12; }
+      .muted { fill: #f6f8fa; stroke: #8c959f; stroke-width: 2; rx: 12; }
+      .flow { fill: none; stroke: #0969da; stroke-width: 4; marker-end: url(#arrow-blue); }
+      .ui-flow { fill: none; stroke: #8250df; stroke-width: 4; stroke-dasharray: 10 7; marker-end: url(#arrow-purple); }
+      .verify-flow { fill: none; stroke: #1a7f37; stroke-width: 4; marker-end: url(#arrow-green); }
+    </style>
+  </defs>
+
+  <rect width="1600" height="1900" fill="#f6f8fa"/>
+  <rect width="1600" height="160" fill="url(#header)"/>
+  <text class="title" x="70" y="70">GitHub Projects 移行の動作機序</text>
+  <text class="subtitle" x="70" y="112">GitHub Enterprise Importer（GEI）で土台を移し、ghpmv で Projects V2 を再構築・検証する</text>
+
+  <rect class="card" x="55" y="195" width="1490" height="300"/>
+  <text class="section" x="85" y="238">1. 全体像：役割を分けた二段階移行</text>
+
+  <rect class="muted" x="90" y="275" width="330" height="155"/>
+  <text class="box-title" x="115" y="312">移行元 GitHub</text>
+  <text class="body" x="115" y="348">• リポジトリ</text>
+  <text class="body" x="115" y="378">• Issue / Pull Request</text>
+  <text class="body" x="115" y="408">• Projects V2</text>
+
+  <rect class="api" x="505" y="275" width="430" height="155"/>
+  <text class="box-title" x="530" y="312">GitHub Enterprise Importer</text>
+  <text class="body" x="530" y="348">リポジトリ本体と Issue / PR を移行</text>
+  <text class="body" x="530" y="378">番号とメタデータを可能な限り保持</text>
+  <text class="small" x="530" y="408">※ ghpmv はリポジトリ移行を行わない</text>
+
+  <rect class="ok" x="1020" y="275" width="440" height="155"/>
+  <text class="box-title" x="1045" y="312">移行先 GitHub</text>
+  <text class="body" x="1045" y="348">先にリポジトリと Issue / PR が存在</text>
+  <text class="body" x="1045" y="378">同じ番号を repo mapping で解決</text>
+  <text class="body" x="1045" y="408">その上に ghpmv が Project を構築</text>
+
+  <path class="flow" d="M420 352 H495"/>
+  <path class="flow" d="M935 352 H1010"/>
+  <text class="label" x="450" y="333">入力</text>
+  <text class="label" x="962" y="333">先行</text>
+  <rect x="455" y="447" width="690" height="31" rx="15" fill="#fff1e5" stroke="#fb8f44"/>
+  <text class="small" x="476" y="469">重要：対象 Issue / PR の番号が変わると、ghpmv v1 は Project item を再リンクできない</text>
+
+  <rect class="card" x="55" y="530" width="1490" height="710"/>
+  <text class="section" x="85" y="574">2. ghpmv の主経路：export → mapping → import → verify</text>
+
+  <rect class="muted" x="85" y="620" width="265" height="165"/>
+  <text class="box-title" x="110" y="656">移行元 Project</text>
+  <text class="body" x="110" y="692">メタデータ・Field</text>
+  <text class="body" x="110" y="722">Item・値・順序・Archive</text>
+  <text class="body" x="110" y="752">View / Workflow</text>
+
+  <rect class="api" x="425" y="600" width="330" height="205"/>
+  <text class="code" x="450" y="638">ghpmv export</text>
+  <text class="body" x="450" y="676">GraphQL API で読み出し</text>
+  <text class="body" x="450" y="706">ページング・再試行</text>
+  <text class="body" x="450" y="736">全 Project の一括 export も可</text>
+  <text class="small" x="450" y="772">Browser 有効時は UI 情報を追記</text>
+
+  <path class="flow" d="M350 702 H415"/>
+
+  <rect class="file" x="830" y="600" width="320" height="205"/>
+  <text class="box-title" x="855" y="638">スナップショット</text>
+  <text class="code" x="855" y="672">snapshot.json</text>
+  <text class="body" x="855" y="706">移行元 Project の状態契約</text>
+  <text class="body" x="855" y="736">API 情報 + 任意の UI 情報</text>
+  <text class="small" x="855" y="772">移行・再開・検証の基準</text>
+
+  <path class="flow" d="M755 702 H820"/>
+
+  <rect class="file" x="1225" y="590" width="270" height="225"/>
+  <text class="box-title" x="1250" y="628">Mapping CSV</text>
+  <text class="small" x="1250" y="663">repository-mappings.csv</text>
+  <text class="small" x="1250" y="692">user-mappings.csv</text>
+  <text class="small" x="1250" y="721">organization-mappings.csv</text>
+  <text class="body" x="1250" y="760">移行先の名前へ変換</text>
+  <text class="small" x="1250" y="790">export が雛形を生成</text>
+
+  <path class="flow" d="M1150 702 H1215"/>
+
+  <rect class="api" x="425" y="910" width="330" height="240"/>
+  <text class="code" x="450" y="948">ghpmv import</text>
+  <text class="body" x="450" y="984">① Project / Field を作成・更新</text>
+  <text class="body" x="450" y="1016">② Issue / PR を再リンク</text>
+  <text class="body" x="450" y="1048">③ Draft・値・順序を復元</text>
+  <text class="body" x="450" y="1080">④ Archive 状態を最後に反映</text>
+  <text class="small" x="450" y="1118">既存 Project へ merge も可能</text>
+
+  <path class="flow" d="M990 805 V860 H590 V900"/>
+  <path class="flow" d="M1360 815 V875 H720 V900"/>
+
+  <rect class="file" x="85" y="930" width="265" height="190"/>
+  <text class="box-title" x="110" y="968">再開ログ</text>
+  <text class="code" x="110" y="1004">project-import-log.json</text>
+  <text class="code" x="110" y="1036">import-log.json</text>
+  <text class="body" x="110" y="1072">作成済み ID を逐次保存</text>
+  <text class="small" x="110" y="1100">中断後も重複作成を防止</text>
+  <path class="flow" d="M415 1028 H360"/>
+
+  <rect class="ok" x="830" y="910" width="320" height="240"/>
+  <text class="box-title" x="855" y="948">移行先 Project</text>
+  <text class="body" x="855" y="984">Project 構造・Field</text>
+  <text class="body" x="855" y="1016">Issue / PR / Draft item</text>
+  <text class="body" x="855" y="1048">値・順序・Archive</text>
+  <text class="body" x="855" y="1080">Linked repository</text>
+  <text class="small" x="855" y="1118">UI 経路で View / Workflow も復元</text>
+  <path class="flow" d="M755 1030 H820"/>
+
+  <rect class="ok" x="1225" y="910" width="270" height="240"/>
+  <text class="code" x="1250" y="948">ghpmv verify</text>
+  <text class="body" x="1250" y="984">移行先を再 export</text>
+  <text class="body" x="1250" y="1016">mapping 後の元 snapshot</text>
+  <text class="body" x="1250" y="1048">とカテゴリ別に比較</text>
+  <text class="small" x="1250" y="1084">Match / Mismatch</text>
+  <text class="small" x="1250" y="1110">PartialMatch / NotVerified</text>
+  <path class="verify-flow" d="M1150 1030 H1215"/>
+
+  <rect class="card" x="55" y="1275" width="1490" height="345"/>
+  <text class="section" x="85" y="1319">3. Browser 補完経路：公開 API にない View / Workflow を扱う</text>
+
+  <rect class="ui" x="90" y="1360" width="300" height="190"/>
+  <text class="code" x="115" y="1398">ghpmv setup --browsers</text>
+  <text class="body" x="115" y="1436">Playwright Chromium を導入</text>
+  <text class="code" x="115" y="1475">ghpmv login</text>
+  <text class="body" x="115" y="1513">対話ログイン状態をローカル保存</text>
+
+  <rect class="ui" x="475" y="1360" width="405" height="190"/>
+  <text class="box-title" x="500" y="1398">export の UI 読み取り</text>
+  <text class="body" x="500" y="1436">View：layout / slice / swimlane / roadmap</text>
+  <text class="body" x="500" y="1468">Workflow：filter / repo / enabled state</text>
+  <text class="body" x="500" y="1500">明示的 Collaborator と role</text>
+  <text class="small" x="500" y="1530">取得結果を snapshot.json に enrich</text>
+
+  <rect class="ui" x="965" y="1360" width="540" height="190"/>
+  <text class="box-title" x="990" y="1398">import / verify の UI 再生・再読取</text>
+  <text class="body" x="990" y="1436">import：GitHub Projects Web UI を操作して再作成</text>
+  <text class="body" x="990" y="1468">verify：UI-only 設定を再読取して比較</text>
+  <text class="body" x="990" y="1500">API token と browser login の本人一致を確認</text>
+  <text class="small" x="990" y="1530">--enable-browser-automation を明示した場合のみ実行</text>
+
+  <path class="ui-flow" d="M390 1455 H465"/>
+  <path class="ui-flow" d="M880 1455 H955"/>
+
+  <rect class="card" x="55" y="1655" width="1490" height="190"/>
+  <text class="section" x="85" y="1699">4. 代表的なサブコマンド</text>
+  <text class="code" x="90" y="1744">setup</text>
+  <text class="small" x="90" y="1772">Browser 前提を導入</text>
+  <text class="code" x="345" y="1744">login</text>
+  <text class="small" x="345" y="1772">UI 用認証を保存</text>
+  <text class="code" x="600" y="1744">export</text>
+  <text class="small" x="600" y="1772">状態を JSON 化</text>
+  <text class="code" x="855" y="1744">import</text>
+  <text class="small" x="855" y="1772">mapping して再構築</text>
+  <text class="code" x="1110" y="1744">verify</text>
+  <text class="small" x="1110" y="1772">再読取して差分判定</text>
+  <text class="small" x="90" y="1815">実線 = GraphQL API / ファイル経路　　破線 = opt-in Browser UI 経路　　緑線 = 検証経路</text>
+
+  <text class="small" x="800" y="1878" text-anchor="middle" fill="#57606a">ghpmv は Projects V2 の構成と所属を移す CLI。リポジトリ・Issue・PR の移行は GEI 等が担当する。</text>
+</svg>
