@@ -20,7 +20,7 @@ Requires no runtime for the self-contained builds; the portable build and the gl
 
 ### Option 1: Self-contained archive (no .NET required)
 
-Download the archive for your platform from [Releases](https://github.com/SIkebe/github-project-migrator/releases), verify it against `SHA256SUMS.txt`, extract it and run `ghpmv` (`ghpmv.exe` on Windows):
+Download the archive for your platform from [Releases](https://github.com/SIkebe/ghpmv/releases), verify it against `SHA256SUMS.txt`, extract it and run `ghpmv` (`ghpmv.exe` on Windows):
 
 - `ghpmv-vX.Y.Z-win-x64.zip`
 - `ghpmv-vX.Y.Z-win-arm64.zip`
@@ -255,7 +255,7 @@ Views are migrated through the GitHub Projects web UI because GitHub has no publ
 
 | Area | Supported? | Notes |
 |---|---:|---|
-| Table views | ✅ | Name, filter, sorting, visible fields, Slice by and related display options are tested. |
+| Table views | ✅ / best effort | Name, filter, the first sort key, visible-field membership, Slice by and related display options are migrated. Additional sort keys and visible-field order are exported but are not explicitly reproduced by the browser importer. |
 | Board views | ✅ | Column by, Swimlanes and Field sum are tested. |
 | Roadmap views | ✅ | Date fields, zoom level and markers are tested. |
 | View UI-only settings | ✅ | Exported/imported by browser automation where the UI exposes them. |
@@ -269,7 +269,7 @@ Workflows are migrated through the GitHub Projects web UI because GitHub has no 
 | Area | Supported? | Notes |
 |---|---:|---|
 | Built-in item-state workflows | ✅ | Examples: item closed, pull request merged, item added to project. Status bindings are reapplied after field migration. |
-| Auto-add workflows | ✅ | Repository and filter settings are migrated. Multiple Auto-add workflows are supported up to the target plan limit. |
+| Auto-add workflows | ✅ / best effort | Repository and filter settings are migrated. The importer handles up to 20 instances; a lower target-plan limit is surfaced as a browser-import warning when GitHub rejects an additional workflow. |
 | Auto-archive workflows | ✅ / best effort | Supported where the current GitHub UI exposes the filter in a stable way. |
 | Duplicated Auto-add workflows | ✅ | Tested with two Auto-add workflows. |
 | Disabled workflows | ✅ | Saved disabled workflows are migrated by saving once and toggling off when needed. |
@@ -323,11 +323,12 @@ The following are out of scope for this project, either by design or because Git
 - [Test strategy](docs/TEST_STRATEGY.md) is a Japanese summary of the automated, browser, CI, packaging and manual release validation layers.
 - [Manual test plan](docs/MANUAL_TEST_PLAN.md) walks through the GEI + `ghpmv` end-to-end migration validation flow.
 
-## Limitations
+## Current limitations
 
-Permanent limitations (cannot be solved by any tool):
+These include both permanent platform limitations and features that are outside the current v1 scope:
 
-- **Original author / creation date of draft issues and status updates** cannot be preserved — the API always attributes writes to the token owner. `ghpmv` prepends a note with the original metadata instead.
+- **Original author / creation date of draft issues** cannot be preserved — the API always attributes writes to the token owner. `ghpmv` prepends a note with the original metadata instead.
+- **Project status updates** are not migrated in v1. GitHub exposes APIs for reading and creating them, so this is a future scope item rather than a permanent platform limitation.
 - **Item change history** and past field values cannot be migrated (no write API for history).
 - **Issues / pull requests themselves are not migrated** — that is the job of [GitHub Enterprise Importer](https://docs.github.com/en/migrations/using-github-enterprise-importer). `ghpmv` re-links project items via the repository mapping CSV and expects the target issue/PR number to match the source number.
 - **Issue/PR metadata is not rewritten by `ghpmv`** — labels, milestones, assignees, reviewers, linked PRs, parent/sub-issue relationships, comments and issue/PR history are GEI/repository-migration concerns. Project filters that reference those metadata values are migrated as strings and rely on the target issues/PRs having equivalent metadata.
@@ -339,12 +340,12 @@ Browser automation notes:
 
 - The module is **opt-in** (`--enable-browser-automation`) and uses **your own interactive session** stored locally (`%APPDATA%/ghpmv/browser-state*.json`). Nothing is sent anywhere except to GitHub itself.
 - Automating the web UI is not covered by the public API's stability guarantees, and you are responsible for using it in a way consistent with the [GitHub Terms of Service](https://docs.github.com/site-policy/github-terms/github-terms-of-service). `ghpmv` performs low-rate, human-scale, strictly sequential UI operations against your own projects — no scraping of other users' data.
-- UI selectors can break when GitHub updates the Projects UI; failures degrade to warnings plus manual instructions rather than corrupting data.
+- UI selectors can break when GitHub updates the Projects UI; recoverable failures are reported as warnings and processing continues. Browser writes are not transactional, so an earlier mutation can remain partially applied when a later step fails; always run browser-assisted `ghpmv verify` afterward.
 - View tab order is not reproduced (views are created in view-number order); a warning is emitted.
 
 ### Auto-add workflow limits per plan
 
-The number of Auto-add workflows per project is limited by the target organization's plan. Extra instances beyond the limit are reported as warnings with manual steps:
+The number of Auto-add workflows per project is limited by the target organization's plan. `ghpmv` has a hard maximum of 20 Auto-add workflows; if the target UI enforces a lower plan limit, the rejected workflow is reported as a warning:
 
 | Plan | Auto-add workflows per project |
 |---|---|

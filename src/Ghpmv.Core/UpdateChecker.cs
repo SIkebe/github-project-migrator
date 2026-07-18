@@ -8,7 +8,7 @@ namespace Ghpmv.Core;
 /// </summary>
 public static class UpdateChecker
 {
-    private const string LatestReleaseUrl = "https://api.github.com/repos/SIkebe/github-project-migrator/releases/latest";
+    private const string LatestReleaseUrl = "https://api.github.com/repos/SIkebe/ghpmv/releases/latest";
     private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(2);
 
     /// <summary>

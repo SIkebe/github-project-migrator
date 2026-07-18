@@ -1,4 +1,4 @@
-module github.com/SIkebe/github-project-migrator/tools/ghalint
+module github.com/SIkebe/ghpmv/tools/ghalint
 
 go 1.26.2
 

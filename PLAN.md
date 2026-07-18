@@ -1,10 +1,10 @@
-# github-project-migrator 開発プラン
+# ghpmv 開発プラン
 
 GitHub Projects V2 を組織間/製品間で移行する CLI ツール。
 [junkofujiwara/github-projects](https://github.com/junkofujiwara/github-projects) の後継として、手動ステップを排除した完全自動移行を目指す。
 
 - 作成日: 2026-07-05
-- ステータス: 調査完了 / 実装未着手
+- ステータス: M0–M8 実装済み。deterministic / 実 API tests は CI で実行、browser E2E は手動実行(nightly CI は未実装)
 
 ---
 
@@ -65,18 +65,18 @@ GitHub Projects V2 を組織間/製品間で移行する CLI ツール。
 
 | リスク | 影響 | 緩和策 |
 |---|---|---|
-| GitHub UI の DOM 変更で Playwright 層が壊れる | View/Workflow 移行の失敗 | Role ベースのセレクター採用、E2E テストを CI で定期実行、失敗時は「手動手順書の自動生成」へフォールバック |
+| GitHub UI の DOM 変更で Playwright 層が壊れる | View/Workflow 移行の失敗、一部設定だけが適用された状態 | 再利用する Role ベースのセレクターを `Sel.cs` に集約し、リリース前に browser E2E を手動実行。回復可能な失敗は warning として続行するため、browser-assisted `verify` で部分適用を検出 |
 | UI 自動操作の利用規約上の位置づけ | コンプライアンス | 自組織データのみ・レート制御・ヘッドフルオプション提供。README に明記し、View/Workflow 自動化はオプトイン(`--enable-browser-automation`)とする |
 | ログイン(2FA / SSO / EMU) | 自動化の前提 | 初回のみ手動ログイン → `storageState` を保存・再利用。トークンでの UI ログインは不可のため必須手順として設計 |
 | Windows ARM64 での Playwright ブラウザー | 対応状況が流動的 | API 移行機能は全 OS で動作保証。ブラウザー機能のみ「対応 OS 表」を分けて明記 |
 | GitHub Enterprise Cloud with data residency(移行先) | API/Web のホストがテナント固有(`https://api.{tenant}.ghe.com` / `https://{tenant}.ghe.com`) | `--target-base-url` 対応。GHEC-DR は GitHub.com と同一の最新 API スキーマのため機能差分はない前提。統合テストで確認 |
-| プラン別の機能上限(Auto-add workflow: Free=1 / Pro・Team=5 / GHEC=20。docs で確認済み) | Free org のテスト環境では複数 Auto-add の移行と上限超過ハンドリングを実地検証できない。移行先プランの上限超過時に import が失敗する | import 時にターゲットの作成結果から上限到達を検出し、超過分は warning + 手動手順書へフォールバック。複数 Auto-add の実地検証は Team 以上の org が使える場合のみ実施(なければ 1 個 + 上限検出ロジックの単体テストで代替) |
+| プラン別の機能上限(Auto-add workflow: Free=1 / Pro・Team=5 / GHEC=20。docs で確認済み) | Free org のテスト環境では複数 Auto-add の実地検証が難しい。実装上の上限は 20 で、より低い target plan 上限は UI が追加を拒否した時点で判明する | 20 件を超える snapshot entry は preflight warning + skip。target UI がそれ以前に拒否した場合も browser import warning として対象 workflow を skip |
 
 ---
 
 ## 2. ツール概要
 
-- 名称: `ghpmv` (github-project-migrator)
+- 名称: `ghpmv` (GitHub Projects Migrator)
 - 形態: .NET 10 コンソールアプリ(単一プロジェクト・単一ツール)。配布は 2 形態:
   - **Self-contained**: ランタイム同梱のフォルダー配布(zip/tar.gz)。ランタイムのインストール不要
   - **Framework-dependent**: .NET 10 ランタイムがある環境向けの軽量配布 + `dotnet tool install -g ghpmv`(NuGet グローバルツール)
@@ -200,19 +200,19 @@ v1 で扱わないものと将来対応は §8 のロードマップを参照。
 
 **詳細設計は [docs/BROWSER_AUTOMATION_PLAN.md](docs/BROWSER_AUTOMATION_PLAN.md) を参照(タスク分解 B0–B9、セレクター戦略、操作シーケンス、検証ループを定義済み)。**
 
-- 着手前に Discovery フェーズ(B0/D0)でセレクターを実 UI で確定し、aria snapshot を `docs/ui-maps/` にコミット
+- Discovery フェーズ(B0/D0)は 2026-07-05 に完了。実測結果は `docs/ui-maps/projects-ui-discovery.md`、複数フローで再利用する現行セレクターは `src/Ghpmv.Core/Browser/Sel.cs` に集約し、局所的な one-off selector は各実装内に保持
 - `ghpmv setup --browsers` / `ghpmv login`(storageState 保存)
 - View の UI-export(Slice by / Field sum / Roadmap 設定)と View import(全レイアウト)
-- ✅ 検証: B0–B5 の各テスト(fixture project への適用 → GraphQL + UI の read-back 照合)+ nightly CI
+- ✅ 検証: B0–B5 の deterministic tests と、fixture project を使う手動 browser E2E
 
 ### M7: Browser モジュール — Workflows 移行
 
 **詳細設計は [docs/BROWSER_AUTOMATION_PLAN.md](docs/BROWSER_AUTOMATION_PLAN.md) §4 を参照。**
 
 - Workflow 詳細の UI-export(W-1〜W-9 の設定値読み取り)と import(Edit → 設定 → Save and turn on workflow)
-- Auto-add の複数インスタンス(Duplicate)とプラン別上限のハンドリング(Free=1 / Pro・Team=5 / GHEC=20)。上限到達時は超過分を warning + 手動手順書出力へフォールバック
+- Auto-add の複数インスタンス(Duplicate)と上限処理。実装上限 20 を超える entry、および target UI が拒否した entry は warning + skip
 - テスト環境が Free org の場合: 複数 Auto-add の実地検証は 1 個に縮退し、上限検出・フォールバックはロジックの単体テストでカバー(§1.6 参照)
-- ✅ 検証: B6–B9 の各テスト(適用 → GraphQL `workflows` + UI 再スクレイプの照合、ラウンドトリップ E2E)
+- ✅ 検証: B6–B8 の deterministic tests と、GraphQL + UI 再スクレイプを行う手動ラウンドトリップ E2E。scheduled/nightly 実行は未実装
 
 ### M8: 配布とリリース
 - Release ワークフロー: GitHub Releases へ以下を公開
@@ -221,7 +221,7 @@ v1 で扱わないものと将来対応は §8 のロードマップを参照。
   - NuGet グローバルツール(`dotnet tool install -g ghpmv`)
 - チェックサム、`--version`、更新チェック(オプトアウト可)
 - ドキュメント: README(制限事項・ToS 注意・対応環境表(GitHub.com ⇄ GitHub.com / GitHub.com → GHEC-DR。GHES 非サポート)・2 形態のインストール手順)
-- ✅ 検証: リリース成果物を各 OS ランナーで起動するスモークテスト(`ghpmv --version`, `ghpmv export --help`)を self-contained / framework-dependent 両方で実施
+- ✅ 検証: 実行可能な runner で `ghpmv --version` / `ghpmv export --help` を self-contained / framework-dependent の両方に対して実施。win-arm64 は x64 runner から cross-publish のみ
 
 ## 6. テスト戦略まとめ
 
@@ -231,44 +231,46 @@ GEI で repository / Issue / Pull Request を移行してから `ghpmv` の Proj
 
 | レイヤー | 手法 | 実行条件 |
 |---|---|---|
-| 統合(実 API)— 主軸 | テスト専用 org(`GHPMV_TEST_ORG`)+ フィクスチャープロジェクト + 自動クリーンアップ | CI 常時(secrets のない fork PR のみ skip) |
+| 統合(実 API)— 主軸 | テスト専用 org(`GHPMV_TEST_ORG`)+ フィクスチャープロジェクト + 自動クリーンアップ | Ubuntu CI で実行。`GHPMV_TEST_TOKEN` が無い環境では skip |
 | 単体(ロジック) | xUnit。マッピング解決・スナップショットのシリアライズ・差分計算など純粋なロジックのみ。HTTP 層のモックは不使用 | 常時 |
 | モック(限定的) | secondary rate limit バックオフ、5xx リトライ、途中失敗からのレジューム—実 API で再現不能なケースのみ | 常時 |
 | publish 妥当性 | self-contained(全 RID)+ framework-dependent の publish とスモーク起動を CI で実行 | 常時 |
-| E2E(ブラウザー) | Playwright、storageState 利用 | `GHPMV_TEST_ORG` 設定時 + nightly |
+| E2E(ブラウザー) | Playwright、storageState 利用 | `GHPMV_BROWSER_STATE` と `GHPMV_TEST_TOKEN` を設定して手動実行。scheduled/nightly は未実装 |
 | 移行忠実度 | `ghpmv verify` 自体を回帰テストとして利用 | 統合テスト内 |
 
 実 API テストの運用ルール:
-- テストごとに一意なプレフィックス付き project を作成し、`finally` で `deleteProjectV2`。残骸は nightly の掃除ジョブで削除
+- テストごとに一意なプレフィックス付き project を作成し、`finally` で `deleteProjectV2`。自動の残骸掃除ジョブは無いため、cleanup 失敗時は手動で削除
 - レートリミット消費を抑えるため、統合テストは直列実行・小規模データ(items ≤ 20)で設計
 
-## 7. 未確定事項(実装前に PoC で確認)
+## 7. 検証状況と残課題
 
-1. `iterationConfiguration` で**過去日付の iteration**(完了済み)を作成できるか → M3 の最初に実 API で確認
-2. Projects UI の View 設定 DOM の安定性(`data-testid` の有無)→ M6 着手時に Playwright codegen で調査
-3. Windows ARM64 での Playwright Chromium ネイティブ対応 → M6 で確認、不可ならブラウザー機能は win-x64/linux のみサポートと明記
-4. GHEC with data residency テナントでの動作確認(GraphQL エンドポイント `https://api.{tenant}.ghe.com/graphql`、Projects UI の DOM が GitHub.com と同一か、storageState のドメイン分離)→ DR テナントを利用できる段階で検証。それまでは「設計上対応・未検証」と README に明記
-4b. クロスアカウント移行(Non-EMU ソース → EMU ターゲット、without DR)の実地検証 → 現テスト環境(gpm-source/gpm-target は EMU 配下)+ Non-EMU アカウント(SIkebe)の組み合わせで検証可能。ブラウザープロファイル分離(§2.1)の E2E を含める
-5. Self-contained publish 時に Playwright ドライバー(.playwright フォルダー)が正しく成果物に含まれるか → M0 の publish 検証に含める
+1. ✅ **完了**: 過去日付の iteration は実 API fixture の completed iteration として export/import/verify 済み。
+2. ✅ **完了**: Projects UI の DOM と role/name selector は D0 で実測し、`Sel.cs` と `docs/ui-maps/projects-ui-discovery.md` に反映済み。
+3. ⏳ **未検証**: Windows ARM64 での Playwright Chromium ネイティブ実行。release workflow は win-arm64 を cross-publish するが x64 runner では起動していない。
+4. ⏳ **未検証**: GHEC with data residency テナントでの GraphQL / Projects UI / storageState。設計上は base URL を分離して対応。
+5. ⏳ **未検証**: Non-EMU source → EMU target のクロスアカウント実地移行。
+6. ⏳ **未検証**: self-contained release artifact からの Playwright browser setup / launch。release smoke test は CLI の `--version` と `export --help` まで。
 
 ## 8. スコープとロードマップ(v1 対象外と将来対応)
 
 ### 8.1 v1 対象外 → v1.x で対応(API だけで実現可能。実装コスト小)
 
+当初この節に置いていたユーザープロジェクトは、`--owner-type organization|user` として対応済み。
+
 | 項目 | v1 で除外する理由 | 将来の対応方法 |
 |---|---|---|
 | Status updates(進捗報告の履歴) | コア移行の優先度を下げないため | `statusUpdates` query + `createProjectV2StatusUpdate` で移行可能と確認済み(§1.2)。作成者・日時は実行者・実行時になるため本文冒頭に元情報を注記(Draft issue と同方式) |
-| ユーザープロジェクト(user-owned) | v1 は org → org に集中 | **→ 対応済み(2026-07-05)**: `export`/`import`/`verify` に `--owner-type organization\|user` を追加。GraphQL の `organization(login:)` を `user(login:)` に切替え、`createProjectV2` の `ownerId` に User ID を渡す(URL は API が返す `/users/{user}/projects/{n}` 形式をそのまま表示) |
 | プロジェクトテンプレート属性 | ニッチ用途 | `markProjectV2AsTemplate` を import 後に 1 回呼ぶだけ(org プロジェクト限定) |
 | View タブの並び順再現 | UI の D&D のみで壊れやすい | v1 は view number 昇順作成 + 警告。v1.x で `Locator.DragToAsync` によるタブ D&D を B-タスクとして追加(D0 で取得済みの aria 情報を活用) |
 | 複数プロジェクトの並列移行 | レート制御とセッション管理が複雑化 | v1 は直列のみ。v1.x で API 部分のみ並列化(ブラウザー操作は常に直列を維持) |
 
 ### 8.2 v1 対象外 → v2 候補(調査・設計が別途必要)
 
+当初この節に置いていた disabled workflow の設定適用は対応済み。必要な設定を保存した後、target workflow を無効へ戻す。
+
 | 項目 | v1 で除外する理由 | v2 でのアプローチ案 |
 |---|---|---|
 | Insights(チャート) | 読み書きとも API がなく、チャート設定 UI が View より複雑 | View と同じ UI-export/import 方式を適用。D0 と同様の Discovery(§BROWSER_AUTOMATION_PLAN §2)を `/insights` に対して実施し、チャート名/型/フィルター/X軸/グループをインベントリ化してから着手 |
-| disabled workflow への設定適用 | 「保存 = 有効化」の UI 動線しかない可能性(D0 で確定) | D0 の結果次第。不可の場合は「一旦有効化して保存 → 直後にトグルで無効化」の 2 ステップ方式を v2 で検証(一瞬の有効化で副作用が出ないかの確認が必要なため v1 では見送り) |
 | 組織レベル Issue Fields 連携 | 2025 以降の新機能で利用実態が少ない | `createProjectV2IssueField`(確認済み、§1.2)で API 移行可能。ただし前提となる org 側 IssueField の移行が別途必要なため、org 設定移行とセットで v2 にて設計 |
 | memex 内部 API の直接利用 | 非公開・無保証 | UI 操作の破損頻度が高い場合の代替手段。D0 で記録する HAR を基に、壊れた項目単位での部分採用を判断(全面依存はしない) |
 | GHEC-DR → GitHub.com など逆方向/DR 間移行 | v1 の検証対象外 | アーキテクチャ上は base-url の組み合わせで動くはず。DR テナントでの検証(§7-4)完了後にサポートマトリクスを拡張 |
@@ -283,4 +285,4 @@ GEI で repository / Issue / Pull Request を移行してから `ghpmv` の Proj
 | GitHub Enterprise Server 対応 | 方針として非サポート(§2) |
 | REDACTED アイテム(権限不足で隠された item) | export 実行者に見えないものは移行不能。件数を warning で報告 |
 
-※ docs/BROWSER_AUTOMATION_PLAN.md §8 の「v1 スコープ外」は本節と対応付けて管理する(タブ並び順 → §8.1、disabled workflow / 内部 API → §8.2)。
+※ docs/BROWSER_AUTOMATION_PLAN.md §8 の「v1 スコープ外」は本節と対応付けて管理する(タブ並び順 → §8.1、内部 API → §8.2)。

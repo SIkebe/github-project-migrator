@@ -30,7 +30,7 @@
 
 - Views:
   - 1=View 1 (TABLE): filter=`status:Todo`, Sort by=Fixture Number (asc), Slice by=Fixture Select, visibleFields=既定 5 + Fixture Text + Fixture Date(Fixture Number はソート由来の仮想列のため visibleFields に入らない — 下記 E2E 知見 8)
-  - 2=Fixture Board (BOARD): Column by=Fixture Select, Swimlanes=Status(GraphQL groupByFields に反映), Field sum=[Fixture Number](Count は uncheck 済み)
+  - 2=Fixture Board (BOARD): Column by=Fixture Select, Swimlanes=Status(GraphQL groupByFields に反映), Field sum=`Fixture Number` (Count は uncheck 済み)
   - 3=Fixture Roadmap (ROADMAP): Dates=Fixture Date → Fixture Sprint end, Zoom=Quarter, Markers=[Fixture Date]
 - Workflows 9(GraphQL 可視分): 既定 6 enabled + Auto-add to project (#7: repo=fixture-repo, filter=`is:issue is:open`) + **Auto-add secondary**(repo=fixture-repo, filter=`is:issue label:bug`, enabled)+ **Code changes requested**(保存済み disabled, Set value=In Progress)
 - fixture-repo: private, Issue #1/#2(gpm-target 側にも同名 repo あり — workflow E2E 用)
