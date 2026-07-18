@@ -323,11 +323,12 @@ The following are out of scope for this project, either by design or because Git
 - [Test strategy](docs/TEST_STRATEGY.md) is a Japanese summary of the automated, browser, CI, packaging and manual release validation layers.
 - [Manual test plan](docs/MANUAL_TEST_PLAN.md) walks through the GEI + `ghpmv` end-to-end migration validation flow.
 
-## Limitations
+## Current limitations
 
-Permanent limitations (cannot be solved by any tool):
+These include both permanent platform limitations and features that are outside the current v1 scope:
 
-- **Original author / creation date of draft issues** cannot be preserved — the API always attributes writes to the token owner. `ghpmv` prepends a note with the original metadata instead. Project status updates are not migrated in v1.
+- **Original author / creation date of draft issues** cannot be preserved — the API always attributes writes to the token owner. `ghpmv` prepends a note with the original metadata instead.
+- **Project status updates** are not migrated in v1. GitHub exposes APIs for reading and creating them, so this is a future scope item rather than a permanent platform limitation.
 - **Item change history** and past field values cannot be migrated (no write API for history).
 - **Issues / pull requests themselves are not migrated** — that is the job of [GitHub Enterprise Importer](https://docs.github.com/en/migrations/using-github-enterprise-importer). `ghpmv` re-links project items via the repository mapping CSV and expects the target issue/PR number to match the source number.
 - **Issue/PR metadata is not rewritten by `ghpmv`** — labels, milestones, assignees, reviewers, linked PRs, parent/sub-issue relationships, comments and issue/PR history are GEI/repository-migration concerns. Project filters that reference those metadata values are migrated as strings and rely on the target issues/PRs having equivalent metadata.
