@@ -340,7 +340,7 @@ Browser automation notes:
 
 - The module is **opt-in** (`--enable-browser-automation`) and uses **your own interactive session** stored locally (`%APPDATA%/ghpmv/browser-state*.json`). Nothing is sent anywhere except to GitHub itself.
 - Automating the web UI is not covered by the public API's stability guarantees, and you are responsible for using it in a way consistent with the [GitHub Terms of Service](https://docs.github.com/site-policy/github-terms/github-terms-of-service). `ghpmv` performs low-rate, human-scale, strictly sequential UI operations against your own projects — no scraping of other users' data.
-- UI selectors can break when GitHub updates the Projects UI; recoverable failures are reported as warnings and the affected setting or workflow is skipped rather than corrupting data.
+- UI selectors can break when GitHub updates the Projects UI; recoverable failures are reported as warnings and processing continues. Browser writes are not transactional, so an earlier mutation can remain partially applied when a later step fails; always run browser-assisted `ghpmv verify` afterward.
 - View tab order is not reproduced (views are created in view-number order); a warning is emitted.
 
 ### Auto-add workflow limits per plan

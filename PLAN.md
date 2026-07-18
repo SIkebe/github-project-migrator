@@ -65,7 +65,7 @@ GitHub Projects V2 を組織間/製品間で移行する CLI ツール。
 
 | リスク | 影響 | 緩和策 |
 |---|---|---|
-| GitHub UI の DOM 変更で Playwright 層が壊れる | View/Workflow 移行の失敗 | Role ベースのセレクターを `Sel.cs` に集中管理し、リリース前に browser E2E を手動実行。回復可能な失敗は warning として対象設定を skip |
+| GitHub UI の DOM 変更で Playwright 層が壊れる | View/Workflow 移行の失敗、一部設定だけが適用された状態 | 再利用する Role ベースのセレクターを `Sel.cs` に集約し、リリース前に browser E2E を手動実行。回復可能な失敗は warning として続行するため、browser-assisted `verify` で部分適用を検出 |
 | UI 自動操作の利用規約上の位置づけ | コンプライアンス | 自組織データのみ・レート制御・ヘッドフルオプション提供。README に明記し、View/Workflow 自動化はオプトイン(`--enable-browser-automation`)とする |
 | ログイン(2FA / SSO / EMU) | 自動化の前提 | 初回のみ手動ログイン → `storageState` を保存・再利用。トークンでの UI ログインは不可のため必須手順として設計 |
 | Windows ARM64 での Playwright ブラウザー | 対応状況が流動的 | API 移行機能は全 OS で動作保証。ブラウザー機能のみ「対応 OS 表」を分けて明記 |
@@ -200,7 +200,7 @@ v1 で扱わないものと将来対応は §8 のロードマップを参照。
 
 **詳細設計は [docs/BROWSER_AUTOMATION_PLAN.md](docs/BROWSER_AUTOMATION_PLAN.md) を参照(タスク分解 B0–B9、セレクター戦略、操作シーケンス、検証ループを定義済み)。**
 
-- Discovery フェーズ(B0/D0)は 2026-07-05 に完了。実測結果は `docs/ui-maps/projects-ui-discovery.md`、現行セレクターは `src/Ghpmv.Core/Browser/Sel.cs` に集約
+- Discovery フェーズ(B0/D0)は 2026-07-05 に完了。実測結果は `docs/ui-maps/projects-ui-discovery.md`、複数フローで再利用する現行セレクターは `src/Ghpmv.Core/Browser/Sel.cs` に集約し、局所的な one-off selector は各実装内に保持
 - `ghpmv setup --browsers` / `ghpmv login`(storageState 保存)
 - View の UI-export(Slice by / Field sum / Roadmap 設定)と View import(全レイアウト)
 - ✅ 検証: B0–B5 の deterministic tests と、fixture project を使う手動 browser E2E

@@ -84,13 +84,15 @@ context.SetDefaultTimeout(30_000);
 ```
 
 - 操作間ウェイト: 連続 UI 操作の間に 300ms(`Task.Delay`)。並列ページは使わない(1 セッション 1 ページ直列)。ToS 配慮とレース回避を兼ねる。
-- **失敗時処理**: 回復可能な UI 操作失敗は warning に追加し、対象設定または workflow を skip して続行する。診断ダンプとページ全体の reload retry は未実装。SPA の race には view 作成確認(最大 3 回)、rename textbox 待機(5 秒 × 3 回)、repository option 待機(10 秒)など対象要素単位の待機・再試行を使う。
+- **失敗時処理**: 回復可能な UI 操作失敗は warning に追加して続行する。UI write は transaction ではないため、途中まで適用された view / workflow が残る場合があり、移行後の browser-assisted `verify` が必須。診断ダンプとページ全体の reload retry は未実装。SPA の race には view 作成確認(最大 3 回)、rename textbox 待機(5 秒 × 3 回)、repository option 待機(10 秒)など対象要素単位の待機・再試行を使う。
 
-### 1.5 セレクターレジストリ(単一ファイル集中管理)
+### 1.5 セレクターレジストリ
 
-ロジック内へのセレクター直書きを禁止し、`Sel.cs` に集約する。D0 Discovery は 2026-07-05 に完了し、role/name を中心とする実測済みセレクターと UI quirk を同ファイルのコメントに記録している。
+複数フローで再利用するセレクターは `Sel.cs` に集約する。dialog 内の確定ボタンなど、その操作だけで使う one-off selector は実装箇所に残している。D0 Discovery は 2026-07-05 に完了し、role/name を中心とする実測済みセレクターと UI quirk を記録している。
 
-```csharp
+以下は構成を示す簡略化した擬似コードであり、コンパイル可能なコピーではない。実装は `Sel.cs` を正とする。
+
+```text
 internal static class Sel
 {
     public static ILocator ViewMenuButton(IPage page)
@@ -291,9 +293,9 @@ browser importer 自体は各 view / workflow の適用直後に完全な read-b
 2. **UI でしか読めない項目**: §3.2 / §4.2 の export 用読み取りルーチンを**そのまま再利用**してターゲットを再スクレイプし、spec.ui と比較
 3. 差分は `verify` コマンドと同じレポーター(期待値/実測値/対象)で出力
 
-import と export を独立させた構造により、手動実行する browser E2E は
-`fixture project → export → 空プロジェクトへ import → export(再)→ スナップショット同士を diff`
-という**ラウンドトリップ 1 本**で全パターンを回帰できる。
+手動実行する `BrowserRoundTripTests` は View と Workflow のラウンドトリップを別々のテストに分け、それぞれ
+`fixture project → export → 空プロジェクトへ import → export(再) → snapshot diff`
+を行う。explicit collaborator export は別の E2E テストで検証する。
 
 ---
 
