@@ -14,6 +14,12 @@ Most existing tools (e.g. [timrogers/gh-migrate-project](https://github.com/timr
 | **Workflows (auto-add, auto-archive, item state automations)** | ❌ | ✅ (opt-in browser automation) |
 | Post-migration verification (`ghpmv verify`) | ❌ | ✅ |
 
+## Migration flow
+
+The following diagram shows how GitHub Enterprise Importer and the main `ghpmv` subcommands work together:
+
+![GitHub Enterprise Importer and ghpmv migration flow](docs/ghpmv-migration-flow.svg)
+
 ## Installation
 
 Requires no runtime for the self-contained builds; the portable build and the global tool require the [.NET 10 runtime/SDK](https://dotnet.microsoft.com/download).
