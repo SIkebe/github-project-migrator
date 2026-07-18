@@ -215,110 +215,9 @@ Organization projects and user-owned projects (`--owner-type user`) are both sup
 
 ## What ghpmv can migrate today
 
-`ghpmv` is intended for migrating **Projects V2 configuration and project membership** after the underlying repositories, issues and pull requests have already been moved or made visible to the target account, typically with GitHub Enterprise Importer (GEI). Issue/PR content and metadata (labels, milestones, assignees, review state, parent/sub-issue relationships, comments, history, and so on) are not rewritten by `ghpmv`; project views show whatever exists on the target issues and pull requests.
+`ghpmv` migrates Projects V2 configuration and membership after repositories, issues, and pull requests have been moved with GitHub Enterprise Importer or another migration tool. It covers fields, items, values, ordering, archived state, linked repositories, and opt-in browser migration for Views and Workflows.
 
-### Project structure
-
-| Area | Supported? | Notes |
-|---|---:|---|
-| Organization-owned projects | ✅ | Default mode. |
-| User-owned projects | ✅ | Use `--owner-type user`. |
-| Existing target project | ✅ | Use `ghpmv import --project-number <n>` to merge into a project you created beforehand, for example from a template. |
-| Project title override | ✅ | Use `--project-title` when creating the target project. |
-| Project description / README / public / closed state | ✅ | Migrated through the GraphQL API. |
-| Linked repositories | ✅ | Exported and re-linked during import when the target repository can be resolved through `--repo-mapping`. |
-| Project collaborators | ✅ with browser automation / API import-only | GitHub exposes a write API but no read API for project collaborators. With `--enable-browser-automation`, `ghpmv` exports explicitly listed project collaborators from Settings → Manage access and imports them through the API. Inherited/base-role access is outside `ghpmv`'s scope and is expected to come from GEI, organization/team/repository settings, or enterprise policy. |
-| Project templates | ❌ | Template status is not part of v1. Use `--project-number` with a pre-created template project as a workaround. |
-
-### Fields and field values
-
-| Area | Supported? | Notes |
-|---|---:|---|
-| Text fields and values | ✅ | Includes Unicode, emoji and special characters. |
-| Number fields and values | ✅ | Includes decimals, negative values and zero. |
-| Date fields and values | ✅ | |
-| Single-select fields and values | ✅ | Option name, color and description are migrated. |
-| Iteration fields and values | ✅ | Active and completed iterations are migrated. Completed iterations are recreated by using past dates. |
-| Built-in fields such as Title / Assignees / Repository / Labels / Milestone | ✅ for project/view configuration | Built-in fields are not recreated as custom fields. `ghpmv` preserves their use in project views where GitHub exposes them, but Issue/PR metadata values come from the target issues and pull requests (usually migrated by GEI). Draft issue title and draft assignees are handled separately. |
-| Field value history | ❌ | GitHub has no API to write historical field changes. Only current values are migrated. |
-
-### Project items
-
-| Area | Supported? | Notes |
-|---|---:|---|
-| Draft issues | ✅ | Original author and timestamp are added as a note at the top of the body. |
-| Draft issue assignees | ✅ | Use `--user-mapping` when logins differ, especially for EMU targets. Unmapped users are dropped with a warning. |
-| Issues | ✅ | Re-linked through `--repo-mapping`. The target account must be able to see the target repository and item. The target repository is expected to contain the same issue number as the source (the normal GEI outcome). |
-| Pull requests | ✅ | Same repository mapping, visibility and same-number requirements as issues. |
-| Item field values | ✅ | Text, number, date, single-select, iteration and Status values are restored. |
-| Item order | ✅ | Restored for non-archived items in the project-level order exposed by GitHub. |
-| Archived items | ✅ | Archived state is restored after values are applied. Archived item position is not restored because GitHub does not allow moving archived items. |
-| Redacted / inaccessible items | ❌ | If GitHub hides an item from the exporting user, `ghpmv` cannot migrate it. |
-
-### Views (with `--enable-browser-automation`)
-
-Views are migrated through the GitHub Projects web UI because GitHub has no public API to create or update views.
-
-| Area | Supported? | Notes |
-|---|---:|---|
-| Table views | ✅ / best effort | Name, filter, the first sort key, visible-field membership, Slice by and related display options are migrated. Additional sort keys and visible-field order are exported but are not explicitly reproduced by the browser importer. |
-| Board views | ✅ | Column by, Swimlanes and Field sum are tested. |
-| Roadmap views | ✅ | Date fields, zoom level and markers are tested. |
-| View UI-only settings | ✅ | Exported/imported by browser automation where the UI exposes them. |
-| View tab order | ❌ | Views are recreated, but tab drag-and-drop ordering is not reproduced in v1. |
-| Insights charts | ❌ | Out of scope for v1. They require a separate UI automation design. |
-
-### Workflows (with `--enable-browser-automation`)
-
-Workflows are migrated through the GitHub Projects web UI because GitHub has no public API to create or update workflows.
-
-| Area | Supported? | Notes |
-|---|---:|---|
-| Built-in item-state workflows | ✅ | Examples: item closed, pull request merged, item added to project. Status bindings are reapplied after field migration. |
-| Auto-add workflows | ✅ / best effort | Repository and filter settings are migrated. The importer handles up to 20 instances; a lower target-plan limit is surfaced as a browser-import warning when GitHub rejects an additional workflow. |
-| Auto-archive workflows | ✅ / best effort | Supported where the current GitHub UI exposes the filter in a stable way. |
-| Duplicated Auto-add workflows | ✅ | Tested with two Auto-add workflows. |
-| Disabled workflows | ✅ | Saved disabled workflows are migrated by saving once and toggling off when needed. |
-| Unsaved default workflows that have never been configured | ⚠️ | GitHub shows some default workflows in the sidebar before they exist in GraphQL. `ghpmv` can configure or skip them, but they are not part of the GraphQL-only snapshot until saved. |
-
-### Verification and safety features
-
-| Area | Supported? | Notes |
-|---|---:|---|
-| `ghpmv verify` | ✅ | Compares target project against the snapshot. GraphQL View settings are always checked; `--enable-browser-automation` re-reads UI-only View / Workflow settings and explicit collaborators. Supports category statuses, warning exit policy, and JSON reports. |
-| Resume after interruption | ✅ | Item import writes `import-log.json` so reruns do not duplicate already-created items. |
-| Mapping CSV templates | ✅ | `export` writes repository and user mapping templates without overwriting existing files. |
-| Bulk export | ✅ | Omit `--project` to export every project owned by the organization/user into `<out>/<number>/`. |
-| Update check opt-out | ✅ | Use `--no-update-check` or `GHPMV_NO_UPDATE_CHECK`. No telemetry is sent. |
-
-## What you must prepare before migrating
-
-`ghpmv` is a Projects migrator, not a repository or issue migrator. A successful migration usually looks like this:
-
-1. **Move or create the target repositories first.** Use GitHub Enterprise Importer or another migration tool for repository contents, issues, pull requests and their metadata. `ghpmv` assumes the target issues/PRs already exist; for linked issue/PR project items it resolves the target by repository mapping plus the same issue/PR number.
-2. **Generate a snapshot** with `ghpmv export`.
-3. **Fill in `repository-mappings.csv`.** Every issue/PR project item needs a source repository mapped to a target repository visible to the target token. If your repository migration did not preserve issue/PR numbers, `ghpmv` cannot relink those items in v1.
-4. **Fill in `user-mappings.csv` if generated.** This is important for Enterprise Managed Users where target logins usually have a `_shortcode` suffix.
-5. **Use browser automation only when you need Views or Workflows.** Run `ghpmv setup --browsers` and `ghpmv login` first, then pass `--enable-browser-automation` to both export and import.
-
-When source and target repository or user names differ, pass the same `--repo-mapping` and `--user-mapping` files to `ghpmv verify` as well. This lets verification compare imported Issue / Pull Request items, linked repositories, and explicit user collaborators after remapping.
-
-If you do not enable browser automation, `ghpmv` still migrates projects, fields, items, values, ordering, archived state and linked repositories, but **Views and Workflows will not be fully recreated**.
-
-## What ghpmv intentionally does not support
-
-The following are out of scope for this project, either by design or because GitHub does not expose the required write APIs:
-
-| Area | Why not? | Workaround |
-|---|---|---|
-| GitHub Enterprise Server (GHES) | `ghpmv` is designed for GitHub.com and GHEC with data residency. | Use `gh-migrate-project` for GHES scenarios. |
-| Migrating repositories, issues, pull requests or their metadata | This is outside the Projects API. | Use GitHub Enterprise Importer first, then map the resulting repositories. `ghpmv` expects issue/PR numbers to be preserved for project item relinking. |
-| Original author and creation timestamp for draft issues | GitHub always attributes newly-created draft issues to the importing user. | `ghpmv` prepends a note with the original metadata. |
-| Item history / field history | GitHub has no API to recreate historical field changes. | Only the current state is migrated. |
-| Exporting inherited/base-role project access | GitHub's access page separates explicit project collaborators from inherited access (organization owners, base role, enterprise policy, repository/team inheritance). `ghpmv` exports explicit collaborators with browser automation, but not inherited access. | Handle inherited access through GEI and the target organization/team/repository/enterprise policy model. |
-| View tab drag-and-drop order | UI-only and fragile; not part of v1. | Reorder tabs manually if the order matters. |
-| Insights charts | No public API; UI is more complex than Views/Workflows. | Future v2 candidate. |
-| Redacted items | The exporting account cannot see them. | Export with an account that has access to all project content. |
+See [Migration scope and limitations](docs/MIGRATION_SCOPE.md) for the complete support matrix, prerequisites, unsupported areas, and browser automation constraints.
 
 ## Update check
 
@@ -326,38 +225,13 @@ The following are out of scope for this project, either by design or because Git
 
 ## Development docs
 
+- [Migration scope and limitations](docs/MIGRATION_SCOPE.md) contains the detailed support matrix, prerequisites, and platform constraints.
 - [Test strategy](docs/TEST_STRATEGY.md) is a Japanese summary of the automated, browser, CI, packaging and manual release validation layers.
 - [Manual test plan](docs/MANUAL_TEST_PLAN.md) walks through the GEI + `ghpmv` end-to-end migration validation flow.
 
 ## Current limitations
 
-These include both permanent platform limitations and features that are outside the current v1 scope:
-
-- **Original author / creation date of draft issues** cannot be preserved — the API always attributes writes to the token owner. `ghpmv` prepends a note with the original metadata instead.
-- **Project status updates** are not migrated in v1. GitHub exposes APIs for reading and creating them, so this is a future scope item rather than a permanent platform limitation.
-- **Item change history** and past field values cannot be migrated (no write API for history).
-- **Issues / pull requests themselves are not migrated** — that is the job of [GitHub Enterprise Importer](https://docs.github.com/en/migrations/using-github-enterprise-importer). `ghpmv` re-links project items via the repository mapping CSV and expects the target issue/PR number to match the source number.
-- **Issue/PR metadata is not rewritten by `ghpmv`** — labels, milestones, assignees, reviewers, linked PRs, parent/sub-issue relationships, comments and issue/PR history are GEI/repository-migration concerns. Project filters that reference those metadata values are migrated as strings and rely on the target issues/PRs having equivalent metadata.
-- **Project collaborators cannot be exported through the API** — the GraphQL API has no read field for them (write-only via `updateProjectV2Collaborators`). With `--enable-browser-automation`, `ghpmv` exports explicitly listed project collaborators from the web UI and imports them through the API (`collaborators` array: `{ "type": "USER"|"TEAM", "login": "...", "role": "READER"|"WRITER"|"ADMIN" }`). Inherited access (organization owners, base role, policies, repository/team inheritance) is outside `ghpmv`'s scope and should be handled through GEI and the target organization/team/repository/enterprise policy model.
-- **GHES is not supported** (by design).
-- **Redacted items** (items the exporting user cannot see) cannot be exported; their count is reported as a warning.
-
-Browser automation notes:
-
-- The module is **opt-in** (`--enable-browser-automation`) and uses **your own interactive session** stored locally (`%APPDATA%/ghpmv/browser-state*.json`). Nothing is sent anywhere except to GitHub itself.
-- Automating the web UI is not covered by the public API's stability guarantees, and you are responsible for using it in a way consistent with the [GitHub Terms of Service](https://docs.github.com/site-policy/github-terms/github-terms-of-service). `ghpmv` performs low-rate, human-scale, strictly sequential UI operations against your own projects — no scraping of other users' data.
-- UI selectors can break when GitHub updates the Projects UI; recoverable failures are reported as warnings and processing continues. Browser writes are not transactional, so an earlier mutation can remain partially applied when a later step fails; always run browser-assisted `ghpmv verify` afterward.
-- View tab order is not reproduced (views are created in view-number order); a warning is emitted.
-
-### Auto-add workflow limits per plan
-
-The number of Auto-add workflows per project is limited by the target organization's plan. `ghpmv` has a hard maximum of 20 Auto-add workflows; if the target UI enforces a lower plan limit, the rejected workflow is reported as a warning:
-
-| Plan | Auto-add workflows per project |
-|---|---|
-| Free | 1 |
-| Pro / Team | 5 |
-| Enterprise (GHEC) | 20 |
+The most important constraints are that `ghpmv` does not migrate repositories or Issue / PR metadata, GHES is not supported, and UI automation is opt-in and best effort. See [Migration scope and limitations](docs/MIGRATION_SCOPE.md) for full details.
 
 ## License
 
