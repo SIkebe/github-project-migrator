@@ -68,8 +68,6 @@
 
   <path class="flow" d="M420 352 H495"/>
   <path class="flow" d="M935 352 H1010"/>
-  <text class="label" x="445" y="310">input</text>
-  <text class="label" x="955" y="310">first</text>
   <rect x="420" y="447" width="760" height="31" rx="15" fill="#fff1e5" stroke="#fb8f44"/>
   <text class="small" x="442" y="469">Important: ghpmv v1 cannot relink Project items if target Issue / PR numbers change</text>
 
