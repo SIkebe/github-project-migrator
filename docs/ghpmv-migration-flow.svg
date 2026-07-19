@@ -1,0 +1,190 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1900" viewBox="0 0 1600 1900" role="img" aria-labelledby="title desc">
+  <title id="title">Migration flow with ghpmv and GitHub Enterprise Importer</title>
+  <desc id="desc">GitHub Enterprise Importer migrates repositories first. The diagram then explains how the ghpmv setup, login, export, import, and verify commands move GitHub Projects V2.</desc>
+  <defs>
+    <linearGradient id="header" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#24292f"/>
+      <stop offset="1" stop-color="#0969da"/>
+    </linearGradient>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="130%">
+      <feDropShadow dx="0" dy="5" stdDeviation="7" flood-color="#1f2328" flood-opacity=".14"/>
+    </filter>
+    <marker id="arrow-blue" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto">
+      <path d="M0,0 L12,6 L0,12 Z" fill="#0969da"/>
+    </marker>
+    <marker id="arrow-purple" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto">
+      <path d="M0,0 L12,6 L0,12 Z" fill="#8250df"/>
+    </marker>
+    <marker id="arrow-green" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto">
+      <path d="M0,0 L12,6 L0,12 Z" fill="#1a7f37"/>
+    </marker>
+    <style>
+      text { font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif; fill: #1f2328; }
+      .title { font-size: 42px; font-weight: 700; fill: #fff; }
+      .subtitle { font-size: 21px; fill: #dbeafe; }
+      .section { font-size: 25px; font-weight: 700; }
+      .box-title { font-size: 22px; font-weight: 700; }
+      .body { font-size: 17px; }
+      .small { font-size: 15px; }
+      .code { font-family: "Cascadia Mono", "Consolas", monospace; font-size: 16px; font-weight: 700; }
+      .label { font-size: 15px; font-weight: 700; }
+      .card { fill: #fff; stroke: #d0d7de; stroke-width: 2; rx: 16; filter: url(#shadow); }
+      .api { fill: #ddf4ff; stroke: #54aeff; stroke-width: 2; rx: 12; }
+      .ui { fill: #fbefff; stroke: #bf7af0; stroke-width: 2; rx: 12; }
+      .file { fill: #fff8c5; stroke: #d4a72c; stroke-width: 2; rx: 12; }
+      .ok { fill: #dafbe1; stroke: #4ac26b; stroke-width: 2; rx: 12; }
+      .muted { fill: #f6f8fa; stroke: #8c959f; stroke-width: 2; rx: 12; }
+      .flow { fill: none; stroke: #0969da; stroke-width: 4; marker-end: url(#arrow-blue); }
+      .mapping-flow { fill: none; stroke: #0969da; stroke-width: 4; stroke-dasharray: 9 7; marker-end: url(#arrow-blue); }
+      .ui-flow { fill: none; stroke: #8250df; stroke-width: 4; stroke-dasharray: 10 7; marker-end: url(#arrow-purple); }
+      .verify-flow { fill: none; stroke: #1a7f37; stroke-width: 4; marker-end: url(#arrow-green); }
+    </style>
+  </defs>
+
+  <rect width="1600" height="1900" fill="#f6f8fa"/>
+  <rect width="1600" height="160" fill="url(#header)"/>
+  <text class="title" x="70" y="70">How a GitHub Projects migration works</text>
+  <text class="subtitle" x="70" y="112">GitHub Enterprise Importer (GEI) moves the foundation; ghpmv rebuilds and verifies Projects V2</text>
+
+  <rect class="card" x="55" y="195" width="1490" height="300"/>
+  <text class="section" x="85" y="238">1. Overview: a two-stage migration with separate responsibilities</text>
+
+  <rect class="muted" x="90" y="275" width="330" height="155"/>
+  <text class="box-title" x="115" y="312">Source GitHub</text>
+  <text class="body" x="115" y="348">• Repositories</text>
+  <text class="body" x="115" y="378">• Issue / Pull Request</text>
+  <text class="body" x="115" y="408">• Projects V2</text>
+
+  <rect class="api" x="505" y="275" width="430" height="155"/>
+  <text class="box-title" x="530" y="312">GitHub Enterprise Importer</text>
+  <text class="body" x="530" y="348">Migrates repositories and Issue / PR data</text>
+  <text class="body" x="530" y="378">Preserves numbers and metadata where possible</text>
+  <text class="small" x="530" y="408">ghpmv does not migrate repositories</text>
+
+  <rect class="ok" x="1020" y="275" width="440" height="155"/>
+  <text class="box-title" x="1045" y="312">Target GitHub</text>
+  <text class="body" x="1045" y="348">Repositories and Issue / PR data exist first</text>
+  <text class="body" x="1045" y="378">Repository mapping resolves matching numbers</text>
+  <text class="body" x="1045" y="408">ghpmv builds the Project on that foundation</text>
+
+  <path class="flow" d="M420 352 H495"/>
+  <path class="flow" d="M935 352 H1010"/>
+  <rect x="420" y="447" width="760" height="31" rx="15" fill="#fff1e5" stroke="#fb8f44"/>
+  <text class="small" x="442" y="469">Important: ghpmv v1 cannot relink Project items if target Issue / PR numbers change</text>
+
+  <rect class="card" x="55" y="530" width="1490" height="710"/>
+  <text class="section" x="85" y="574">2. Main ghpmv path: export → mapping → import → verify</text>
+
+  <rect class="muted" x="85" y="620" width="265" height="165"/>
+  <text class="box-title" x="110" y="656">Source Project</text>
+  <text class="body" x="110" y="692">Metadata and fields</text>
+  <text class="body" x="110" y="722">Items, values, order, archive</text>
+  <text class="body" x="110" y="752">View / Workflow</text>
+
+  <rect class="api" x="425" y="600" width="330" height="205"/>
+  <text class="code" x="450" y="638">ghpmv export</text>
+  <text class="body" x="450" y="676">Reads through the GraphQL API</text>
+  <text class="body" x="450" y="706">Handles pagination and retries</text>
+  <text class="body" x="450" y="736">Can export all owner Projects</text>
+  <text class="small" x="450" y="772">Browser mode enriches UI-only data</text>
+
+  <path class="flow" d="M350 702 H415"/>
+
+  <rect class="file" x="830" y="600" width="320" height="205"/>
+  <text class="box-title" x="855" y="638">Snapshot</text>
+  <text class="code" x="855" y="672">snapshot.json</text>
+  <text class="body" x="855" y="706">Persisted source Project state</text>
+  <text class="body" x="855" y="736">API data + optional UI data</text>
+  <text class="small" x="855" y="772">Basis for import, resume, and verify</text>
+
+  <path class="flow" d="M755 702 H820"/>
+
+  <rect class="file" x="1225" y="590" width="270" height="225"/>
+  <text class="box-title" x="1250" y="628">Mapping CSV</text>
+  <text class="small" x="1250" y="663">repository-mappings.csv</text>
+  <text class="small" x="1250" y="692">user-mappings.csv</text>
+  <text class="small" x="1250" y="721">organization-mappings.csv</text>
+  <text class="body" x="1250" y="760">Maps names to the target</text>
+  <text class="small" x="1250" y="790">export generates templates</text>
+
+  <path class="flow" d="M1150 702 H1215"/>
+
+  <rect class="api" x="425" y="910" width="330" height="240"/>
+  <text class="code" x="450" y="948">ghpmv import</text>
+  <text class="body" x="450" y="984">1. Creates or updates Project / fields</text>
+  <text class="body" x="450" y="1016">2. Relinks Issue / PR items</text>
+  <text class="body" x="450" y="1048">3. Restores drafts, values, and order</text>
+  <text class="body" x="450" y="1080">4. Applies archived state last</text>
+  <text class="small" x="450" y="1118">Can merge into an existing Project</text>
+
+  <path class="flow" d="M990 805 V850 H575 V895"/>
+  <path class="mapping-flow" d="M1360 815 V875 H705 V895"/>
+
+  <rect class="file" x="85" y="930" width="265" height="190"/>
+  <text class="box-title" x="110" y="968">Resume logs</text>
+  <text class="code" x="110" y="1004">project-import-log.json</text>
+  <text class="code" x="110" y="1036">import-log.json</text>
+  <text class="body" x="110" y="1072">Persists created IDs as it runs</text>
+  <text class="small" x="110" y="1100">Avoids duplicates after interruption</text>
+  <path class="flow" d="M415 1028 H360"/>
+
+  <rect class="ok" x="830" y="910" width="320" height="240"/>
+  <text class="box-title" x="855" y="948">Target Project</text>
+  <text class="body" x="855" y="984">Project structure and fields</text>
+  <text class="body" x="855" y="1016">Issue / PR / Draft item</text>
+  <text class="body" x="855" y="1048">Values, order, archived state</text>
+  <text class="body" x="855" y="1080">Linked repositories</text>
+  <text class="small" x="855" y="1118">UI path also restores Views / Workflows</text>
+  <path class="flow" d="M755 1030 H820"/>
+
+  <rect class="ok" x="1225" y="910" width="270" height="240"/>
+  <text class="code" x="1250" y="948">ghpmv verify</text>
+  <text class="body" x="1250" y="984">Re-exports the target</text>
+  <text class="body" x="1250" y="1016">Maps the source snapshot</text>
+  <text class="body" x="1250" y="1048">Compares by category</text>
+  <text class="small" x="1250" y="1084">Match / Mismatch</text>
+  <text class="small" x="1250" y="1110">PartialMatch / NotVerified</text>
+  <path class="verify-flow" d="M1150 1030 H1215"/>
+
+  <rect class="card" x="55" y="1275" width="1490" height="345"/>
+  <text class="section" x="85" y="1319">3. Browser enrichment: handles Views / Workflows missing from the public API</text>
+
+  <rect class="ui" x="90" y="1360" width="300" height="190"/>
+  <text class="code" x="115" y="1398">ghpmv setup --browsers</text>
+  <text class="body" x="115" y="1436">Installs Playwright Chromium</text>
+  <text class="code" x="115" y="1475">ghpmv login</text>
+  <text class="body" x="115" y="1513">Stores interactive login state locally</text>
+
+  <rect class="ui" x="475" y="1360" width="405" height="190"/>
+  <text class="box-title" x="500" y="1398">export UI read</text>
+  <text class="body" x="500" y="1436">View: layout / slice / swimlane / roadmap</text>
+  <text class="body" x="500" y="1468">Workflow: filter / repo / enabled state</text>
+  <text class="body" x="500" y="1500">Explicit collaborators and roles</text>
+  <text class="small" x="500" y="1530">Enriches snapshot.json with results</text>
+
+  <rect class="ui" x="965" y="1360" width="540" height="190"/>
+  <text class="box-title" x="990" y="1398">import / verify UI replay and readback</text>
+  <text class="body" x="990" y="1436">import: recreates settings through the Projects UI</text>
+  <text class="body" x="990" y="1468">verify: reads UI-only settings back for comparison</text>
+  <text class="body" x="990" y="1500">Checks API token and browser login identity</text>
+  <text class="small" x="990" y="1530">Only with explicit --enable-browser-automation</text>
+
+  <path class="ui-flow" d="M390 1455 H465"/>
+  <path class="ui-flow" d="M880 1455 H955"/>
+
+  <rect class="card" x="55" y="1655" width="1490" height="190"/>
+  <text class="section" x="85" y="1699">4. Key subcommands</text>
+  <text class="code" x="90" y="1744">setup</text>
+  <text class="small" x="90" y="1772">Installs browser prerequisites</text>
+  <text class="code" x="345" y="1744">login</text>
+  <text class="small" x="345" y="1772">Stores UI authentication</text>
+  <text class="code" x="600" y="1744">export</text>
+  <text class="small" x="600" y="1772">Serializes state to JSON</text>
+  <text class="code" x="855" y="1744">import</text>
+  <text class="small" x="855" y="1772">Maps and rebuilds state</text>
+  <text class="code" x="1110" y="1744">verify</text>
+  <text class="small" x="1110" y="1772">Reads back and compares</text>
+  <text class="small" x="90" y="1815">Solid blue = GraphQL API / file path | Dashed blue = mapping input | Dashed purple = browser UI | Green = verification</text>
+
+  <text class="small" x="800" y="1878" text-anchor="middle" fill="#57606a">ghpmv migrates Projects V2 configuration and membership. GEI or another tool migrates repositories, Issues, and Pull Requests.</text>
+</svg>
