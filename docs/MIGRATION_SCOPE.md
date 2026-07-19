@@ -76,7 +76,7 @@ Workflows require `--enable-browser-automation` because GitHub has no public API
 |---|---:|---|
 | `ghpmv verify` | ✅ | Compares the target project against the snapshot. GraphQL View settings are always checked; `--enable-browser-automation` re-reads UI-only View / Workflow settings and explicit collaborators. Supports category statuses, warning exit policy, and JSON reports. |
 | Resume after interruption | ✅ | Item import writes `import-log.json` so reruns do not duplicate already-created items. |
-| Mapping CSV templates | ✅ | `export` writes repository and user mapping templates without overwriting existing files. |
+| Mapping CSV templates | ✅ | `export` writes repository, organization, and user mapping templates without overwriting existing files. |
 | Bulk export | ✅ | Omit `--project` to export every project owned by the organization/user into `<out>/<number>/`. |
 | Update check opt-out | ✅ | Use `--no-update-check` or `GHPMV_NO_UPDATE_CHECK`. No telemetry is sent. |
 
@@ -85,8 +85,9 @@ Workflows require `--enable-browser-automation` because GitHub has no public API
 1. **Move or create the target repositories first.** Use GitHub Enterprise Importer or another migration tool for repository contents, issues, pull requests, and their metadata. `ghpmv` resolves linked items by repository mapping plus the same issue or pull request number.
 2. **Generate a snapshot** with `ghpmv export`.
 3. **Fill in `repository-mappings.csv`.** Every Issue / PR Project item needs a source repository mapped to a target repository visible to the target token.
-4. **Fill in `user-mappings.csv` if generated.** This is important for Enterprise Managed Users, where target logins usually have a `_shortcode` suffix.
-5. **Enable browser automation only when needed.** Run `ghpmv setup --browsers` and `ghpmv login`, then pass `--enable-browser-automation` to export, import, and verify when Views or Workflows must be fully migrated and checked.
+4. **Fill in `organization-mappings.csv`.** Browser-assisted import requires every `org:` filter value to resolve before it writes the Project. Organization mappings can be inferred from repository owners when the repository mappings make the result unambiguous.
+5. **Fill in `user-mappings.csv` if generated.** This is important for Enterprise Managed Users, where target logins usually have a `_shortcode` suffix.
+6. **Enable browser automation only when needed.** Run `ghpmv setup --browsers` and `ghpmv login`, then pass `--enable-browser-automation` to export, import, and verify when Views or Workflows must be fully migrated and checked.
 
 Pass the same repository, user, and organization mappings to `ghpmv verify`. If browser automation is disabled, `ghpmv` still migrates projects, fields, items, values, ordering, archived state, and linked repositories, but Views and Workflows are not fully recreated.
 
@@ -107,7 +108,7 @@ Pass the same repository, user, and organization mappings to `ghpmv verify`. If 
 ## Browser automation limitations
 
 - The module is opt-in and uses your own interactive session stored locally in `%APPDATA%/ghpmv/browser-state*.json`. Nothing is sent anywhere except to GitHub itself.
-- Automating the web UI is not covered by the public API's stability guarantees. `ghpmv` performs low-rate, human-scale, sequential UI operations against your own projects.
+- Automating the web UI is not covered by the public API's stability guarantees. You are responsible for using it consistently with the [GitHub Terms of Service](https://docs.github.com/site-policy/github-terms/github-terms-of-service); `ghpmv` performs low-rate, human-scale, sequential operations against your own Projects and does not scrape other users' data.
 - UI selectors can break when GitHub updates the Projects UI. Recoverable failures are warnings, and browser writes are not transactional. Always run browser-assisted `ghpmv verify` afterward.
 - View tab order is not reproduced.
 
