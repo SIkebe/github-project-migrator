@@ -118,8 +118,8 @@
   <text class="body" x="450" y="1080">4. Applies archived state last</text>
   <text class="small" x="450" y="1118">Can merge into an existing Project</text>
 
-  <path class="flow" d="M990 805 V840 H575 V895"/>
-  <path class="flow" d="M1360 815 V880 H705 V895"/>
+  <path class="flow" d="M990 805 V850 H575 V895"/>
+  <path class="flow" d="M1360 815 V870 H790 V970 H765"/>
 
   <rect class="file" x="85" y="930" width="265" height="190"/>
   <text class="box-title" x="110" y="968">Resume logs</text>
