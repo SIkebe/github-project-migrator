@@ -35,6 +35,7 @@
       .ok { fill: #dafbe1; stroke: #4ac26b; stroke-width: 2; rx: 12; }
       .muted { fill: #f6f8fa; stroke: #8c959f; stroke-width: 2; rx: 12; }
       .flow { fill: none; stroke: #0969da; stroke-width: 4; marker-end: url(#arrow-blue); }
+      .mapping-flow { fill: none; stroke: #0969da; stroke-width: 4; stroke-dasharray: 9 7; marker-end: url(#arrow-blue); }
       .ui-flow { fill: none; stroke: #8250df; stroke-width: 4; stroke-dasharray: 10 7; marker-end: url(#arrow-purple); }
       .verify-flow { fill: none; stroke: #1a7f37; stroke-width: 4; marker-end: url(#arrow-green); }
     </style>
@@ -117,7 +118,7 @@
   <text class="small" x="450" y="1118">Can merge into an existing Project</text>
 
   <path class="flow" d="M990 805 V850 H575 V895"/>
-  <path class="flow" d="M1360 815 V870 H790 V970 H765"/>
+  <path class="mapping-flow" d="M1360 815 V875 H705 V895"/>
 
   <rect class="file" x="85" y="930" width="265" height="190"/>
   <text class="box-title" x="110" y="968">Resume logs</text>
@@ -183,7 +184,7 @@
   <text class="small" x="855" y="1772">Maps and rebuilds state</text>
   <text class="code" x="1110" y="1744">verify</text>
   <text class="small" x="1110" y="1772">Reads back and compares</text>
-  <text class="small" x="90" y="1815">Solid blue = GraphQL API / file path | Dashed purple = opt-in browser UI path | Green = verification path</text>
+  <text class="small" x="90" y="1815">Solid blue = GraphQL API / file path | Dashed blue = mapping input | Dashed purple = browser UI | Green = verification</text>
 
   <text class="small" x="800" y="1878" text-anchor="middle" fill="#57606a">ghpmv migrates Projects V2 configuration and membership. GEI or another tool migrates repositories, Issues, and Pull Requests.</text>
 </svg>
