@@ -49,11 +49,11 @@ M6/M7 は実装済みで、現行コードは `src/Ghpmv.Core/Browser/`、実 UI
 ユーザープロジェクト {base}/users/{user}/projects/{number}
 特定 View        {base}/orgs/{org}/projects/{number}/views/{viewNumber}
 Workflows 一覧    {base}/orgs/{org}/projects/{number}/workflows
-特定 Workflow     {base}/orgs/{org}/projects/{number}/workflows/{workflowNumber}
+特定 Workflow     {base}/orgs/{org}/projects/{number}/workflows/{uiWorkflowId}
 設定             {base}/orgs/{org}/projects/{number}/settings
 ```
 
-- `viewNumber` / `workflowNumber` は GraphQL の `ProjectV2View.number` / `ProjectV2Workflow.number` と一致する。**UI 内でタブを探し回らず、GraphQL で number を取得して URL 直接遷移すること**(タブ数が多い場合 UI 上は省略されるため)。
+- `viewNumber` は GraphQL の `ProjectV2View.number` と一致する。Workflow の URL ID は GraphQL の `ProjectV2Workflow.number` とは独立しているため、Workflow はサイドバーの accessible name で開く。
 
 ### 1.2 認証
 
@@ -216,8 +216,8 @@ Workflow filter で確認済みの qualifier は `is:` `label:` `reason:` `updat
 GraphQL で `workflows { name number enabled }` を取得後、**enabled かどうかに関わらず全件**について:
 
 ```
-ReadWorkflow(number):
- 1. {project}/workflows/{number} へ goto
+ReadWorkflow(name):
+ 1. {project}/workflows へ goto し、サイドバーの name 一致 link を開く
  2. 閲覧モードのまま本文の AriaSnapshot を取得し、以下をパース:
     - "When" 節: 対象種別チェック状態(issue / pull request)
     - "Set" / "Filters" 節: Status 値、フィルター文字列、対象リポジトリ名

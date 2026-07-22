@@ -7,9 +7,9 @@ namespace Ghpmv.Core.Browser;
 /// <summary>
 /// UI export of workflow settings that GraphQL does not expose (B6). Each snapshot
 /// workflow is opened through the sidebar "Default workflows" link (link names match
-/// the GraphQL <c>name</c>; unsaved workflow URLs are volatile GUIDs so links are the
-/// only safe navigation). The viewing mode exposes every setting (M7 discovery):
-/// the enable toggle (<c>aria-pressed</c>), "When ... : &lt;value&gt;" buttons
+/// the GraphQL <c>name</c>; UI workflow URL identifiers are independent of the GraphQL
+/// workflow number). The viewing mode exposes every setting (M7 discovery):
+/// "When ... : &lt;value&gt;" buttons
 /// (content types / Auto-close status / Auto-add repository) and the disabled
 /// "Filters" textbox. Results are stored in <see cref="WorkflowSnapshot.Ui"/>;
 /// unreadable workflows keep <c>Ui = null</c> and add a warning.
@@ -81,8 +81,8 @@ public sealed class WorkflowUiExporter
             WorkflowUiSnapshot? ui = null;
             try
             {
-                await OpenWorkflowAsync(page, workflow.Name, workflow.Number, cancellationToken).ConfigureAwait(false);
-                var state = await ReadCurrentWorkflowAsync(page, workflow.Name).ConfigureAwait(false);
+                await OpenWorkflowAsync(page, workflow.Name, cancellationToken).ConfigureAwait(false);
+                var state = await ReadCurrentWorkflowAsync(page, workflow.Name, workflow.Enabled).ConfigureAwait(false);
                 ui = new WorkflowUiSnapshot
                 {
                     ContentTypes = state.ContentTypes,
@@ -111,33 +111,26 @@ public sealed class WorkflowUiExporter
         await Task.Delay(300, cancellationToken).ConfigureAwait(false);
     }
 
-    /// <summary>Navigates to the saved workflow identified by its GraphQL number.</summary>
-    internal static async Task OpenWorkflowAsync(
-        IPage page,
-        string name,
-        int number,
-        CancellationToken cancellationToken)
-    {
-        await Sel.WorkflowLink(page, number).ClickAsync().ConfigureAwait(false);
-        await Sel.WorkflowHeading(page, name).First.WaitForAsync().ConfigureAwait(false);
-        await Task.Delay(300, cancellationToken).ConfigureAwait(false);
-    }
-
     /// <summary>
     /// Reads the settings of the currently displayed workflow (viewing mode).
     /// Shared by the exporter and the importer's diff step.
     /// </summary>
-    internal static async Task<WorkflowUiState> ReadCurrentWorkflowAsync(IPage page, string name)
+    internal static async Task<WorkflowUiState> ReadCurrentWorkflowAsync(
+        IPage page,
+        string name,
+        bool? knownEnabled = null)
     {
         // Unsaved workflows (GUID URL, M7 discovery) render no enable toggle at all
         // (E2E discovery, 2026-07-06) — waiting for it would only time out.
         var isSaved = IsSavedWorkflowUrl(page.Url);
-        var enabled = false;
-        if (isSaved)
+        var enabled = knownEnabled ?? false;
+        if (knownEnabled is null && isSaved)
         {
             var toggle = Sel.WorkflowToggle(page, name).First;
-            enabled = string.Equals(
-                await toggle.GetAttributeAsync("aria-pressed").ConfigureAwait(false), "true", StringComparison.Ordinal);
+            await toggle.WaitForAsync().ConfigureAwait(false);
+            enabled = ParseToggleState(
+                await toggle.GetAttributeAsync("aria-pressed").ConfigureAwait(false),
+                await toggle.GetAttributeAsync("aria-checked").ConfigureAwait(false));
         }
 
         string? repository = null;
@@ -260,6 +253,11 @@ public sealed class WorkflowUiExporter
         ArgumentException.ThrowIfNullOrWhiteSpace(contentType);
         return contentType.Replace('_', ' ').ToLowerInvariant();
     }
+
+    /// <summary>Reads the state exposed by button-style or switch/checkbox-style workflow toggles.</summary>
+    public static bool ParseToggleState(string? ariaPressed, string? ariaChecked)
+        => string.Equals(ariaPressed, "true", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(ariaChecked, "true", StringComparison.OrdinalIgnoreCase);
 }
 
 /// <summary>Settings of a workflow as currently displayed in the UI (M7).</summary>

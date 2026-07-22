@@ -199,11 +199,7 @@ public sealed class WorkflowUiImporter
             "workflows");
         await _session.GotoAsync(url, cancellationToken).ConfigureAwait(false);
         await Sel.WorkflowsSidebar(page).WaitForAsync().ConfigureAwait(false);
-        await WorkflowUiExporter.OpenWorkflowAsync(
-            page,
-            workflow.Name,
-            workflow.Number,
-            cancellationToken).ConfigureAwait(false);
+        await WorkflowUiExporter.OpenWorkflowAsync(page, workflow.Name, cancellationToken).ConfigureAwait(false);
 
         if (await Sel.SaveWorkflowButton(page).CountAsync().ConfigureAwait(false) == 0)
         {
@@ -277,7 +273,9 @@ public sealed class WorkflowUiImporter
                 return;
             }
 
-            if (string.Equals(await toggle.GetAttributeAsync("aria-pressed").ConfigureAwait(false), "true", StringComparison.Ordinal))
+            if (WorkflowUiExporter.ParseToggleState(
+                    await toggle.GetAttributeAsync("aria-pressed").ConfigureAwait(false),
+                    await toggle.GetAttributeAsync("aria-checked").ConfigureAwait(false)))
             {
                 await ToggleAsync(page, workflow.Name, cancellationToken).ConfigureAwait(false);
             }
