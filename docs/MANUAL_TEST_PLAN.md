@@ -145,8 +145,8 @@ gh extension upgrade github/gh-gei
 
 | 変数 | 用途 |
 |---|---|
-| `GHPMV_SOURCE_TOKEN` | `ghpmv export` と GEI source 用。 |
-| `GHPMV_TARGET_TOKEN` | `ghpmv import` / `ghpmv verify` と GEI target 用。 |
+| `GHPMV_SOURCE_TOKEN` | source fixture 作成、`ghpmv export`、GEI source に使う手動テスト用 token。4.3 の広い fixture 権限を含む。 |
+| `GHPMV_TARGET_TOKEN` | target fixture 作成、`ghpmv import` / `ghpmv verify`、GEI target に使う手動テスト用 token。target fixture を作る場合は 4.3 の広い権限を含む。 |
 | `GHPMV_TEST_TOKEN` | 既存 integration / browser E2E tests を手動で回す場合。 |
 | `GHPMV_TEST_ORG` | integration / browser E2E tests の source organization login。未指定時は `GHPMV_SOURCE_ORG`、それも無ければ `gpm-source`。CI repo variable でも指定。 |
 | `GHPMV_TEST_TARGET_ORG` | integration tests の target organization login。未指定時は `GHPMV_TARGET_ORG`、それも無ければ `gpm-target`。CI repo variable でも指定。 |
@@ -168,9 +168,19 @@ Get-Content .env | Where-Object { $_ -and $_ -notmatch '^\s*#' } | ForEach-Objec
 }
 ```
 
-### 4.3 Token / SSO チェック
+<a id="fixture-token-permissions"></a>
 
-通常の `export` / `import` / `verify` では、README の [Token permissions](../README.md#token-permissions) に従って classic PAT または fine-grained PAT を使用できます。source と target の resource owner が異なる場合、fine-grained PAT はそれぞれ別に用意します。
+### 4.3 移行用 token と fixture 作成用 token を分ける
+
+この手動テストでは、通常の Project 移行より広い権限で demo repository / Issue / pull request / Project を作成します。通常の利用者が既存 Project を移行するだけなら、fixture 作成用権限は不要です。
+
+| 用途 | コマンド | 権限 |
+|---|---|---|
+| 通常の Project 移行 | `export` / `import` / `verify` | README の [Token permissions](../README.md#token-permissions) にある command 別の最小権限。 |
+| API-backed test fixture 作成 | `setup --fixture` | 下記の classic PAT、または事前作成 repository に限定した fine-grained PAT。 |
+| UI-only fixture 作成 | `setup --fixture-ui` | Project API を読める token と、同じユーザーで保存した browser profile。 |
+
+source と target の resource owner またはアカウントが異なる場合、token と browser profile はそれぞれ別に用意します。
 
 `setup --fixture` の完全自動パスは private organization repository を新規作成するため、通常の migration command より広い権限が必要です。GitHub REST API の [Create an organization repository](https://docs.github.com/en/rest/repos/repos#create-an-organization-repository) は classic PAT の scope を案内しており、fine-grained PAT 対応 endpoint としては記載されていません。このテストプランでは source / target fixture setup に次の classic PAT scope を使用します。
 
@@ -178,7 +188,7 @@ Get-Content .env | Where-Object { $_ -and $_ -notmatch '^\s*#' } | ForEach-Objec
 - `project`
 - `read:org`
 
-`read:org` がない場合、fixture Project の存在確認で Organization ID を取得する GraphQL query が `INSUFFICIENT_SCOPES` になります。fine-grained PAT を維持する場合は空の organization repository を Web UI などで先に作成し、その repository の Contents / Issues / Pull requests と Organization Projects への必要な write 権限を付与してください。
+`read:org` がない場合、fixture Project の存在確認で Organization ID を取得する GraphQL query が `INSUFFICIENT_SCOPES` になります。fine-grained PAT を維持する場合は空の organization repository を Web UI などで先に作成し、その repository に **Contents: Read and write**、**Issues: Read and write**、**Pull requests: Read and write**、所有 Organization/account に **Projects: Read and write** を付与してください。
 
 `gh auth login` / `gh auth refresh` を使う場合も、Project 操作に必要な scope を含めます。
 

@@ -82,12 +82,13 @@ Workflows require `--enable-browser-automation` because GitHub has no public API
 
 ## Migration prerequisites
 
-1. **Move or create the target repositories first.** Use GitHub Enterprise Importer or another migration tool for repository contents, issues, pull requests, and their metadata. `ghpmv` resolves linked items by repository mapping plus the same issue or pull request number.
-2. **Generate a snapshot** with `ghpmv export`.
-3. **Fill in `repository-mappings.csv`.** Every Issue / PR Project item needs a source repository mapped to a target repository visible to the target token.
-4. **Fill in `organization-mappings.csv`.** Browser-assisted import requires every `org:` filter value to resolve before it writes the Project. Organization mappings can be inferred from repository owners when the repository mappings make the result unambiguous.
-5. **Fill in `user-mappings.csv` if generated.** This is important for Enterprise Managed Users, where target logins usually have a `_shortcode` suffix.
-6. **Enable browser automation only when needed.** Run `ghpmv setup --browsers` and `ghpmv login`, then pass `--enable-browser-automation` to export, import, and verify when Views or Workflows must be fully migrated and checked.
+1. **Prepare migration tokens.** Follow the command-specific [Token permissions](../README.md#token-permissions). `ghpmv setup --fixture` and its broader test-fixture permissions are not required to migrate an existing Project.
+2. **Move or create the target repositories first.** Use GitHub Enterprise Importer or another migration tool for repository contents, issues, pull requests, and their metadata. `ghpmv` resolves linked items by repository mapping plus the same issue or pull request number.
+3. **Generate a snapshot** with `ghpmv export`.
+4. **Fill in `repository-mappings.csv`.** Every Issue / PR Project item needs a source repository mapped to a target repository visible to the target token.
+5. **Fill in `organization-mappings.csv`.** Browser-assisted import requires every `org:` filter value to resolve before it writes the Project. Organization mappings can be inferred from repository owners when the repository mappings make the result unambiguous.
+6. **Fill in `user-mappings.csv` if generated.** This is important for Enterprise Managed Users, where target logins usually have a `_shortcode` suffix.
+7. **Enable browser automation only when needed.** Run `ghpmv setup --browsers` and `ghpmv login`, then pass `--enable-browser-automation` to export, import, and verify when Views or Workflows must be fully migrated and checked.
 
 Pass the same repository, user, and organization mappings to `ghpmv verify`. If browser automation is disabled, `ghpmv` still migrates projects, fields, items, values, ordering, archived state, and linked repositories, but Views and Workflows are not fully recreated.
 

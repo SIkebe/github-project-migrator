@@ -55,6 +55,8 @@ dotnet artifacts/fdd/ghpmv.dll --version
 
 実 API / browser E2E は、開発環境や fork PR で壊れないように、必要な secret や browser state が未設定なら skip します。
 
+ここで扱う `GHPMV_TEST_*` はメンテナー向けの共有 fixture テスト用です。通常の利用者が Project を移行する際の token 権限ではありません。移行用の最小権限は README の [Token permissions](../README.md#token-permissions)、fixture を新規作成する権限は [MANUAL_TEST_PLAN.md の 4.3](MANUAL_TEST_PLAN.md#fixture-token-permissions) を参照してください。
+
 | 変数 | 使用箇所 | 意味 |
 |---|---|---|
 | `GHPMV_TEST_TOKEN` | 統合テスト、browser E2E | fixture org に対して SSO authorization 済みの token。 |
