@@ -177,20 +177,27 @@ Get-Content .env | Where-Object { $_ -and $_ -notmatch '^\s*#' } | ForEach-Objec
 | 用途 | コマンド | 権限 |
 |---|---|---|
 | 通常の Project 移行 | `export` / `import` / `verify` | README の [Token permissions](../README.md#token-permissions) にある command 別の最小権限。 |
-| API-backed test fixture 作成 | `setup --fixture` | 下記の classic PAT、または事前作成 repository に限定した fine-grained PAT。 |
+| API-backed test fixture 作成 | `setup --fixture` | 下記の fine-grained PAT、または classic PAT。 |
 | UI-only fixture 作成 | `setup --fixture-ui` | Project API を読める token と、同じユーザーで保存した browser profile。 |
 | GEI source | `gh gei migrate-repo --github-source-pat` | 下記の GEI source role / classic PAT scope。 |
 | GEI destination | `gh gei migrate-repo --github-target-pat` | 下記の GEI destination role / classic PAT scope。 |
 
 source と target の resource owner またはアカウントが異なる場合、token と browser profile はそれぞれ別に用意します。
 
-`setup --fixture` の完全自動パスは private organization repository を新規作成するため、通常の migration command より広い権限が必要です。GitHub REST API の [Create an organization repository](https://docs.github.com/en/rest/repos/repos#create-an-organization-repository) は classic PAT の scope を案内しており、fine-grained PAT 対応 endpoint としては記載されていません。このテストプランでは source / target fixture setup に次の classic PAT scope を使用します。
+`setup --fixture` の完全自動パスは private organization repository を新規作成するため、通常の migration command より広い権限が必要です。GitHub の [fine-grained PAT permission matrix](https://docs.github.com/en/rest/authentication/permissions-required-for-fine-grained-personal-access-tokens#repository-permissions-for-administration) では `POST /orgs/{org}/repos` に Repository **Administration: write** が必要です。fine-grained PAT では resource owner に対象 organization を選び、次を付与します。
+
+- Repository access: **All repositories**
+- Repository permissions: **Administration: Read and write**、**Contents: Read and write**、**Issues: Read and write**、**Pull requests: Read and write**
+- Organization permissions: **Projects: Read and write**
+- Organization が要求する token approval
+
+**Administration** または **All repositories** を付与できない場合は、空 repository を先に作成し、その repository を選択した fine-grained PAT に Administration 以外の fixture 権限を付与します。classic PAT を使う場合は次の scope を使用します。
 
 - `repo`
 - `project`
 - `read:org`
 
-`read:org` がない場合、fixture Project の存在確認で Organization ID を取得する GraphQL query が `INSUFFICIENT_SCOPES` になります。fine-grained PAT を維持する場合は空の organization repository を Web UI などで先に作成し、その repository に **Contents: Read and write**、**Issues: Read and write**、**Pull requests: Read and write**、所有 Organization/account に **Projects: Read and write** を付与してください。
+classic PAT に `read:org` がない場合、fixture Project の存在確認で Organization ID を取得する GraphQL query が `INSUFFICIENT_SCOPES` になります。
 
 GEI repository migration は fixture setup と別の権限体系です。GitHub の [Managing access for a migration between GitHub products](https://docs.github.com/en/migrations/using-github-enterprise-importer/migrating-between-github-products/managing-access-for-a-migration-between-github-products#required-scopes-for-personal-access-tokens) に従い、fine-grained PAT ではなく classic PAT を使います。
 
@@ -522,7 +529,7 @@ warning / error が出た場合は、次の観点で切り分けます。
 | `saml_failure` | PAT の organization SSO authorization 漏れ | GitHub settings で token / GitHub CLI を Authorize。 |
 | Browser session expired | `ghpmv login --profile ...` 未実施または期限切れ | source / target profile で再ログイン。 |
 | `The browser session is not signed in to 'github.com'` | 保存済み target browser session の失効、または profile 間違い | `ghpmv login --profile target` を再実行し、target token と同じユーザーでログイン。 |
-| `Resource not accessible by personal access token` (`setup --fixture`) | fine-grained PAT で organization repository 作成を試行 | 4.3 の classic PAT を使用するか、空 repository を先に作成。 |
+| `Resource not accessible by personal access token` (`setup --fixture`) | fine-grained PAT の **Administration: Read and write**、**All repositories**、または organization approval が不足 | 4.3 の permission と approval を確認。付与できない場合は空 repository を先に作成するか、classic PAT を使用。 |
 | `INSUFFICIENT_SCOPES` と `id` / `read:org` | fixture setup 用 classic PAT に `read:org` がない | token に `read:org` を追加し、必要なら SSO を再承認。 |
 | Workflow 保存失敗 | target plan の Auto-add 上限、target repo 不可視、filter 不正 | warning 内容と UI を確認。 |
 | Collaborator skip | target user / team が存在しない、権限不足 | mapping と target org membership を確認。 |
