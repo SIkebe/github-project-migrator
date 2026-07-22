@@ -128,9 +128,7 @@ public sealed class WorkflowUiExporter
         {
             var toggle = Sel.WorkflowToggle(page, name).First;
             await toggle.WaitForAsync().ConfigureAwait(false);
-            enabled = ParseToggleState(
-                await toggle.GetAttributeAsync("aria-pressed").ConfigureAwait(false),
-                await toggle.GetAttributeAsync("aria-checked").ConfigureAwait(false));
+            enabled = await ReadToggleStateAsync(toggle).ConfigureAwait(false);
         }
 
         string? repository = null;
@@ -258,6 +256,18 @@ public sealed class WorkflowUiExporter
     public static bool ParseToggleState(string? ariaPressed, string? ariaChecked)
         => string.Equals(ariaPressed, "true", StringComparison.OrdinalIgnoreCase)
             || string.Equals(ariaChecked, "true", StringComparison.OrdinalIgnoreCase);
+
+    internal static async Task<bool> ReadToggleStateAsync(ILocator toggle)
+    {
+        var ariaPressed = await toggle.GetAttributeAsync("aria-pressed").ConfigureAwait(false);
+        var ariaChecked = await toggle.GetAttributeAsync("aria-checked").ConfigureAwait(false);
+        if (ariaPressed is not null || ariaChecked is not null)
+        {
+            return ParseToggleState(ariaPressed, ariaChecked);
+        }
+
+        return await toggle.IsCheckedAsync().ConfigureAwait(false);
+    }
 }
 
 /// <summary>Settings of a workflow as currently displayed in the UI (M7).</summary>

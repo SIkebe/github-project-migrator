@@ -273,9 +273,7 @@ public sealed class WorkflowUiImporter
                 return;
             }
 
-            if (WorkflowUiExporter.ParseToggleState(
-                    await toggle.GetAttributeAsync("aria-pressed").ConfigureAwait(false),
-                    await toggle.GetAttributeAsync("aria-checked").ConfigureAwait(false)))
+            if (await WorkflowUiExporter.ReadToggleStateAsync(toggle).ConfigureAwait(false))
             {
                 await ToggleAsync(page, workflow.Name, cancellationToken).ConfigureAwait(false);
             }

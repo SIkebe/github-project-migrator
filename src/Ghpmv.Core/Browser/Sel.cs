@@ -137,11 +137,17 @@ internal static class Sel
     public static ILocator WorkflowHeading(IPage page, string name)
         => page.GetByRole(AriaRole.Heading, new() { Name = name, Exact = true, Level = 2 });
 
-    /// <summary>Enable/disable control; GitHub has rendered it as a button, switch, or checkbox.</summary>
+    /// <summary>
+    /// Enable/disable control. The accessible name is not stable, so fall back to the
+    /// single stateful control in the workflow detail pane.
+    /// </summary>
     public static ILocator WorkflowToggle(IPage page, string name)
         => page.GetByRole(AriaRole.Button, new() { Name = name, Exact = true })
             .Or(page.GetByRole(AriaRole.Switch, new() { Name = name, Exact = true }))
-            .Or(page.GetByRole(AriaRole.Checkbox, new() { Name = name, Exact = true }));
+            .Or(page.GetByRole(AriaRole.Checkbox, new() { Name = name, Exact = true }))
+            .Or(page.GetByRole(AriaRole.Main).Locator(
+                "button[aria-pressed]:visible, [role='switch'][aria-checked]:visible, " +
+                "[role='checkbox'][aria-checked]:visible, input[type='checkbox']:visible"));
 
     /// <summary>"Edit" button (view mode). Exact match — "Edit workflow name" also starts with "Edit".</summary>
     public static ILocator EditWorkflowButton(IPage page)

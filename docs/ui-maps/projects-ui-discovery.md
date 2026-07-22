@@ -86,7 +86,7 @@ Important limitations:
 3. **UI のリスト値は散文形式**: "A and B" / "A, B, and C"(カンマ区切りとは限らない)→ ParseListValue は `,` と `" and "` の両方で分割する
 4. **Fields オーバーレイのエントリーは `option` ロール + aria-checked**(Field sum / Markers の `menuitemcheckbox` とは異なる)→ チェックボックス走査は両ロール対応が必要(ToggleCheckboxesAsync 対応済み)
 5. **Markers オーバーレイには表示オプションが混在**: Truncate titles / Show date fields(表示設定)+ Milestone / date・iteration フィールド名(マーカー)。menuitem テキスト "Markers: <値>" にはマーカーだけが出る
-6. **未保存 workflow のページには enable toggle が存在しない**(URL は GUID)。保存済み workflow の URL は数値 ID だが、この ID は GraphQL workflow number とは独立している。export は GraphQL の enabled 値を使い、詳細ページはサイドバーの name 一致 link で開く
+6. **未保存 workflow のページには enable toggle が存在しない**(URL は GUID)。保存済み workflow の URL は数値 ID だが、この ID は GraphQL workflow number とは独立している。export は GraphQL の enabled 値を使い、詳細ページはサイドバーの name 一致 link で開く。toggle の accessible name も workflow 名とは限らないため、import は main detail pane 内の stateful control (`aria-pressed` / `aria-checked` / checkbox) へ fallback する
 7. **未保存 disabled workflow は Edit → "Save and turn on workflow"(設定変更なしでも押せる)→ トグル off で「保存済み disabled」にできる**。保存済み disabled workflow は GraphQL の `workflows` に enabled=false で現れ、閲覧モードで設定値も読める(export 可能)。import は未保存の場合にこの save-once 経路を通す(WorkflowUiImporter.ApplyDisabledAsync)
 8. **ソートキーのフィールドは仮想列として表示される**: Fields オーバーレイで aria-checked=true になるが GraphQL `visibleFields` には永続化されない(uncheck→再 check でも変わらない)。import 側は desired 集合にソート列を含めて誤 uncheck を防止する
 9. **Duplicate 直後の workflow は編集モードで開く**("Edit" ボタンが無い)→ import は Save ボタンの有無で編集モードを判定してから Edit をクリックする
