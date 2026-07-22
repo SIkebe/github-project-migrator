@@ -111,12 +111,15 @@ mode ごとに必要な token だけを準備する。
 
 **既存 Project の export / import / verify だけを行うユーザーに、fixture 作成用の権限を要求してはならない。** `setup --fixture` を実行するデモ経路をユーザーが選んだ場合だけ、次の広い権限を案内する。
 
-`setup --fixture` で organization repository も自動作成する場合は、source / target それぞれに classic PAT を使う。
+`setup --fixture` で organization repository も自動作成する場合は、source / target それぞれに次の fine-grained PAT permission を案内する。
 
-- `repo`
-- `project`
-- `read:org`
-- Organization が要求する場合は SSO authorization
+- Resource owner: 対象 organization
+- Repository access: **All repositories**
+- Repository permissions: **Administration: Read and write**、**Contents: Read and write**、**Issues: Read and write**、**Pull requests: Read and write**
+- Organization permissions: **Projects: Read and write**
+- Organization が要求する token approval
+
+classic PAT を使う場合は `repo`, `project`, `read:org` と、必要な SSO authorization を案内する。
 
 `read-only`:
 
@@ -131,7 +134,7 @@ $env:SOURCE_TOKEN = Read-Host "Source PAT" -MaskInput
 $env:TARGET_TOKEN = Read-Host "Target PAT" -MaskInput
 ```
 
-Fine-grained PAT を使い続ける場合、空 repository を Web UI などで先に作成し、その repository の Contents / Issues / Pull requests と Organization Projects への必要な write 権限を付ける。Fine-grained PAT に Administration permission を追加するだけで organization repository の自動作成が成功すると案内してはならない。
+fine-grained PAT の **Administration** または **All repositories** を付与できない場合だけ、空 repository を先に作成し、その repository を選択した token に Administration 以外の fixture 権限を付ける。
 
 ## Step 5: Source fixture
 
@@ -325,7 +328,7 @@ dotnet run --project src\Ghpmv.Cli -c Release --no-build -- verify `
 
 | エラー / 症状 | 対応 |
 |---|---|
-| `Resource not accessible by personal access token` during `setup --fixture` | classic PAT (`repo`, `project`, `read:org`) を使うか、repository を先に作成する。 |
+| `Resource not accessible by personal access token` during `setup --fixture` | fine-grained PAT の **Administration: Read and write**、**All repositories**、organization approval を確認する。付与できない場合は repository を先に作成するか、classic PAT (`repo`, `project`, `read:org`) を使う。 |
 | `INSUFFICIENT_SCOPES`, `id`, `read:org` | classic PAT に `read:org` を追加し、必要なら SSO を再承認する。 |
 | `The browser session is not signed in to 'github.com'` | 該当 profile で `login` を再実行し、API token と同じユーザーでログインする。 |
 | UI fixture 再実行で View が重複 | 新規 fixture を使うか、`View 1` 以外の fixture Views を削除してから再実行する。 |
