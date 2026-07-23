@@ -11,7 +11,7 @@ Issue and pull request content and metadata, including labels, milestones, assig
 | Area | Supported? | Notes |
 |---|---:|---|
 | Organization-owned projects | ✅ | Default mode. |
-| User-owned projects | ✅ | Use `--owner-type user`. |
+| User-owned projects | ✅ | Use `--owner-type user` with a classic PAT. GitHub lists user-owned Projects as a current [fine-grained PAT limitation](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens#fine-grained-personal-access-token-limitations). |
 | Existing target project | ✅ | Use `ghpmv import --project-number <n>` to merge into a project you created beforehand, for example from a template. |
 | Project title override | ✅ | Use `--project-title` when creating the target project. |
 | Project description / README / public / closed state | ✅ | Migrated through the GraphQL API. |
@@ -46,7 +46,7 @@ Issue and pull request content and metadata, including labels, milestones, assig
 
 ## Views
 
-Views require `--enable-browser-automation` because GitHub has no public API to create or update them.
+Full-fidelity Views require `--enable-browser-automation`. GitHub's [versioned REST API](https://docs.github.com/en/rest/projects/projects?apiVersion=2026-03-10) can create basic organization Project views with a name, layout, filter, and visible fields, but it does not cover all settings that `ghpmv` migrates, and `ghpmv` does not currently use that endpoint.
 
 | Area | Supported? | Notes |
 |---|---:|---|

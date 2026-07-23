@@ -145,8 +145,10 @@ gh extension upgrade github/gh-gei
 
 | 変数 | 用途 |
 |---|---|
-| `GHPMV_SOURCE_TOKEN` | source fixture 作成、`ghpmv export`、GEI source に使う手動テスト用 token。実行する全用途について 4.3 の権限を満たす。 |
-| `GHPMV_TARGET_TOKEN` | target fixture 作成、`ghpmv import` / `ghpmv verify`、GEI destination に使う手動テスト用 token。実行する全用途について 4.3 の権限を満たす。 |
+| `GHPMV_SOURCE_TOKEN` | source fixture 作成と `ghpmv export` に使う token。 |
+| `GHPMV_TARGET_TOKEN` | target fixture 作成と `ghpmv import` / `ghpmv verify` に使う token。 |
+| `GHPMV_GEI_SOURCE_TOKEN` | GEI source 用の classic PAT。 |
+| `GHPMV_GEI_TARGET_TOKEN` | GEI destination 用の classic PAT。 |
 | `GHPMV_TEST_TOKEN` | 既存 integration / browser E2E tests を手動で回す場合。 |
 | `GHPMV_TEST_ORG` | integration / browser E2E tests の source organization login。未指定時は `GHPMV_SOURCE_ORG`、それも無ければ `gpm-source`。CI repo variable でも指定。 |
 | `GHPMV_TEST_TARGET_ORG` | integration tests の target organization login。未指定時は `GHPMV_TARGET_ORG`、それも無ければ `gpm-target`。CI repo variable でも指定。 |
@@ -184,12 +186,16 @@ Get-Content .env | Where-Object { $_ -and $_ -notmatch '^\s*#' } | ForEach-Objec
 
 source と target の resource owner またはアカウントが異なる場合、token と browser profile はそれぞれ別に用意します。
 
-`setup --fixture` の完全自動パスは private organization repository を新規作成するため、通常の migration command より広い権限が必要です。GitHub の [fine-grained PAT permission matrix](https://docs.github.com/en/rest/authentication/permissions-required-for-fine-grained-personal-access-tokens#repository-permissions-for-administration) では `POST /orgs/{org}/repos` に Repository **Administration: write** が必要です。fine-grained PAT では resource owner に対象 organization を選び、次を付与します。
+fine-grained PAT は organization-owned Project にだけ使用します。GitHub は user-owned Project へのアクセスを [fine-grained PAT の制限事項](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens#fine-grained-personal-access-token-limitations) としているため、`--owner-type user` には classic PAT を使用します。
+
+`setup --fixture` の完全自動パスは private organization repository を新規作成するため、通常の migration command より広い権限が必要です。確実性を優先する場合は classic PAT を推奨します。GitHub の [fine-grained PAT permission matrix](https://docs.github.com/en/rest/authentication/permissions-required-for-fine-grained-personal-access-tokens#repository-permissions-for-administration) では `POST /orgs/{org}/repos` に Repository **Administration: write** が必要です。fine-grained PAT を使う場合は resource owner に対象 organization を選び、次を付与します。
 
 - Repository access: **All repositories**
 - Repository permissions: **Administration: Read and write**、**Contents: Read and write**、**Issues: Read and write**、**Pull requests: Read and write**
 - Organization permissions: **Projects: Read and write**
 - Organization が要求する token approval
+
+この設定は token owner 自身の権限を超えません。token owner の organization role、member に許可された repository visibility、organization の PAT 制限・承認ポリシー、SSO authorization は別に確認します。`setup --fixture` の前に SKILL の permission preflight を実行し、403 の場合は原因を断定せず、これらの設定を確認します。
 
 **Administration** または **All repositories** を付与できない場合は、空 repository を先に作成し、その repository を選択した fine-grained PAT に Administration 以外の fixture 権限を付与します。classic PAT を使う場合は次の scope を使用します。
 
@@ -207,16 +213,16 @@ GEI repository migration は fixture setup と別の権限体系です。GitHub 
 | destination | Organization owner | `repo`, `admin:org`, `workflow` |
 | destination | destination organization の migrator | `repo`, `read:org`, `workflow` |
 
-同じ `GHPMV_SOURCE_TOKEN` / `GHPMV_TARGET_TOKEN` を fixture、`ghpmv`、GEI で再利用する場合、token は実行する全用途の scope の和集合を満たす必要があります。fixture 用の `repo`, `project`, `read:org` だけでは GEI migration を queue できません。source / destination のどちらでも、token のユーザーが Organization owner または対象 organization に明示的に付与された migrator role を持つことを確認してください。
+GEI には `GHPMV_GEI_SOURCE_TOKEN` / `GHPMV_GEI_TARGET_TOKEN` を分けて用意することを推奨します。同じ classic PAT を fixture、`ghpmv`、GEI で再利用する場合は、実行する全用途の scope の和集合が必要です。fixture 用の `repo`, `project`, `read:org` だけでは GEI migration を queue できません。source / destination のどちらでも、token のユーザーが Organization owner または対象 organization に明示的に付与された migrator role を持つことを確認してください。
 
 `gh auth login` / `gh auth refresh` を使う場合も、Project 操作に必要な scope を含めます。
 
 ```powershell
 gh auth status
-gh auth refresh -s project,read:org,read:enterprise,repo
+gh auth refresh -s project,read:org,repo
 ```
 
-SAML SSO organization では、GitHub CLI の OAuth application または PAT の organization access を明示的に Authorize してください。認可漏れがあると `saml_failure` や GraphQL の permission error になります。
+[SAML SSO organization](https://docs.github.com/en/authentication/authenticating-with-single-sign-on/authorizing-a-personal-access-token-for-use-with-single-sign-on) では、classic PAT または GitHub CLI の OAuth application を organization に明示的に Authorize してください。fine-grained PAT は resource owner を選択した作成時に SSO authorization が行われますが、organization の token approval は別に必要な場合があります。認可漏れがあると `saml_failure` や GraphQL の permission error になります。
 
 ### 4.4 `ghpmv` のビルドとブラウザー準備
 
@@ -364,6 +370,8 @@ gh repo view "$env:GHPMV_TARGET_ORG/$env:GHPMV_TARGET_REPO"
 
 存在する場合は、別名にするか cleanup してから進めます。
 
+destination organization または enterprise に repository ruleset がある場合は、各 ruleset の bypass list に **Repository migrations** を追加し、mode を **Exempt** にします。既定の **Always allow** のままでは migration push の評価が timeout する可能性があります。詳細は [Setting ruleset bypasses for repository migrations](https://docs.github.com/en/enterprise-cloud@latest/migrations/troubleshooting/setting-ruleset-bypasses-for-repository-migrations) を参照してください。
+
 ### 6.2 GEI migration を queue / 実行
 
 4.3 の GEI role と classic PAT scope を source / destination の両方で確認します。満たしていない場合はここで停止し、fixture 用 token のまま migration を実行しません。
@@ -376,12 +384,12 @@ gh gei migrate-repo `
   --source-repo $env:GHPMV_FIXTURE_REPO `
   --github-target-org $env:GHPMV_TARGET_ORG `
   --target-repo $env:GHPMV_TARGET_REPO `
-  --github-source-pat $env:GHPMV_SOURCE_TOKEN `
-  --github-target-pat $env:GHPMV_TARGET_TOKEN `
+  --github-source-pat $env:GHPMV_GEI_SOURCE_TOKEN `
+  --github-target-pat $env:GHPMV_GEI_TARGET_TOKEN `
   --target-repo-visibility private
 ```
 
-実行環境や GEI extension version によっては `--queue-only` / `--wait` / migration log download 系のオプションを併用してください。
+実行環境や GEI extension version によっては `--queue-only` / `--wait` / migration log download 系のオプションを併用してください。downloadable migration log は完了後 24 時間だけ取得できます。また、target repository で Issues が無効な場合は `Migration Log` Issue が作成されません。詳細は [Accessing your migration logs for GitHub Enterprise Importer](https://docs.github.com/en/migrations/using-github-enterprise-importer/completing-your-migration-with-github-enterprise-importer/accessing-your-migration-logs-for-github-enterprise-importer) を参照してください。
 
 ### 6.3 GEI 結果確認
 
@@ -409,7 +417,7 @@ dotnet run --project src/Ghpmv.Cli -c Release --no-build -- setup `
   --token $env:GHPMV_TARGET_TOKEN
 ```
 
-このパスでも `GHPMV_TARGET_TOKEN` には 4.3 の fixture setup 用 classic PAT scope が必要です。`setup --fixture-ui` は補助 Project には不要です。
+このパスでも `GHPMV_TARGET_TOKEN` には 4.3 の fixture setup 用権限が必要です。`setup --fixture-ui` は補助 Project には不要です。
 
 ---
 
@@ -529,7 +537,7 @@ warning / error が出た場合は、次の観点で切り分けます。
 | `saml_failure` | PAT の organization SSO authorization 漏れ | GitHub settings で token / GitHub CLI を Authorize。 |
 | Browser session expired | `ghpmv login --profile ...` 未実施または期限切れ | source / target profile で再ログイン。 |
 | `The browser session is not signed in to 'github.com'` | 保存済み target browser session の失効、または profile 間違い | `ghpmv login --profile target` を再実行し、target token と同じユーザーでログイン。 |
-| `Resource not accessible by personal access token` (`setup --fixture`) | fine-grained PAT の **Administration: Read and write**、**All repositories**、または organization approval が不足 | 4.3 の permission と approval を確認。付与できない場合は空 repository を先に作成するか、classic PAT を使用。 |
+| `Resource not accessible by personal access token` (`setup --fixture`) | token permission、token owner の role、repository creation / PAT policy、approval、SSO のいずれか | 4.3 の各条件を確認し、原因を permission 一つに断定しない。解決できない場合は空 repository を先に作成するか、classic PAT を使用。 |
 | `INSUFFICIENT_SCOPES` と `id` / `read:org` | fixture setup 用 classic PAT に `read:org` がない | token に `read:org` を追加し、必要なら SSO を再承認。 |
 | Workflow 保存失敗 | target plan の Auto-add 上限、target repo 不可視、filter 不正 | warning 内容と UI を確認。 |
 | Collaborator skip | target user / team が存在しない、権限不足 | mapping と target org membership を確認。 |
@@ -661,6 +669,8 @@ Follow-up issues:
 ## 12. GHEC with data residency を含める場合
 
 GHEC with data residency target を検証する場合は、通常手順に以下を追加します。
+
+GEI repository migration に必要な organization role と classic PAT scope は GitHub.com target と同じです。data residency 固有の hostname と IP allow list を追加で確認します。
 
 1. target browser profile を tenant host で作成する。
 2. `ghpmv import` / `ghpmv verify` に `--target-base-url https://api.TENANT.ghe.com` と `--browser-base-url https://TENANT.ghe.com` を指定する。
