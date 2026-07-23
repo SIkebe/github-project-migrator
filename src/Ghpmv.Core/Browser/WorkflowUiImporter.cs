@@ -199,11 +199,7 @@ public sealed class WorkflowUiImporter
             "workflows");
         await _session.GotoAsync(url, cancellationToken).ConfigureAwait(false);
         await Sel.WorkflowsSidebar(page).WaitForAsync().ConfigureAwait(false);
-        await WorkflowUiExporter.OpenWorkflowAsync(
-            page,
-            workflow.Name,
-            workflow.Number,
-            cancellationToken).ConfigureAwait(false);
+        await WorkflowUiExporter.OpenWorkflowAsync(page, workflow.Name, cancellationToken).ConfigureAwait(false);
 
         if (await Sel.SaveWorkflowButton(page).CountAsync().ConfigureAwait(false) == 0)
         {
@@ -247,7 +243,14 @@ public sealed class WorkflowUiImporter
         }
         else if (!current.Enabled)
         {
-            await ToggleAsync(page, workflow.Name, cancellationToken).ConfigureAwait(false);
+            if (ShouldSaveAndTurnOn(current.Enabled, current.IsSaved))
+            {
+                await SaveAndTurnOnAsync(page, cancellationToken).ConfigureAwait(false);
+            }
+            else
+            {
+                await ToggleAsync(page, workflow.Name, cancellationToken).ConfigureAwait(false);
+            }
         }
     }
 
@@ -277,7 +280,7 @@ public sealed class WorkflowUiImporter
                 return;
             }
 
-            if (string.Equals(await toggle.GetAttributeAsync("aria-pressed").ConfigureAwait(false), "true", StringComparison.Ordinal))
+            if (await WorkflowUiExporter.ReadToggleStateAsync(toggle).ConfigureAwait(false))
             {
                 await ToggleAsync(page, workflow.Name, cancellationToken).ConfigureAwait(false);
             }
@@ -529,6 +532,16 @@ public sealed class WorkflowUiImporter
         }
     }
 
+    private static async Task SaveAndTurnOnAsync(IPage page, CancellationToken cancellationToken)
+    {
+        await Sel.EditWorkflowButton(page).First.ClickAsync().ConfigureAwait(false);
+        var save = Sel.SaveAndTurnOnWorkflowButton(page).First;
+        await save.WaitForAsync().ConfigureAwait(false);
+        await save.ClickAsync().ConfigureAwait(false);
+        await Sel.EditWorkflowButton(page).First.WaitForAsync().ConfigureAwait(false);
+        await PauseAsync(cancellationToken).ConfigureAwait(false);
+    }
+
     private static async Task ToggleAsync(IPage page, string name, CancellationToken cancellationToken)
     {
         // The toggle applies immediately (no confirmation, M7 discovery).
@@ -550,6 +563,9 @@ public sealed class WorkflowUiImporter
     }
 
     // ----- pure helpers -----
+
+    internal static bool ShouldSaveAndTurnOn(bool enabled, bool isSaved)
+        => !enabled && !isSaved;
 
     private static bool ValueEquals(string? left, string? right)
         => string.Equals(left ?? string.Empty, right ?? string.Empty, StringComparison.Ordinal);

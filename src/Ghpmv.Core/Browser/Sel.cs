@@ -133,17 +133,21 @@ internal static class Sel
     public static ILocator WorkflowLink(IPage page, string name)
         => WorkflowsSidebar(page).GetByRole(AriaRole.Link, new() { NameRegex = new Regex($"^{Regex.Escape(name)}{WorkflowOptionsSuffix}") });
 
-    /// <summary>Saved workflow link by its stable GraphQL workflow number.</summary>
-    public static ILocator WorkflowLink(IPage page, int number)
-        => WorkflowsSidebar(page).Locator($"a[href$='/workflows/{number}']");
-
     /// <summary>The h2 heading of the currently displayed workflow.</summary>
     public static ILocator WorkflowHeading(IPage page, string name)
         => page.GetByRole(AriaRole.Heading, new() { Name = name, Exact = true, Level = 2 });
 
-    /// <summary>Enable/disable toggle button; its accessible name equals the workflow name, aria-pressed = enabled.</summary>
+    /// <summary>
+    /// Enable/disable control. The accessible name is not stable, so fall back to the
+    /// single stateful control in the workflow detail pane.
+    /// </summary>
     public static ILocator WorkflowToggle(IPage page, string name)
-        => page.GetByRole(AriaRole.Button, new() { Name = name, Exact = true });
+        => page.GetByRole(AriaRole.Button, new() { Name = name, Exact = true })
+            .Or(page.GetByRole(AriaRole.Switch, new() { Name = name, Exact = true }))
+            .Or(page.GetByRole(AriaRole.Checkbox, new() { Name = name, Exact = true }))
+            .Or(page.GetByRole(AriaRole.Main).Locator(
+                "button[aria-pressed]:visible, [role='switch'][aria-checked]:visible, " +
+                "[role='checkbox'][aria-checked]:visible, input[type='checkbox']:visible"));
 
     /// <summary>"Edit" button (view mode). Exact match — "Edit workflow name" also starts with "Edit".</summary>
     public static ILocator EditWorkflowButton(IPage page)
@@ -152,6 +156,10 @@ internal static class Sel
     /// <summary>Edit-mode save button ("Save workflow" or "Save and turn on workflow").</summary>
     public static ILocator SaveWorkflowButton(IPage page)
         => page.GetByRole(AriaRole.Button, new() { NameRegex = SaveWorkflowName });
+
+    /// <summary>Save button for an unsaved, disabled workflow; saving also enables it.</summary>
+    public static ILocator SaveAndTurnOnWorkflowButton(IPage page)
+        => page.GetByRole(AriaRole.Button, new() { Name = "Save and turn on workflow", Exact = true });
 
     /// <summary>"When ... : &lt;value&gt;" buttons (content types, Auto-close status, Auto-add repository).</summary>
     public static ILocator WorkflowWhenButtons(IPage page)

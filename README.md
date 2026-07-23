@@ -75,7 +75,7 @@ Tokens are resolved from `--token`, then the `GITHUB_TOKEN` / `GHPMV_TOKEN` envi
 | `PartialMatch` | No errors, but a non-fatal warning exists (for example, target-only data). |
 | `NotVerified` | Required source or target data was not captured, so full equality cannot be established. |
 
-`Mismatch` and `NotVerified` always produce exit code 1. `--fail-on-warning` also fails when warnings exist. Use `--report-json <path>` for the same overall/category results and counts in machine-readable form. Without browser automation, GraphQL-readable View settings are still compared, but UI-only View/Workflow settings and explicit collaborators are reported as `NotVerified`; use `--enable-browser-automation` when verification must prove those areas too.
+`Mismatch` and `NotVerified` always produce exit code 1. `--fail-on-warning` also fails when warnings exist. Use `--report-json <path>` for the same overall/category results and counts in machine-readable form. Without browser automation, GraphQL-readable View settings are still compared, but UI-only View/Workflow settings and explicit collaborators are reported as `NotVerified`; use `--enable-browser-automation` when verification must prove those areas too. Explicit collaborator capture also requires the browser/token user to access the Project's **Settings → Manage access** page; GitHub requires a project admin or organization owner to [manage access to an organization Project](https://docs.github.com/en/issues/planning-and-tracking-with-projects/managing-your-project/managing-access-to-your-projects).
 
 | Category | Verification coverage |
 |---|---|
@@ -91,19 +91,51 @@ Insights charts, item/field-value history, and inherited/base-role access are no
 
 ### Token permissions
 
-You can use either a classic PAT or a fine-grained PAT. Fine-grained PATs are scoped to a single resource owner, so cross-organization or cross-account migrations usually need separate source and target tokens.
+This section covers the normal migration commands: `export`, `import`, and `verify`. You do **not** need permission to create repositories, Issues, or pull requests for a normal Project migration; move or create the target repositories separately before running `ghpmv import`.
 
-Classic PATs need the `project` and `repo` scopes (plus token authorization for organizations or enterprises that require SSO, including SAML- or OIDC-backed environments).
+Use separate source and target tokens when the resource owners or accounts differ. The source token only needs the `export` permissions. The target token needs the union of the `import` and `verify` permissions.
 
-For fine-grained PATs, create the token for the organization or user that owns the projects you are exporting from or importing into. Grant repository access to every repository that can appear as a project item or linked repository; selecting all repositories for that resource owner is the simplest option during a migration.
+#### Classic PATs
+
+GitHub documents `read:project` for Project queries and `project` for queries and mutations. The classic `repo` scope is only needed when the migration must access private repository content; it grants broad read/write repository access, so prefer fine-grained PATs when practical. See [Using the API to manage Projects](https://docs.github.com/en/issues/planning-and-tracking-with-projects/automating-your-project/using-the-api-to-manage-projects#authentication) and [Scopes for OAuth apps](https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/scopes-for-oauth-apps).
+
+| Command | Classic PAT scopes |
+|---|---|
+| `ghpmv export` | `read:project`. Add `repo` when the source Project contains items or linked repositories from private repositories. |
+| `ghpmv import` | `project`. For an organization-owned target, also add `read:org` because `ghpmv` resolves the organization node ID. Add `repo` when resolving items or linked repositories in private target repositories. |
+| `ghpmv verify` | `read:project`. Add `repo` when the target Project contains items or linked repositories from private repositories. |
+
+Authorize the token for organizations or enterprises that require SSO, including SAML- or OIDC-backed environments.
+
+#### Fine-grained PATs
+
+Use fine-grained PATs only for **organization-owned** Projects. GitHub lists access to Projects owned by a user account as a current [fine-grained PAT limitation](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens#fine-grained-personal-access-token-limitations); use a classic PAT for `--owner-type user`.
+
+Create each fine-grained token for the organization that owns the source or target Project. Grant repository access to every repository that can appear as a Project item or linked repository; selecting all repositories for that resource owner is the simplest option during a migration. See GitHub's [Permissions required for fine-grained personal access tokens](https://docs.github.com/en/rest/authentication/permissions-required-for-fine-grained-personal-access-tokens).
 
 | Command | Fine-grained PAT permissions |
 |---|---|
-| `ghpmv export` | **Organization/account permissions → Projects: Read-only**. **Repository permissions → Metadata: Read-only**, plus **Issues: Read-only** and **Pull requests: Read-only** for private repositories that contain project items. |
-| `ghpmv import` | **Organization/account permissions → Projects: Read and write**. **Repository permissions → Metadata: Read-only**, plus **Issues: Read-only** and **Pull requests: Read-only** for private repositories referenced by `--repo-mapping` or auto-add workflows. If you import project collaborators that include teams, also grant **Organization permissions → Members: Read-only** when required to resolve those teams. |
+| `ghpmv export` | **Organization permissions → Projects: Read-only**. **Repository permissions → Metadata: Read-only**, plus **Issues: Read-only** and **Pull requests: Read-only** for private repositories that contain project items. |
+| `ghpmv import` | **Organization permissions → Projects: Read and write**. **Repository permissions → Metadata: Read-only**; add **Contents: Read and write** for linked repositories, plus **Issues: Read-only** and **Pull requests: Read-only** for private repositories referenced by `--repo-mapping` or auto-add workflows. If you import project collaborators that include teams, also grant **Organization permissions → Members: Read-only** when required to resolve those teams. |
 | `ghpmv verify` | Same as `ghpmv export` for the target project. |
 
-GitHub permissions are still enforced in addition to token permissions: the token owner must be allowed to read the source project and referenced repositories, and must be allowed to create or edit the target project.
+GitHub supports [pre-filled fine-grained PAT creation URLs](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens#pre-filling-fine-grained-personal-access-token-details-using-url-parameters). Replace `SOURCE_ORG` or `TARGET_ORG` before opening these templates:
+
+```text
+# Export an organization Project
+https://github.com/settings/personal-access-tokens/new?name=ghpmv-source-export&description=Export+an+organization+Project+with+ghpmv&target_name=SOURCE_ORG&expires_in=30&organization_projects=read&metadata=read
+
+# Import and verify an organization Project
+https://github.com/settings/personal-access-tokens/new?name=ghpmv-target-import&description=Import+and+verify+an+organization+Project+with+ghpmv&target_name=TARGET_ORG&expires_in=30&organization_projects=write&metadata=read
+```
+
+Append only the permissions needed for the selected migration path: `&issues=read&pull_requests=read` for private repository items, `&contents=write` when importing linked repositories, and `&members=read` when resolving team collaborators. The URL cannot select **Repository access**; after opening it, select every repository used by Project items, linked repositories, or Workflows. Review the pre-filled values and adjust the expiration if required by organization policy before generating the token.
+
+GitHub does not publish fine-grained PAT requirements for each Projects GraphQL mutation. The **Contents: Read and write** requirement for `linkProjectV2ToRepository` is based on ghpmv's live GitHub testing: read-only Contents access was insufficient. GitHub separately documents a Contents permission for GitHub App installation tokens when `createProjectV2` links a repository, but that guidance is not PAT-specific and does not document `linkProjectV2ToRepository`.
+
+GitHub permissions are still enforced in addition to token permissions: the token owner must be allowed to read the source project and referenced repositories, and must be allowed to create or edit the target project. [Changing an organization Project's visibility](https://docs.github.com/en/issues/planning-and-tracking-with-projects/managing-your-project/managing-visibility-of-your-projects) requires an organization owner or project admin, and an organization can restrict the operation to owners; import skips the visibility mutation when the target already matches the snapshot.
+
+> `ghpmv setup --fixture` is a maintainer/test command, not a migration prerequisite. It creates a demo repository, Issues, a pull request, and a Project, so it intentionally needs broader permissions. See [Fixture credentials](#fixture-credentials-maintainers-only).
 
 `--repo-mapping` / `--user-mapping` / `--org-mapping` map repositories, user logins, and organizations across deployments. They are especially important for EMU targets, where user logins normally gain a `_shortcode` suffix. Repository and organization mappings use the `source,target` header. User mappings use the GitHub Enterprise Importer mannequin reclaim header (`mannequin-user,mannequin-id,target-user`); the mannequin ID is ignored. `ghpmv export` generates ready-to-fill `repository-mappings.csv`, `organization-mappings.csv`, and, when users are present, `user-mappings.csv`. Candidates include linked and Auto-add repositories plus identifiers found in View and Workflow filters. Existing files are never overwritten, and newly discovered candidates are reported. During browser-assisted import, `assignee:`, `author:`, `repo:`, and `org:` filter values are mapped structurally; other syntax is preserved. Organization mappings are also inferred from repository owners when unambiguous. Browser-assisted import stops before any project write when a supported filter value or Auto-add repository remains unmapped or ambiguous. API-only imports do not replay or validate UI-only Workflow settings. Pass the same mappings to `ghpmv verify`.
 
@@ -223,15 +255,29 @@ See [Migration scope and limitations](docs/MIGRATION_SCOPE.md) for the complete 
 
 `export` / `import` / `verify` asynchronously check GitHub Releases for a newer version (2-second timeout; failures are silently ignored; **no telemetry is ever sent**). Opt out with `--no-update-check` or by setting the `GHPMV_NO_UPDATE_CHECK` environment variable.
 
+## Current limitations
+
+The most important constraints are that `ghpmv` does not migrate repositories or Issue / PR metadata, GHES is not supported, and UI automation is opt-in and best effort. See [Migration scope and limitations](docs/MIGRATION_SCOPE.md) for full details.
+
 ## Development docs
 
 - [Migration scope and limitations](docs/MIGRATION_SCOPE.md) contains the detailed support matrix, prerequisites, and platform constraints.
 - [Test strategy](docs/TEST_STRATEGY.md) is a Japanese summary of the automated, browser, CI, packaging and manual release validation layers.
 - [Manual test plan](docs/MANUAL_TEST_PLAN.md) walks through the GEI + `ghpmv` end-to-end migration validation flow.
 
-## Current limitations
+### Fixture credentials (maintainers only)
 
-The most important constraints are that `ghpmv` does not migrate repositories or Issue / PR metadata, GHES is not supported, and UI automation is opt-in and best effort. See [Migration scope and limitations](docs/MIGRATION_SCOPE.md) for full details.
+This section applies only when creating disposable demo/test resources with `ghpmv setup --fixture`. Normal users migrating an existing Project do not run this command.
+
+The fully automated fixture path creates a private organization repository, its initial contents, Issues, a pull request, and a Project. GitHub's [fine-grained PAT permission matrix](https://docs.github.com/en/rest/authentication/permissions-required-for-fine-grained-personal-access-tokens#repository-permissions-for-administration) lists **Administration: Read and write** for `POST /orgs/{org}/repos`. The fixture also needs resource owner set to the organization, repository access set to **All repositories**, **Contents: Read and write**, **Issues: Read and write**, **Pull requests: Read and write**, and **Organization permissions → Projects: Read and write**.
+
+Replace `FIXTURE_ORG` before opening this pre-filled fixture token template, then manually select **All repositories**:
+
+```text
+https://github.com/settings/personal-access-tokens/new?name=ghpmv-fixture&description=Create+a+disposable+ghpmv+fixture&target_name=FIXTURE_ORG&expires_in=30&administration=write&contents=write&issues=write&pull_requests=write&organization_projects=write&metadata=read
+```
+
+Those token settings do not override the token owner's organization role, the organization's [repository-creation policy](https://docs.github.com/en/organizations/managing-organization-settings/restricting-repository-creation-in-your-organization), [PAT policy](https://docs.github.com/en/organizations/managing-programmatic-access-to-your-organization/setting-a-personal-access-token-policy-for-your-organization), token approval, or SSO authorization. Preflight the endpoint before fixture creation; for the most reliable fully automated path, use a classic PAT with `repo`, `project`, and `read:org`. If **Administration** or **All repositories** access cannot be granted, create the empty organization repository separately and use a selected-repository fine-grained PAT with the remaining fixture permissions. See the [manual test plan](docs/MANUAL_TEST_PLAN.md#fixture-token-permissions) for the complete fixture workflow.
 
 ## License
 

@@ -53,6 +53,19 @@ public class WorkflowUiLogicTests
     public void IsSavedWorkflowUrl_detects_numeric_workflow_ids(string? url, bool expected)
         => Assert.Equal(expected, WorkflowUiExporter.IsSavedWorkflowUrl(url));
 
+    [Theory]
+    [InlineData("true", null, true)]
+    [InlineData("false", null, false)]
+    [InlineData(null, "true", true)]
+    [InlineData(null, "false", false)]
+    [InlineData("false", "true", true)]
+    [InlineData(null, null, false)]
+    public void ParseToggleState_supports_button_switch_and_checkbox_markup(
+        string? ariaPressed,
+        string? ariaChecked,
+        bool expected)
+        => Assert.Equal(expected, WorkflowUiExporter.ParseToggleState(ariaPressed, ariaChecked));
+
     // ----- WorkflowUiImporter classification / mapping -----
 
     [Fact]
@@ -99,6 +112,17 @@ public class WorkflowUiLogicTests
             () => WorkflowUiImporter.ResolveRepositoryName("fixture-repo", mapping));
         Assert.Contains("ambiguous", exception.Message, StringComparison.OrdinalIgnoreCase);
     }
+
+    [Theory]
+    [InlineData(false, false, true)]
+    [InlineData(false, true, false)]
+    [InlineData(true, false, false)]
+    [InlineData(true, true, false)]
+    public void ShouldSaveAndTurnOn_only_selects_unsaved_disabled_workflows(
+        bool enabled,
+        bool isSaved,
+        bool expected)
+        => Assert.Equal(expected, WorkflowUiImporter.ShouldSaveAndTurnOn(enabled, isSaved));
 
     // ----- pre-flight: Auto-add plan limit -----
 

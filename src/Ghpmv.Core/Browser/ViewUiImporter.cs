@@ -679,16 +679,21 @@ public sealed class ViewUiImporter
 
     private static async Task<ILocator?> FindOptionAsync(IPage page, string value)
     {
-        foreach (var role in OptionRoles)
+        var option = page.GetByRole(OptionRoles[0], new() { Name = value, Exact = true });
+        for (var i = 1; i < OptionRoles.Length; i++)
         {
-            var option = page.GetByRole(role, new() { Name = value, Exact = true });
-            if (await option.CountAsync().ConfigureAwait(false) > 0)
-            {
-                return option.First;
-            }
+            option = option.Or(page.GetByRole(OptionRoles[i], new() { Name = value, Exact = true }));
         }
 
-        return null;
+        try
+        {
+            await option.First.WaitForAsync(new() { Timeout = 10_000 }).ConfigureAwait(false);
+            return option.First;
+        }
+        catch (Exception exception) when (exception is PlaywrightException or TimeoutException)
+        {
+            return null;
+        }
     }
 
     private static async Task CloseMenusAsync(IPage page, CancellationToken cancellationToken)
