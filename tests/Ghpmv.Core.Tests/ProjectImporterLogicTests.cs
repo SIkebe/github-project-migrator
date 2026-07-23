@@ -9,6 +9,17 @@ namespace Ghpmv.Core.Tests;
 
 public class ProjectImporterLogicTests
 {
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, true, true)]
+    [InlineData(true, false, true)]
+    public void Visibility_update_is_only_required_when_the_value_changes(
+        bool currentPublic,
+        bool desiredPublic,
+        bool expected)
+        => Assert.Equal(expected, ProjectImporter.ShouldUpdateVisibility(currentPublic, desiredPublic));
+
     [Fact]
     public async Task Conflict_skip_returns_skipped_without_sending_mutations()
     {

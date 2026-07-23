@@ -239,6 +239,10 @@ public sealed class ProjectImporter
         _warnings.Clear();
         OnProgress?.Invoke("Applying project metadata (description, README, visibility, closed state)...");
         await UpdateProjectMetadataAsync(project.Id, snapshot.Project, cancellationToken).ConfigureAwait(false);
+        if (ShouldUpdateVisibility(project.Public, snapshot.Project.Public))
+        {
+            await UpdateProjectVisibilityAsync(project.Id, snapshot.Project.Public, cancellationToken).ConfigureAwait(false);
+        }
 
         var maps = new FieldMaps();
         var existingFieldList = await FetchFieldListAsync(project.Id, maps, cancellationToken).ConfigureAwait(false);
@@ -638,7 +642,7 @@ public sealed class ProjectImporter
             """
             mutation($ownerId: ID!, $title: String!, $clientMutationId: String!) {
               createProjectV2(input: { ownerId: $ownerId, title: $title, clientMutationId: $clientMutationId }) {
-                projectV2 { id number title url }
+                projectV2 { id number title url public }
               }
             }
             """,
@@ -654,8 +658,8 @@ public sealed class ProjectImporter
         await _client.MutationAsync(
             "updateProjectV2",
             """
-            mutation($projectId: ID!, $shortDescription: String, $readme: String, $public: Boolean, $closed: Boolean, $clientMutationId: String!) {
-              updateProjectV2(input: { projectId: $projectId, shortDescription: $shortDescription, readme: $readme, public: $public, closed: $closed, clientMutationId: $clientMutationId }) {
+            mutation($projectId: ID!, $shortDescription: String, $readme: String, $closed: Boolean, $clientMutationId: String!) {
+              updateProjectV2(input: { projectId: $projectId, shortDescription: $shortDescription, readme: $readme, closed: $closed, clientMutationId: $clientMutationId }) {
                 projectV2 { id }
               }
             }
@@ -665,9 +669,26 @@ public sealed class ProjectImporter
                 projectId,
                 shortDescription = info.ShortDescription,
                 readme = info.Readme,
-                @public = info.Public,
                 closed = info.Closed,
             },
+            MutationRetryPolicy.Idempotent,
+            target: projectId,
+            requiredResultPath: "projectV2.id",
+            cancellationToken: cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task UpdateProjectVisibilityAsync(string projectId, bool isPublic, CancellationToken cancellationToken)
+    {
+        await _client.MutationAsync(
+            "updateProjectV2",
+            """
+            mutation($projectId: ID!, $public: Boolean, $clientMutationId: String!) {
+              updateProjectV2(input: { projectId: $projectId, public: $public, clientMutationId: $clientMutationId }) {
+                projectV2 { id }
+              }
+            }
+            """,
+            new { projectId, @public = isPublic },
             MutationRetryPolicy.Idempotent,
             target: projectId,
             requiredResultPath: "projectV2.id",
@@ -841,12 +862,16 @@ public sealed class ProjectImporter
         };
     }
 
+    internal static bool ShouldUpdateVisibility(bool currentPublic, bool desiredPublic)
+        => currentPublic != desiredPublic;
+
     private static ProjectRef ParseProjectRef(JsonElement node) => new(
         node.GetProperty("id").GetString() ?? throw new GitHubGraphQLException("Project id was null."),
         node.GetProperty("number").GetInt32(),
-        node.GetProperty("url").GetString() ?? string.Empty);
+        node.GetProperty("url").GetString() ?? string.Empty,
+        node.TryGetProperty("public", out var visibility) && visibility.GetBoolean());
 
-    private sealed record ProjectRef(string Id, int Number, string Url);
+    private sealed record ProjectRef(string Id, int Number, string Url, bool Public);
 
     private sealed record TargetField(string Id, string Name, string DataType);
 
@@ -913,7 +938,7 @@ public sealed class ProjectImporter
         query($login: String!, $first: Int!, $after: String) {
           __OWNER__(login: $login) {
             projectsV2(first: $first, after: $after) {
-              nodes { id number title url }
+              nodes { id number title url public }
               pageInfo { hasNextPage endCursor }
             }
           }
@@ -924,7 +949,7 @@ public sealed class ProjectImporter
         """
         query($login: String!, $number: Int!) {
           __OWNER__(login: $login) {
-            projectV2(number: $number) { id number title url }
+            projectV2(number: $number) { id number title url public }
           }
         }
         """;
