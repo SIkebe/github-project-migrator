@@ -113,6 +113,17 @@ public class WorkflowUiLogicTests
         Assert.Contains("ambiguous", exception.Message, StringComparison.OrdinalIgnoreCase);
     }
 
+    [Theory]
+    [InlineData(false, false, true)]
+    [InlineData(false, true, false)]
+    [InlineData(true, false, false)]
+    [InlineData(true, true, false)]
+    public void ShouldSaveAndTurnOn_only_selects_unsaved_disabled_workflows(
+        bool enabled,
+        bool isSaved,
+        bool expected)
+        => Assert.Equal(expected, WorkflowUiImporter.ShouldSaveAndTurnOn(enabled, isSaved));
+
     // ----- pre-flight: Auto-add plan limit -----
 
     [Fact]

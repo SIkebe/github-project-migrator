@@ -157,6 +157,10 @@ internal static class Sel
     public static ILocator SaveWorkflowButton(IPage page)
         => page.GetByRole(AriaRole.Button, new() { NameRegex = SaveWorkflowName });
 
+    /// <summary>Save button for an unsaved, disabled workflow; saving also enables it.</summary>
+    public static ILocator SaveAndTurnOnWorkflowButton(IPage page)
+        => page.GetByRole(AriaRole.Button, new() { Name = "Save and turn on workflow", Exact = true });
+
     /// <summary>"When ... : &lt;value&gt;" buttons (content types, Auto-close status, Auto-add repository).</summary>
     public static ILocator WorkflowWhenButtons(IPage page)
         => page.GetByRole(AriaRole.Button, new() { NameRegex = WhenButtonName });
