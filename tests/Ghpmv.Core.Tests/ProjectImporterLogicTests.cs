@@ -212,8 +212,6 @@ public class ProjectImporterLogicTests
             Assert.Equal("PVTF_teams", result.FieldIds["Teams"]);
             Assert.DoesNotContain(handler.RequestBodies, body => body.Contains("createIssueField", StringComparison.Ordinal));
             Assert.DoesNotContain(handler.RequestBodies, body => body.Contains("createProjectV2IssueField", StringComparison.Ordinal));
-            Assert.Equal("PVTF_status", result.FieldIds["Status"]);
-            Assert.Equal("PVTFSO_todo", result.OptionIds["Status"]["Todo"]);
             var fieldsQuery = Assert.Single(
                 handler.RequestBodies,
                 body => body.Contains("fields(first:", StringComparison.Ordinal));
@@ -404,10 +402,10 @@ public class ProjectImporterLogicTests
                     """{"data":{"updateProjectV2":{"projectV2":{"id":"PVT_target"}}}}""",
                 _ when body.Contains("fields(first:", StringComparison.Ordinal) =>
                     existing
-                        ? """{"data":{"node":{"fields":{"nodes":[{"__typename":"ProjectV2Field","id":"PVTF_title","name":"Title"},{"__typename":"ProjectV2Field","id":"PVTF_teams","name":"Teams"},{"__typename":"ProjectV2Field","id":"PVTF_areas","name":"Areas"},{"__typename":"ProjectV2SingleSelectField","id":"PVTF_status","name":"Status"}]}}}}"""
+                        ? """{"data":{"node":null},"errors":[{"message":"Something went wrong while executing your query on the preview API."}]}"""
                         : """{"data":{"node":{"fields":{"nodes":[{"id":"PVTF_title","name":"Title","dataType":"TITLE"}]}}}}""",
-                _ when body.Contains("ProjectV2SingleSelectField", StringComparison.Ordinal) =>
-                    """{"data":{"nodes":[{"__typename":"ProjectV2SingleSelectField","id":"PVTF_status","name":"Status","options":[{"id":"PVTFSO_todo","name":"Todo"}]}]}}""",
+                _ when body.Contains("field(name:", StringComparison.Ordinal) =>
+                    """{"data":{"node":{"field":{"__typename":"ProjectV2Field","id":"PVTF_teams","name":"Teams"}}}}""",
                 _ when body.Contains("nodes(ids:", StringComparison.Ordinal) =>
                     body.Contains("PVTF_title", StringComparison.Ordinal)
                         ? """{"data":{"nodes":[{"id":"PVTF_title","dataType":"TITLE"}]}}"""

@@ -26,6 +26,7 @@ public sealed class ProjectImporter
     private readonly GitHubGraphQLClient _client;
     private readonly List<string> _warnings = [];
     private ProjectImportLog? _operationLog;
+    private HashSet<string> _snapshotFieldNames = [];
     private HashSet<string> _snapshotIssueFieldNames = [];
 
     public ProjectImporter(GitHubGraphQLClient client)
@@ -66,6 +67,7 @@ public sealed class ProjectImporter
     {
         ArgumentNullException.ThrowIfNull(snapshot);
         ArgumentException.ThrowIfNullOrWhiteSpace(ownerLogin);
+        _snapshotFieldNames = snapshot.Fields.Select(field => field.Name).ToHashSet(StringComparer.Ordinal);
         _snapshotIssueFieldNames = snapshot.Fields
             .Where(field => field.IssueField is not null)
             .Select(field => field.Name)
@@ -177,6 +179,7 @@ public sealed class ProjectImporter
     {
         ArgumentNullException.ThrowIfNull(snapshot);
         ArgumentException.ThrowIfNullOrWhiteSpace(ownerLogin);
+        _snapshotFieldNames = snapshot.Fields.Select(field => field.Name).ToHashSet(StringComparer.Ordinal);
         _snapshotIssueFieldNames = snapshot.Fields
             .Where(field => field.IssueField is not null)
             .Select(field => field.Name)
@@ -1080,10 +1083,22 @@ public sealed class ProjectImporter
             return [.. data.GetProperty("node").GetProperty("fields").GetProperty("nodes").EnumerateArray().Select(maps.Register)];
         }
 
-        var safeData = await _client.QueryAsync(FieldsWithIssueFieldsQuery, new { id = projectId }, cancellationToken).ConfigureAwait(false);
-        var nodes = safeData.GetProperty("node").GetProperty("fields").GetProperty("nodes");
+        List<JsonElement> nodes;
+        try
+        {
+            var safeData = await _client.QueryWithoutInternalErrorRetryAsync(
+                FieldsWithIssueFieldsQuery,
+                new { id = projectId },
+                cancellationToken).ConfigureAwait(false);
+            nodes = [.. safeData.GetProperty("node").GetProperty("fields").GetProperty("nodes").EnumerateArray()];
+        }
+        catch (GitHubGraphQLException exception) when (IsPreviewFieldInternalError(exception))
+        {
+            nodes = await FetchFieldNodesByNameAsync(projectId, cancellationToken).ConfigureAwait(false);
+        }
+
         Dictionary<string, JsonElement> details = [];
-        var detailIds = nodes.EnumerateArray()
+        var detailIds = nodes
             .Where(node => node.TryGetProperty("__typename", out var typeName)
                 && typeName.GetString() is "ProjectV2SingleSelectField" or "ProjectV2IterationField")
             .Select(node => node.GetProperty("id").GetString() ?? string.Empty)
@@ -1101,7 +1116,7 @@ public sealed class ProjectImporter
                     StringComparer.Ordinal);
         }
 
-        var candidateIds = nodes.EnumerateArray()
+        var candidateIds = nodes
             .Where(node => node.TryGetProperty("__typename", out var typeName)
                 && typeName.GetString() == "ProjectV2Field"
                 && !node.TryGetProperty("dataType", out _))
@@ -1119,10 +1134,7 @@ public sealed class ProjectImporter
                         new { ids = new[] { candidateId } },
                         cancellationToken).ConfigureAwait(false));
             }
-            catch (GitHubGraphQLException exception) when (
-                exception.ErrorsJson?.Contains(
-                    "Something went wrong while executing your query",
-                    StringComparison.OrdinalIgnoreCase) == true)
+            catch (GitHubGraphQLException exception) when (IsPreviewFieldInternalError(exception))
             {
                 // GitHub's preview schema cannot resolve dataType for a linked multi-select Issue Field.
             }
@@ -1130,13 +1142,39 @@ public sealed class ProjectImporter
 
         return
         [
-            .. nodes.EnumerateArray().Select(node =>
+            .. nodes.Select(node =>
             {
                 var id = node.GetProperty("id").GetString() ?? string.Empty;
                 return maps.Register(details.TryGetValue(id, out var detail) ? detail : node, dataTypes);
             }),
         ];
     }
+
+    private async Task<List<JsonElement>> FetchFieldNodesByNameAsync(
+        string projectId,
+        CancellationToken cancellationToken)
+    {
+        var nodes = new List<JsonElement>();
+        foreach (var name in _snapshotFieldNames)
+        {
+            var data = await _client.QueryWithoutInternalErrorRetryAsync(
+                FieldByNameQuery,
+                new { id = projectId, name },
+                cancellationToken).ConfigureAwait(false);
+            var node = data.GetProperty("node").GetProperty("field");
+            if (node.ValueKind == JsonValueKind.Object)
+            {
+                nodes.Add(node);
+            }
+        }
+
+        return nodes;
+    }
+
+    private static bool IsPreviewFieldInternalError(GitHubGraphQLException exception)
+        => exception.ErrorsJson?.Contains(
+            "Something went wrong while executing your query",
+            StringComparison.OrdinalIgnoreCase) == true;
 
     private static void AddFieldDataTypes(Dictionary<string, string> result, JsonElement data)
     {
@@ -1623,6 +1661,22 @@ public sealed class ProjectImporter
               configuration {
                 iterations { id title }
                 completedIterations { id title }
+              }
+            }
+          }
+        }
+        """;
+
+    private const string FieldByNameQuery =
+        """
+        query($id: ID!, $name: String!) {
+          node(id: $id) {
+            ... on ProjectV2 {
+              field(name: $name) {
+                __typename
+                ... on ProjectV2Field { id name }
+                ... on ProjectV2SingleSelectField { id name }
+                ... on ProjectV2IterationField { id name }
               }
             }
           }
