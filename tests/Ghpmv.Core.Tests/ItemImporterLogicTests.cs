@@ -70,7 +70,6 @@ public class ItemImporterLogicTests
                 """{"data":{"addProjectV2ItemById":{"item":{"id":"PVTI_target"}}}}""",
                 """{"data":{"repository":{"issueOrPullRequest":{"id":"I_target"}}}}""",
                 """{"data":{"setIssueFieldValue":{"issue":{"id":"I_target"}}}}""",
-                """{"data":{"setIssueFieldValue":{"issue":{"id":"I_target"}}}}""",
                 """{"data":{"updateProjectV2ItemPosition":{"clientMutationId":"positioned"}}}""");
             using var client = new GitHubGraphQLClient(
                 "dummy-token",
@@ -159,20 +158,19 @@ public class ItemImporterLogicTests
             var requests = handler.RequestBodies
                 .Where(body => body.Contains("setIssueFieldValue", StringComparison.Ordinal))
                 .ToArray();
-            Assert.Equal(2, requests.Length);
-            using var setDocument = JsonDocument.Parse(requests[0]);
-            var setIssueField = setDocument.RootElement
+            var request = Assert.Single(requests);
+            using var document = JsonDocument.Parse(request);
+            var issueFieldInputs = document.RootElement
                 .GetProperty("variables")
-                .GetProperty("issueFields")[0];
+                .GetProperty("issueFields");
+            Assert.Equal(2, issueFieldInputs.GetArrayLength());
+            var setIssueField = issueFieldInputs[0];
             Assert.Equal("IFM_teams", setIssueField.GetProperty("fieldId").GetString());
             Assert.Equal(
                 ["IFO_platform", "IFO_sdk"],
                 setIssueField.GetProperty("multiSelectOptionIds").EnumerateArray().Select(id => id.GetString()));
 
-            using var clearDocument = JsonDocument.Parse(requests[1]);
-            var clearIssueField = clearDocument.RootElement
-                .GetProperty("variables")
-                .GetProperty("issueFields")[0];
+            var clearIssueField = issueFieldInputs[1];
             Assert.Equal("IFM_areas", clearIssueField.GetProperty("fieldId").GetString());
             Assert.True(clearIssueField.GetProperty("delete").GetBoolean());
         }

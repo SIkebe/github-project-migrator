@@ -259,11 +259,14 @@ public sealed class ProjectExporter
             if (node.TryGetProperty("__typename", out var typeName)
                 && typeName.GetString() == "ProjectV2Field"
                 && !node.TryGetProperty("dataType", out _)
-                && !fieldDataTypes.ContainsKey(id)
                 && issueFieldsByName.TryGetValue(name, out var matchedIssueField))
             {
-                issueField = matchedIssueField;
-                capturedIssueFieldNames.Add(name);
+                var dataTypeMatches = !fieldDataTypes.TryGetValue(id, out var resolvedDataType)
+                    || string.Equals(resolvedDataType, matchedIssueField.DataType, StringComparison.Ordinal);
+                if (dataTypeMatches && capturedIssueFieldNames.Add(name))
+                {
+                    issueField = matchedIssueField;
+                }
             }
 
             if (issueField is not null)

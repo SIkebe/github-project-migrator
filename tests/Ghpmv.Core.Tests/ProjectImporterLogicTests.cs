@@ -224,6 +224,62 @@ public class ProjectImporterLogicTests
     }
 
     [Fact]
+    public async Task Import_links_issue_field_when_same_named_project_field_has_another_type()
+    {
+        var directory = Directory.CreateTempSubdirectory("ghpmv-project-import-").FullName;
+        try
+        {
+            using var handler = new IssueFieldStubHandler(existing: true, normalSameName: true);
+            using var client = new GitHubGraphQLClient(
+                "dummy-token",
+                new Uri("https://example.test/graphql"),
+                handler,
+                delayAsync: null);
+            var snapshot = MinimalSnapshot("Roadmap") with
+            {
+                Fields =
+                [
+                    new FieldSnapshot
+                    {
+                        Name = "Teams",
+                        DataType = "MULTI_SELECT",
+                        Options =
+                        [
+                            new SingleSelectOptionSnapshot { Id = "source-platform", Name = "Platform", Color = "PURPLE" },
+                            new SingleSelectOptionSnapshot { Id = "source-sdk", Name = "SDK", Color = "GREEN" },
+                        ],
+                        IssueField = new IssueFieldConfigurationSnapshot
+                        {
+                            Description = "Teams involved",
+                            Visibility = "ALL",
+                        },
+                    },
+                ],
+            };
+            var importer = new ProjectImporter(client)
+            {
+                OperationLogDirectory = directory,
+            };
+
+            var result = await importer.ImportIntoAsync(
+                snapshot,
+                "target",
+                7,
+                TestContext.Current.CancellationToken);
+
+            Assert.Equal("IFM_teams", result.IssueFieldIds["Teams"]);
+            Assert.Equal("PVTF_linked_teams", result.FieldIds["Teams"]);
+            Assert.Contains(
+                handler.RequestBodies,
+                body => body.Contains("createProjectV2IssueField", StringComparison.Ordinal));
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task Import_updates_existing_issue_field_and_registers_replaced_options()
     {
         var directory = Directory.CreateTempSubdirectory("ghpmv-project-import-").FullName;
@@ -323,7 +379,10 @@ public class ProjectImporterLogicTests
         }
     }
 
-    private sealed class IssueFieldStubHandler(bool existing = false, bool requiresUpdate = false) : HttpMessageHandler
+    private sealed class IssueFieldStubHandler(
+        bool existing = false,
+        bool requiresUpdate = false,
+        bool normalSameName = false) : HttpMessageHandler
     {
         public List<string> RequestBodies { get; } = [];
 
@@ -346,6 +405,8 @@ public class ProjectImporterLogicTests
                 _ when body.Contains("nodes(ids:", StringComparison.Ordinal) =>
                     body.Contains("PVTF_title", StringComparison.Ordinal)
                         ? """{"data":{"nodes":[{"id":"PVTF_title","dataType":"TITLE"}]}}"""
+                        : normalSameName && body.Contains("PVTF_teams", StringComparison.Ordinal)
+                            ? """{"data":{"nodes":[{"id":"PVTF_teams","dataType":"TEXT"}]}}"""
                         : """{"data":{"nodes":[null]},"errors":[{"message":"Something went wrong while executing your query on the preview API."}]}""",
                 _ when body.Contains("issueFields(first:", StringComparison.Ordinal) =>
                     existing
@@ -401,7 +462,9 @@ public class ProjectImporterLogicTests
                     }}}}
                     """,
                 _ when body.Contains("createProjectV2IssueField(", StringComparison.Ordinal) =>
-                    """{"data":{"createProjectV2IssueField":{"projectV2Field":{"id":"PVTF_teams","name":"Teams","dataType":"SINGLE_SELECT"}}}}""",
+                    normalSameName
+                        ? """{"data":{"createProjectV2IssueField":{"projectV2Field":{"id":"PVTF_linked_teams","name":"Teams","dataType":"SINGLE_SELECT"}}}}"""
+                        : """{"data":{"createProjectV2IssueField":{"projectV2Field":{"id":"PVTF_teams","name":"Teams","dataType":"SINGLE_SELECT"}}}}""",
                 _ => throw new InvalidOperationException($"Unexpected request: {body}"),
             };
             return new HttpResponseMessage(HttpStatusCode.OK)

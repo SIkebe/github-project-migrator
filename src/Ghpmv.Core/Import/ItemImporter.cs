@@ -786,6 +786,7 @@ public sealed class ItemImporter
         }
 
         var allApplied = true;
+        var issueValueInputs = new List<object>();
         foreach (var field in issueFields.Values)
         {
             if (!target.IssueFieldIds.TryGetValue(field.Name, out var issueFieldId))
@@ -810,6 +811,11 @@ public sealed class ItemImporter
                 issueValueInput = new { fieldId = issueFieldId, delete = true };
             }
 
+            issueValueInputs.Add(issueValueInput);
+        }
+
+        if (issueValueInputs.Count > 0)
+        {
             await _client.MutationAsync(
                 "setIssueFieldValue",
                 """
@@ -819,7 +825,7 @@ public sealed class ItemImporter
                   }
                 }
                 """,
-                new { issueId = targetIssueId, issueFields = new[] { issueValueInput } },
+                new { issueId = targetIssueId, issueFields = issueValueInputs },
                 MutationRetryPolicy.Idempotent,
                 target: targetIssueId,
                 requiredResultPath: "issue.id",

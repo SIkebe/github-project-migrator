@@ -654,19 +654,25 @@ public sealed class ProjectImporter
             _operationLog.PendingIssueFieldLinks.Remove(issueField.Name);
             await SaveOperationLogAsync(cancellationToken).ConfigureAwait(false);
         }
-        else if (projectFieldsByName.TryGetValue(issueField.Name, out var existingProjectField))
-        {
-            if (!string.IsNullOrEmpty(existingProjectField.TypeName)
-                && !string.Equals(existingProjectField.TypeName, "ProjectV2Field", StringComparison.Ordinal))
-            {
-                throw new InvalidOperationException(
-                    $"Project field '{issueField.Name}' already exists as {existingProjectField.TypeName}; it cannot satisfy the organization Issue Field link.");
-            }
-
-            return;
-        }
         else
         {
+            var linkCandidates = projectFields.Where(field =>
+                string.Equals(field.Name, issueField.Name, StringComparison.Ordinal)
+                && string.Equals(field.TypeName, "ProjectV2Field", StringComparison.Ordinal)
+                && (string.Equals(field.DataType, issueField.DataType, StringComparison.Ordinal)
+                    || (string.Equals(issueField.DataType, "MULTI_SELECT", StringComparison.Ordinal)
+                        && string.IsNullOrEmpty(field.DataType)))).ToArray();
+            if (linkCandidates.Length > 1)
+            {
+                throw new InvalidOperationException(
+                    $"Multiple project fields can satisfy the organization Issue Field link '{issueField.Name}'. Reconcile the target manually.");
+            }
+
+            if (linkCandidates.Length == 1)
+            {
+                return;
+            }
+
             OnProgress?.Invoke($"Linking organization Issue Field '{issueField.Name}' to the project...");
             var operationId = Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture);
             if (_operationLog is not null)

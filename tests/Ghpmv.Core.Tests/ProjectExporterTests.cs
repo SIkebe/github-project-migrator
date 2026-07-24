@@ -17,6 +17,7 @@ public class ProjectExporterTests
               "fields":{"nodes":[
                 {"__typename":"ProjectV2Field","id":"PVTF_title","name":"Title"},
                 {"__typename":"ProjectV2Field","id":"PVTF_unrelated","name":"Unrelated"},
+                {"__typename":"ProjectV2Field","id":"PVTF_notes","name":"Notes"},
                 {"__typename":"ProjectV2Field","id":"PVTF_teams","name":"Teams"}
               ]},
               "views":{"nodes":[]},"workflows":{"nodes":[]},"repositories":{"nodes":[]}
@@ -27,14 +28,20 @@ public class ProjectExporterTests
               "nodes":[{
                 "type":"ISSUE","isArchived":false,
                 "content":{"number":7,"repository":{"nameWithOwner":"source/repo"}},
-                "fieldValues":{"nodes":[{
-                  "__typename":"ProjectV2ItemIssueFieldValue",
-                  "field":{"name":"Teams"},
-                  "issueFieldValue":{
-                    "__typename":"IssueFieldMultiSelectValue",
-                    "options":[{"name":"Platform"},{"name":"SDK"}]
+                "fieldValues":{"nodes":[
+                  {
+                    "__typename":"ProjectV2ItemIssueFieldValue",
+                    "field":{"name":"Teams"},
+                    "issueFieldValue":{
+                      "__typename":"IssueFieldMultiSelectValue",
+                      "options":[{"name":"Platform"},{"name":"SDK"}]
+                    }
+                  },{
+                    "__typename":"ProjectV2ItemIssueFieldValue",
+                    "field":{"name":"Notes"},
+                    "issueFieldValue":{"__typename":"IssueFieldTextValue","value":"Needs review"}
                   }
-                }]}
+                ]}
               }],
               "pageInfo":{"hasNextPage":false,"endCursor":null}
             }}}}}
@@ -53,6 +60,10 @@ public class ProjectExporterTests
                 {
                   "__typename":"IssueFieldMultiSelect","id":"IFM_unrelated","name":"Unrelated",
                   "dataType":"MULTI_SELECT","description":null,"visibility":"ALL","options":[]
+                },
+                {
+                  "__typename":"IssueFieldText","id":"IFT_notes","name":"Notes",
+                  "dataType":"TEXT","description":"Review notes","visibility":"ALL"
                 }
               ],
               "pageInfo":{"hasNextPage":false,"endCursor":null}
@@ -60,7 +71,8 @@ public class ProjectExporterTests
             """,
             """
             {"data":{"nodes":[
-              {"id":"PVTF_title","dataType":"TITLE"}
+              {"id":"PVTF_title","dataType":"TITLE"},
+              {"id":"PVTF_notes","dataType":"TEXT"}
             ]}}
             """,
             """
@@ -92,11 +104,15 @@ public class ProjectExporterTests
         var unrelated = snapshot.Fields.Single(candidate => candidate.Name == "Unrelated");
         Assert.Equal("TEXT", unrelated.DataType);
         Assert.Null(unrelated.IssueField);
+        var notes = snapshot.Fields.Single(candidate => candidate.Name == "Notes");
+        Assert.Equal("TEXT", notes.DataType);
+        Assert.Equal("Review notes", notes.IssueField!.Description);
 
         var item = Assert.Single(snapshot.Items);
         Assert.Equal(
             ["Platform", "SDK"],
-            Assert.Single(item.FieldValues).MultiSelectOptionNames);
+            item.FieldValues.Single(value => value.FieldName == "Teams").MultiSelectOptionNames);
+        Assert.Equal("Needs review", item.FieldValues.Single(value => value.FieldName == "Notes").Text);
         Assert.Equal(6, handler.RequestBodies.Count);
         Assert.DoesNotContain("dataType", handler.RequestBodies[0], StringComparison.Ordinal);
     }
