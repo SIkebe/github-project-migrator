@@ -27,6 +27,12 @@ public sealed record BrowserSessionOptions
     /// </summary>
     public string? Profile { get; init; }
 
+    /// <summary>
+    /// Load <see cref="BrowserSession.StatePath"/> when creating the browser context.
+    /// Disable for interactive login so an existing profile cannot silently reuse its account.
+    /// </summary>
+    public bool LoadStoredState { get; init; } = true;
+
     /// <summary>Slow-motion delay in milliseconds between Playwright operations (debugging aid).</summary>
     public float? SlowMoMs { get; init; }
 }

@@ -194,18 +194,20 @@ fine-grained PAT を作成する場合は、README の [pre-filled token creatio
 
 - Repository access: **All repositories**
 - Repository permissions: **Administration: Read and write**、**Contents: Read and write**、**Issues: Read and write**、**Pull requests: Read and write**
-- Organization permissions: **Projects: Read and write**
+- Organization permissions: **Projects: Read and write**、**Issue Fields: Read and write**
 - Organization が要求する token approval
 
-この設定は token owner 自身の権限を超えません。token owner の organization role、member に許可された repository visibility、organization の PAT 制限・承認ポリシー、SSO authorization は別に確認します。`setup --fixture` の前に SKILL の permission preflight を実行し、403 の場合は原因を断定せず、これらの設定を確認します。
+GitHub の [fine-grained PAT permission matrix](https://docs.github.com/en/rest/authentication/permissions-required-for-fine-grained-personal-access-tokens#organization-permissions-for-issue-fields) は、organization Issue Field の読み取りに **Issue Fields: read**、作成・更新・削除に **Issue Fields: write** を要求しています。pre-filled URL では `issue_fields=write` を指定します。
+
+この設定は token owner 自身の権限を超えません。token owner の organization role、member に許可された repository visibility、organization の PAT 制限・承認ポリシー、SSO authorization は別に確認します。`setup --fixture` の前に SKILL の repository 作成と Issue Field 作成の permission preflight を実行し、403 の場合は原因を断定せず、これらの設定を確認します。
 
 **Administration** または **All repositories** を付与できない場合は、空 repository を先に作成し、その repository を選択した fine-grained PAT に Administration 以外の fixture 権限を付与します。classic PAT を使う場合は次の scope を使用します。
 
 - `repo`
 - `project`
-- `read:org`
+- `admin:org`
 
-classic PAT に `read:org` がない場合、fixture Project の存在確認で Organization ID を取得する GraphQL query が `INSUFFICIENT_SCOPES` になります。
+`admin:org` は fixture の organization Issue Field 作成に必要で、`read:org` を含みます。GitHub は [Create issue field for an organization](https://docs.github.com/en/rest/orgs/issue-fields#create-issue-field-for-an-organization) で classic PAT に `admin:org` を要求しています。
 
 GEI repository migration は fixture setup と別の権限体系です。GitHub の [Managing access for a migration between GitHub products](https://docs.github.com/en/migrations/using-github-enterprise-importer/migrating-between-github-products/managing-access-for-a-migration-between-github-products#required-scopes-for-personal-access-tokens) に従い、fine-grained PAT ではなく classic PAT を使います。
 
@@ -215,7 +217,7 @@ GEI repository migration は fixture setup と別の権限体系です。GitHub 
 | destination | Organization owner | `repo`, `admin:org`, `workflow` |
 | destination | destination organization の migrator | `repo`, `read:org`, `workflow` |
 
-GEI には `GHPMV_GEI_SOURCE_TOKEN` / `GHPMV_GEI_TARGET_TOKEN` を分けて用意することを推奨します。同じ classic PAT を fixture、`ghpmv`、GEI で再利用する場合は、実行する全用途の scope の和集合が必要です。fixture 用の `repo`, `project`, `read:org` だけでは GEI migration を queue できません。source / destination のどちらでも、token のユーザーが Organization owner または対象 organization に明示的に付与された migrator role を持つことを確認してください。
+GEI には `GHPMV_GEI_SOURCE_TOKEN` / `GHPMV_GEI_TARGET_TOKEN` を分けて用意することを推奨します。同じ classic PAT を fixture、`ghpmv`、GEI で再利用する場合は、実行する全用途の scope の和集合が必要です。fixture 用の `repo`, `project`, `admin:org` だけでは destination 側で必要な `workflow` を満たしません。source / destination のどちらでも、token のユーザーが Organization owner または対象 organization に明示的に付与された migrator role を持つことを確認してください。
 
 `gh auth login` / `gh auth refresh` を使う場合も、Project 操作に必要な scope を含めます。
 
@@ -238,14 +240,17 @@ dotnet run --project src/Ghpmv.Cli -c Release --no-build -- setup --browsers
 Source / target の browser profile を作成します。
 
 ```powershell
-dotnet run --project src/Ghpmv.Cli -c Release --no-build -- login --profile source
-dotnet run --project src/Ghpmv.Cli -c Release --no-build -- login --profile target
+dotnet run --project src/Ghpmv.Cli -c Release --no-build -- login --profile source --expected-login <source-login>
+dotnet run --project src/Ghpmv.Cli -c Release --no-build -- login --profile target --expected-login <target-login>
 ```
+
+`login` は既存 profile の cookie を読み込まない fresh browser context で開始します。
+`--expected-login` と異なるアカウントで認証された場合は、profile state を上書きせず失敗します。
 
 GHEC with data residency target の場合は、target profile に tenant host を指定します。
 
 ```powershell
-dotnet run --project src/Ghpmv.Cli -c Release --no-build -- login --profile target --base-url https://TENANT.ghe.com
+dotnet run --project src/Ghpmv.Cli -c Release --no-build -- login --profile target --expected-login <target-login> --base-url https://TENANT.ghe.com
 ```
 
 ---
@@ -539,7 +544,7 @@ warning / error が出た場合は、次の観点で切り分けます。
 | `saml_failure` | PAT の organization SSO authorization 漏れ | GitHub settings で token / GitHub CLI を Authorize。 |
 | Browser session expired | `ghpmv login --profile ...` 未実施または期限切れ | source / target profile で再ログイン。 |
 | `The browser session is not signed in to 'github.com'` | 保存済み target browser session の失効、または profile 間違い | `ghpmv login --profile target` を再実行し、target token と同じユーザーでログイン。 |
-| `Resource not accessible by personal access token` (`setup --fixture`) | token permission、token owner の role、repository creation / PAT policy、approval、SSO のいずれか | 4.3 の各条件を確認し、原因を permission 一つに断定しない。解決できない場合は空 repository を先に作成するか、classic PAT を使用。 |
+| `Resource not accessible by personal access token` (`setup --fixture`) | repository endpoint では Repository **Administration** / access、`organization.issueFields` では Organization **Issue Fields**、または token owner の role、repository creation / PAT policy、approval、SSO | 4.3 の各条件を確認。Issue Field の失敗には `issue_fields=write` を付与し、2つの preflight が両方 422 になることを確認する。解決できない場合は空 repository を先に作成するか、classic PAT (`repo`, `project`, `admin:org`) を使用。 |
 | `INSUFFICIENT_SCOPES` と `id` / `read:org` | fixture setup 用 classic PAT に `read:org` がない | token に `read:org` を追加し、必要なら SSO を再承認。 |
 | Workflow 保存失敗 | target plan の Auto-add 上限、target repo 不可視、filter 不正 | warning 内容と UI を確認。 |
 | Collaborator skip | target user / team が存在しない、権限不足 | mapping と target org membership を確認。 |
