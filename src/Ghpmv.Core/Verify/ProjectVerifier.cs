@@ -66,6 +66,7 @@ public sealed class ProjectVerifier
             OnProgress = OnProgress,
             OwnerType = OwnerType,
             PostExportAsync = PostExportAsync,
+            FieldNameHints = source.Fields.Select(field => field.Name).ToArray(),
         };
         var target = await exporter.ExportAsync(targetOrgLogin, targetProjectNumber, cancellationToken).ConfigureAwait(false);
         return Compare(source, target, RepositoryMapping, UserMapping, OrganizationMapping);
@@ -123,7 +124,12 @@ public sealed class ProjectVerifier
         CompareFields(source.Fields, target.Fields, differences);
         CompareViews(source.Views, target.Views, differences, notVerified);
         CompareWorkflows(source.Workflows, target.Workflows, differences, notVerified);
-        CompareItems(source.Items, target.Items, differences);
+        CompareItems(
+            source.Items,
+            target.Items,
+            source.Fields.Where(field => field.IssueField is not null).Select(field => field.Name).ToHashSet(StringComparer.Ordinal),
+            target.Fields.Where(field => field.IssueField is not null).Select(field => field.Name).ToHashSet(StringComparer.Ordinal),
+            differences);
         CompareCollaborators(source.Collaborators, target.Collaborators, differences, notVerified);
         CompareLinkedRepositories(source.LinkedRepositories, target.LinkedRepositories, differences, notVerified);
         return new VerifyReport
@@ -792,7 +798,12 @@ public sealed class ProjectVerifier
 
     // ----- items -----
 
-    private static void CompareItems(IReadOnlyList<ItemSnapshot> source, IReadOnlyList<ItemSnapshot> target, List<VerifyDifference> differences)
+    private static void CompareItems(
+        IReadOnlyList<ItemSnapshot> source,
+        IReadOnlyList<ItemSnapshot> target,
+        IReadOnlySet<string> sourceIssueFields,
+        IReadOnlySet<string> targetIssueFields,
+        List<VerifyDifference> differences)
     {
         var sourceOrdered = source.OrderBy(i => i.Position).ToList();
         var targetOrdered = target.OrderBy(i => i.Position).ToList();
@@ -833,7 +844,7 @@ public sealed class ProjectVerifier
 
             for (var i = 0; i < Math.Min(items.Count, targetItems.Count); i++)
             {
-                CompareItemPair(items[i], targetItems[i], key, differences);
+                CompareItemPair(items[i], targetItems[i], key, sourceIssueFields, targetIssueFields, differences);
             }
         }
 
@@ -866,7 +877,13 @@ public sealed class ProjectVerifier
         }
     }
 
-    private static void CompareItemPair(ItemSnapshot source, ItemSnapshot target, string key, List<VerifyDifference> differences)
+    private static void CompareItemPair(
+        ItemSnapshot source,
+        ItemSnapshot target,
+        string key,
+        IReadOnlySet<string> sourceIssueFields,
+        IReadOnlySet<string> targetIssueFields,
+        List<VerifyDifference> differences)
     {
         if (source.IsArchived != target.IsArchived)
         {
@@ -874,7 +891,7 @@ public sealed class ProjectVerifier
                 $"{key}: archived state mismatch (source {source.IsArchived}, target {target.IsArchived})"));
         }
 
-        CompareFieldValues(source, target, key, differences);
+        CompareFieldValues(source, target, key, sourceIssueFields, targetIssueFields, differences);
 
         if (source.Draft is not null && target.Draft is not null)
         {
@@ -888,10 +905,16 @@ public sealed class ProjectVerifier
         }
     }
 
-    private static void CompareFieldValues(ItemSnapshot source, ItemSnapshot target, string key, List<VerifyDifference> differences)
+    private static void CompareFieldValues(
+        ItemSnapshot source,
+        ItemSnapshot target,
+        string key,
+        IReadOnlySet<string> sourceIssueFields,
+        IReadOnlySet<string> targetIssueFields,
+        List<VerifyDifference> differences)
     {
-        var sourceValues = ToValueMap(source.FieldValues);
-        var targetValues = ToValueMap(target.FieldValues);
+        var sourceValues = ToValueMap(source.FieldValues, sourceIssueFields);
+        var targetValues = ToValueMap(target.FieldValues, targetIssueFields);
 
         var identities = sourceValues.Keys
             .Concat(targetValues.Keys)
@@ -910,14 +933,18 @@ public sealed class ProjectVerifier
         }
     }
 
-    private static Dictionary<FieldValueIdentity, FieldValueSnapshot> ToValueMap(IReadOnlyList<FieldValueSnapshot> values)
+    private static Dictionary<FieldValueIdentity, FieldValueSnapshot> ToValueMap(
+        IReadOnlyList<FieldValueSnapshot> values,
+        IReadOnlySet<string> issueFields)
     {
         var map = new Dictionary<FieldValueIdentity, FieldValueSnapshot>();
         foreach (var value in values)
         {
             if (HasValue(value))
             {
-                map.TryAdd(new FieldValueIdentity(value.FieldName, value.IsIssueField == true), value);
+                map.TryAdd(
+                    new FieldValueIdentity(value.FieldName, value.IsIssueField ?? issueFields.Contains(value.FieldName)),
+                    value);
             }
         }
 

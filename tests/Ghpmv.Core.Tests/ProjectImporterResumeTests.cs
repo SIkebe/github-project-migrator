@@ -261,7 +261,7 @@ public class ProjectImporterResumeTests
             handler.Resume = true;
             var result = await importer.ImportIntoAsync(IssueFieldSnapshot(), "target", 7, cancellationToken);
 
-            Assert.Equal("PVTF_created", result.FieldIds["Teams"]);
+            Assert.False(result.FieldIds.ContainsKey("Teams"));
             Assert.Equal(1, handler.LinkCreateMutationCount);
             Assert.Empty((await ProjectImportLog.LoadAsync(directory, cancellationToken)).PendingIssueFieldLinks);
         }
@@ -489,8 +489,13 @@ public class ProjectImporterResumeTests
                 }
 
                 return ReturnDuplicates
-                    ? Json("""{"data":{"node":{"fields":{"nodes":[{"__typename":"ProjectV2Field","id":"PVTF_created_1","name":"Teams","dataType":"MULTI_SELECT"},{"__typename":"ProjectV2Field","id":"PVTF_created_2","name":"Teams","dataType":"MULTI_SELECT"}]}}}}""")
-                    : Json("""{"data":{"node":{"fields":{"nodes":[{"__typename":"ProjectV2Field","id":"PVTF_created","name":"Teams","dataType":"MULTI_SELECT"}]}}}}""");
+                    ? Json("""{"data":{"node":{"fields":{"nodes":[{"__typename":"ProjectV2Field","id":"PVTF_created_1","name":"Teams"},{"__typename":"ProjectV2Field","id":"PVTF_created_2","name":"Teams"}]}}}}""")
+                    : Json("""{"data":{"node":{"fields":{"nodes":[{"__typename":"ProjectV2Field","id":"PVTF_created","name":"Teams"}]}}}}""");
+            }
+
+            if (query.Contains("nodes(ids:", StringComparison.Ordinal))
+            {
+                return Json("""{"data":{"nodes":[null]},"errors":[{"message":"Something went wrong while executing your query on the preview API."}]}""");
             }
 
             if (query.Contains("issueFields(first:", StringComparison.Ordinal))
@@ -527,7 +532,7 @@ public class ProjectImporterResumeTests
                     throw new HttpRequestException("Response ended prematurely.");
                 }
 
-                return Json("""{"data":{"createProjectV2IssueField":{"projectV2Field":{"__typename":"ProjectV2Field","id":"PVTF_created","name":"Teams","dataType":"MULTI_SELECT"}}}}""");
+                return Json("""{"data":{"createProjectV2IssueField":{"clientMutationId":"link-operation"}}}""");
             }
 
             if (query.Contains("organization(login:", StringComparison.Ordinal))

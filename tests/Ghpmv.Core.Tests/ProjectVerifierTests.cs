@@ -700,6 +700,28 @@ public class ProjectVerifierTests
     }
 
     [Fact]
+    public void Legacy_issue_field_value_without_discriminator_uses_field_definition()
+    {
+        var target = WithMultiSelectIssueField(BuildSnapshot(), ["Platform"]);
+        var source = target with
+        {
+            Items = target.Items.Select(item => item.Type == "ISSUE"
+                ? item with
+                {
+                    FieldValues = item.FieldValues.Select(value =>
+                        value is { FieldName: "Teams", IsIssueField: true }
+                            ? value with { IsIssueField = null }
+                            : value).ToList(),
+                }
+                : item).ToList(),
+        };
+
+        var report = ProjectVerifier.Compare(source, target);
+
+        Assert.True(report.IsMatch);
+    }
+
+    [Fact]
     public void Same_named_project_and_issue_field_values_are_compared_independently()
     {
         var source = WithMultiSelectIssueField(BuildSnapshot(), ["Platform"]);

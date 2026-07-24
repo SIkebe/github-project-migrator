@@ -49,7 +49,9 @@ public class ProjectExporterTests
               {"__typename":"ProjectV2Field","id":"PVTF_title","name":"Title"},
               {"__typename":"ProjectV2Field","id":"PVTF_unrelated","name":"Unrelated"},
               {"__typename":"ProjectV2Field","id":"PVTF_notes","name":"Notes"},
-              {"__typename":"ProjectV2Field","id":"PVTF_teams","name":"Teams"}
+              {"__typename":"ProjectV2Field","id":"PVTF_teams","name":"Teams"},
+              {"__typename":"ProjectV2RepositoryField","id":"PVTF_repository","name":"Repository"},
+              {"__typename":"ProjectV2MilestoneField","id":"PVTF_milestone","name":"Milestone"}
             ]}}}}}
             """,
             """
@@ -113,6 +115,8 @@ public class ProjectExporterTests
         var notes = snapshot.Fields.Single(candidate => candidate.Name == "Notes");
         Assert.Equal("TEXT", notes.DataType);
         Assert.Equal("Review notes", notes.IssueField!.Description);
+        Assert.Equal("REPOSITORY", snapshot.Fields.Single(candidate => candidate.Name == "Repository").DataType);
+        Assert.Equal("MILESTONE", snapshot.Fields.Single(candidate => candidate.Name == "Milestone").DataType);
 
         var item = Assert.Single(snapshot.Items);
         Assert.Equal(
@@ -237,9 +241,7 @@ public class ProjectExporterTests
               "nodes":[{"type":"ISSUE","isArchived":false,
                 "content":{"number":7,"repository":{"nameWithOwner":"source/repo"}},
                 "fieldValues":{"nodes":[
-                  {"__typename":"ProjectV2ItemFieldTextValue","text":"Ready","field":{"name":"Notes"}},
-                  {"__typename":"ProjectV2ItemIssueFieldValue","field":{"name":"Teams"},
-                   "issueFieldValue":{"__typename":"IssueFieldMultiSelectValue","options":[{"name":"SDK"}]}}
+                  {"__typename":"ProjectV2ItemFieldTextValue","text":"Ready","field":{"name":"Notes"}}
                 ]}}],
               "pageInfo":{"hasNextPage":false,"endCursor":null}
             }}}}}
@@ -273,8 +275,13 @@ public class ProjectExporterTests
             """,
             """
             {"data":{"organization":{"projectV2":{"field":{
-              "__typename":"ProjectV2Field","id":"PVTF_notes","name":"Notes"
+              "__typename":"ProjectV2Field","id":"PVTF_unobserved","name":"Unobserved"
             }}}}}
+            """,
+            """
+            {"data":{"organization":{"projectV2":{"field":null}}},"errors":[
+              {"type":"NOT_FOUND","message":"Could not resolve to a Unions::ProjectV2FieldConfiguration with the name Missing"}
+            ]}
             """,
             """
             {"data":{"organization":{"projectV2":{"field":null}}},"errors":[
@@ -282,7 +289,15 @@ public class ProjectExporterTests
             ]}
             """,
             """
-            {"data":{"nodes":[{"id":"PVTF_notes","dataType":"TEXT"}]}}
+            {"data":{"organization":{"projectV2":{"field":{
+              "__typename":"ProjectV2Field","id":"PVTF_notes","name":"Notes"
+            }}}}}
+            """,
+            """
+            {"data":{"nodes":[
+              {"id":"PVTF_unobserved","dataType":"NUMBER"},
+              {"id":"PVTF_notes","dataType":"TEXT"}
+            ]}}
             """);
         using var client = new GitHubGraphQLClient(
             "dummy-token",
@@ -290,14 +305,20 @@ public class ProjectExporterTests
             handler,
             delayAsync: static (_, _) => Task.CompletedTask);
 
-        var snapshot = await new ProjectExporter(client).ExportAsync(
+        var snapshot = await new ProjectExporter(client)
+        {
+            FieldNameHints = ["Unobserved", "Missing", "Teams"],
+        }.ExportAsync(
             "source",
             1,
             TestContext.Current.CancellationToken);
 
+        Assert.Equal("NUMBER", snapshot.Fields.Single(field => field.Name == "Unobserved").DataType);
         Assert.Equal("TEXT", snapshot.Fields.Single(field => field.Name == "Notes").DataType);
         Assert.Equal("MULTI_SELECT", snapshot.Fields.Single(field => field.Name == "Teams").DataType);
-        Assert.Equal(10, handler.RequestBodies.Count);
+        Assert.Equal(12, handler.RequestBodies.Count);
+        Assert.Contains(handler.RequestBodies, body => body.Contains("\"name\":\"Unobserved\"", StringComparison.Ordinal));
+        Assert.DoesNotContain(snapshot.Fields, field => field.Name == "Missing");
         Assert.Contains(handler.RequestBodies, body => body.Contains("\"name\":\"Notes\"", StringComparison.Ordinal));
         Assert.Contains(handler.RequestBodies, body => body.Contains("\"name\":\"Teams\"", StringComparison.Ordinal));
     }

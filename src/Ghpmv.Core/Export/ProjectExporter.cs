@@ -28,6 +28,12 @@ public sealed class ProjectExporter
     /// <summary>Owner type of the source project(s): organization (default) or user.</summary>
     public ProjectOwnerType OwnerType { get; init; } = ProjectOwnerType.Organization;
 
+    /// <summary>
+    /// Optional field names to query individually when the preview API cannot enumerate
+    /// a project containing linked Issue Fields.
+    /// </summary>
+    public IReadOnlyCollection<string> FieldNameHints { get; set; } = [];
+
     /// <summary>Invoked with a human-readable progress message at each export stage.</summary>
     public Action<string>? OnProgress { get; set; }
 
@@ -62,6 +68,7 @@ public sealed class ProjectExporter
         var observedFieldNames = new List<string>();
         var observedFieldNameSet = new HashSet<string>(StringComparer.Ordinal);
         CollectViewFieldNames(views, observedFieldNames, observedFieldNameSet);
+        AddObservedFieldNames(observedFieldNames, observedFieldNameSet, FieldNameHints);
         var items = await FetchItemsAsync(
             ownerLogin,
             projectNumber,
@@ -94,6 +101,7 @@ public sealed class ProjectExporter
                 projectNumber,
                 observedFieldNames,
                 multiSelectIssueFieldNames,
+                issueFieldNames,
                 cancellationToken).ConfigureAwait(false);
         }
 
@@ -222,6 +230,10 @@ public sealed class ProjectExporter
             "Something went wrong while executing your query",
             StringComparison.OrdinalIgnoreCase) == true;
 
+    private static bool IsMissingProjectFieldError(GitHubGraphQLException exception) =>
+        exception.ErrorsJson?.Contains("\"type\":\"NOT_FOUND\"", StringComparison.Ordinal) == true
+        && exception.ErrorsJson.Contains("ProjectV2FieldConfiguration", StringComparison.Ordinal);
+
     private static void CollectViewFieldNames(
         IEnumerable<ViewSnapshot> views,
         List<string> fieldNames,
@@ -308,6 +320,7 @@ public sealed class ProjectExporter
         int projectNumber,
         IEnumerable<string> fieldNames,
         HashSet<string> multiSelectIssueFieldNames,
+        HashSet<string> linkedIssueFieldNames,
         CancellationToken cancellationToken)
     {
         var nodes = new List<JsonElement>();
@@ -330,6 +343,11 @@ public sealed class ProjectExporter
                 && IsPreviewFieldResolutionError(exception))
             {
                 // The organization Issue Field catalog supplies this linked field's definition.
+                linkedIssueFieldNames.Add(fieldName);
+            }
+            catch (GitHubGraphQLException exception) when (IsMissingProjectFieldError(exception))
+            {
+                // A verification hint can name a field that was deleted from the target.
             }
         }
 
@@ -462,6 +480,8 @@ public sealed class ProjectExporter
                 {
                     "ProjectV2SingleSelectField" => "SINGLE_SELECT",
                     "ProjectV2IterationField" => "ITERATION",
+                    "ProjectV2RepositoryField" => "REPOSITORY",
+                    "ProjectV2MilestoneField" => "MILESTONE",
                     _ when fieldDataTypes.TryGetValue(id, out var value) => value,
                     _ => null,
                 };

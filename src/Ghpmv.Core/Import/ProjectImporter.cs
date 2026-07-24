@@ -309,6 +309,14 @@ public sealed class ProjectImporter
         var existingFields = new Dictionary<string, TargetField>(StringComparer.Ordinal);
         foreach (var existingField in existingFieldList)
         {
+            if (string.Equals(existingField.TypeName, "ProjectV2Field", StringComparison.Ordinal)
+                && string.IsNullOrEmpty(existingField.DataType)
+                && _snapshotIssueFieldNames.Contains(existingField.Name)
+                && _targetIssueFieldNames.Contains(existingField.Name))
+            {
+                continue;
+            }
+
             existingFields[existingField.Name] = existingField;
         }
 
@@ -715,10 +723,9 @@ public sealed class ProjectImporter
                 await SaveOperationLogAsync(cancellationToken).ConfigureAwait(false);
             }
 
-            JsonElement linkData;
             try
             {
-                linkData = await CreateProjectIssueFieldAsync(
+                await CreateProjectIssueFieldAsync(
                     projectId,
                     issueField.Id,
                     operationId,
@@ -739,20 +746,20 @@ public sealed class ProjectImporter
                 throw;
             }
 
-            linkedField = maps.RegisterIssueFieldLink(
-                linkData.GetProperty("createProjectV2IssueField").GetProperty("projectV2Field"));
             if (_operationLog is not null)
             {
                 _operationLog.PendingIssueFieldLinks.Remove(issueField.Name);
                 await SaveOperationLogAsync(cancellationToken).ConfigureAwait(false);
             }
+
+            return;
         }
 
         projectFields.Add(linkedField);
         projectFieldsByName[linkedField.Name] = linkedField;
     }
 
-    private async Task<JsonElement> CreateProjectIssueFieldAsync(
+    private async Task CreateProjectIssueFieldAsync(
         string projectId,
         string issueFieldId,
         string clientMutationId,
@@ -762,17 +769,14 @@ public sealed class ProjectImporter
             """
             mutation($projectId: ID!, $issueFieldId: ID!, $clientMutationId: String!) {
               createProjectV2IssueField(input: { projectId: $projectId, issueFieldId: $issueFieldId, clientMutationId: $clientMutationId }) {
-                projectV2Field {
-                  __typename
-                  ... on ProjectV2FieldCommon { id name }
-                }
+                clientMutationId
               }
             }
             """,
             new { projectId, issueFieldId },
             target: projectId,
             clientMutationId: clientMutationId,
-            requiredResultPath: "projectV2Field.id",
+            requiredResultPath: "clientMutationId",
             cancellationToken: cancellationToken).ConfigureAwait(false);
 
     /// <summary>
@@ -1177,9 +1181,10 @@ public sealed class ProjectImporter
                 var isIssueFieldLink = node.TryGetProperty("__typename", out var typeName)
                     && typeName.GetString() == "ProjectV2Field"
                     && _targetIssueFieldNames.Contains(node.GetProperty("name").GetString() ?? string.Empty)
+                    && !node.TryGetProperty("dataType", out _)
                     && !dataTypes.ContainsKey(id);
                 return isIssueFieldLink
-                    ? maps.RegisterIssueFieldLink(fieldNode)
+                    ? FieldMaps.RegisterIssueFieldLink(fieldNode)
                     : maps.Register(fieldNode, dataTypes);
             }),
         ];
@@ -1565,8 +1570,15 @@ public sealed class ProjectImporter
         public TargetField Register(JsonElement node, Dictionary<string, string>? dataTypes)
             => Register(node, dataTypes, overwriteFieldId: true);
 
-        public TargetField RegisterIssueFieldLink(JsonElement node)
-            => Register(node, null, overwriteFieldId: false);
+        public static TargetField RegisterIssueFieldLink(JsonElement node)
+        {
+            var id = node.GetProperty("id").GetString() ?? throw new GitHubGraphQLException("Field id was null.");
+            var name = node.GetProperty("name").GetString() ?? throw new GitHubGraphQLException("Field name was null.");
+            var typeName = node.TryGetProperty("__typename", out var typeElement)
+                ? typeElement.GetString() ?? "ProjectV2Field"
+                : "ProjectV2Field";
+            return new TargetField(id, name, string.Empty, typeName);
+        }
 
         private TargetField Register(
             JsonElement node,
@@ -1703,9 +1715,7 @@ public sealed class ProjectImporter
               fields(first: 50) {
                 nodes {
                   __typename
-                  ... on ProjectV2Field { id name }
-                  ... on ProjectV2SingleSelectField { id name }
-                  ... on ProjectV2IterationField { id name }
+                  ... on ProjectV2FieldCommon { id name }
                 }
               }
             }

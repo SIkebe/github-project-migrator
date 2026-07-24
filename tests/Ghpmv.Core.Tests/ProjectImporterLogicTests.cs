@@ -151,12 +151,13 @@ public class ProjectImporterLogicTests
             Assert.Equal("IFM_teams", result.IssueFieldIds["Teams"]);
             Assert.Equal("IFO_platform", result.IssueFieldOptionIds["Teams"]["Platform"]);
             Assert.Equal("IFO_sdk", result.IssueFieldOptionIds["Teams"]["SDK"]);
-            Assert.Equal("PVTF_teams", result.FieldIds["Teams"]);
+            Assert.False(result.FieldIds.ContainsKey("Teams"));
             Assert.Contains(handler.RequestBodies, body => body.Contains("createIssueField", StringComparison.Ordinal));
             var linkMutation = Assert.Single(
                 handler.RequestBodies,
                 body => body.Contains("createProjectV2IssueField", StringComparison.Ordinal));
-            Assert.DoesNotContain("id name dataType", linkMutation, StringComparison.Ordinal);
+            Assert.Contains("clientMutationId", linkMutation, StringComparison.Ordinal);
+            Assert.DoesNotContain("projectV2Field", linkMutation, StringComparison.Ordinal);
         }
         finally
         {
@@ -217,7 +218,7 @@ public class ProjectImporterLogicTests
                 body => body.Contains("fields(first:", StringComparison.Ordinal));
             Assert.DoesNotContain("id name dataType", fieldsQuery, StringComparison.Ordinal);
             Assert.DoesNotContain("options", fieldsQuery, StringComparison.Ordinal);
-            Assert.DoesNotContain("ProjectV2FieldCommon", fieldsQuery, StringComparison.Ordinal);
+            Assert.Contains("ProjectV2FieldCommon", fieldsQuery, StringComparison.Ordinal);
         }
         finally
         {
@@ -484,9 +485,7 @@ public class ProjectImporterLogicTests
                     }}}}
                     """,
                 _ when body.Contains("createProjectV2IssueField(", StringComparison.Ordinal) =>
-                    normalSameName
-                        ? """{"data":{"createProjectV2IssueField":{"projectV2Field":{"id":"PVTF_linked_teams","name":"Teams","dataType":"SINGLE_SELECT"}}}}"""
-                        : """{"data":{"createProjectV2IssueField":{"projectV2Field":{"id":"PVTF_teams","name":"Teams","dataType":"SINGLE_SELECT"}}}}""",
+                    """{"data":{"createProjectV2IssueField":{"clientMutationId":"link-operation"}}}""",
                 _ => throw new InvalidOperationException($"Unexpected request: {body}"),
             };
             return new HttpResponseMessage(HttpStatusCode.OK)
