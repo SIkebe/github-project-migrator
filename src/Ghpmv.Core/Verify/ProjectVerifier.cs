@@ -226,20 +226,26 @@ public sealed class ProjectVerifier
 
     private static void CompareFields(IReadOnlyList<FieldSnapshot> source, IReadOnlyList<FieldSnapshot> target, List<VerifyDifference> differences)
     {
-        var targetByName = new Dictionary<string, FieldSnapshot>(StringComparer.Ordinal);
-        foreach (var field in target)
-        {
-            targetByName.TryAdd(field.Name, field);
-        }
+        var unmatchedTarget = target.ToList();
 
         foreach (var field in source)
         {
-            if (!targetByName.TryGetValue(field.Name, out var other))
+            var targetIndex = unmatchedTarget.FindIndex(candidate =>
+                FieldIdentityEquals(field, candidate));
+            if (targetIndex < 0)
+            {
+                targetIndex = unmatchedTarget.FindIndex(candidate =>
+                    string.Equals(field.Name, candidate.Name, StringComparison.Ordinal));
+            }
+
+            if (targetIndex < 0)
             {
                 AddError(differences, FieldCategory, $"field '{field.Name}' ({field.DataType}) is missing in the target");
                 continue;
             }
 
+            var other = unmatchedTarget[targetIndex];
+            unmatchedTarget.RemoveAt(targetIndex);
             if (!string.Equals(field.DataType, other.DataType, StringComparison.Ordinal))
             {
                 AddError(differences, FieldCategory,
@@ -252,13 +258,17 @@ public sealed class ProjectVerifier
             CompareIssueFieldConfiguration(field, other, differences);
         }
 
-        var sourceNames = source.Select(f => f.Name).ToHashSet(StringComparer.Ordinal);
-        foreach (var extra in target.Where(f => !sourceNames.Contains(f.Name)))
+        foreach (var extra in unmatchedTarget)
         {
             Add(differences, VerifySeverity.Warning, FieldCategory,
                 $"field '{extra.Name}' ({extra.DataType}) exists only in the target");
         }
     }
+
+    private static bool FieldIdentityEquals(FieldSnapshot first, FieldSnapshot second) =>
+        string.Equals(first.Name, second.Name, StringComparison.Ordinal)
+        && string.Equals(first.DataType, second.DataType, StringComparison.Ordinal)
+        && (first.IssueField is null) == (second.IssueField is null);
 
     private static void CompareOptions(FieldSnapshot source, FieldSnapshot target, List<VerifyDifference> differences)
     {

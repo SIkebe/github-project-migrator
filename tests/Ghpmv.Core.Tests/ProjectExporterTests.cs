@@ -120,6 +120,46 @@ public class ProjectExporterTests
     }
 
     [Fact]
+    public async Task Export_without_issue_fields_does_not_read_the_organization_catalog()
+    {
+        using var handler = new StubHandler(
+            """
+            {"data":{"organization":{"projectV2":{
+              "title":"Roadmap","shortDescription":null,"readme":null,"public":false,"closed":false,
+              "views":{"nodes":[]},"workflows":{"nodes":[]},"repositories":{"nodes":[]}
+            }}}}
+            """,
+            """
+            {"data":{"organization":{"projectV2":{"items":{
+              "nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}
+            }}}}}
+            """,
+            """
+            {"data":{"organization":{"projectV2":{"fields":{"nodes":[
+              {"__typename":"ProjectV2Field","id":"PVTF_notes","name":"Notes"}
+            ]}}}}}
+            """,
+            """
+            {"data":{"nodes":[{"id":"PVTF_notes","dataType":"TEXT"}]}}
+            """);
+        using var client = new GitHubGraphQLClient(
+            "dummy-token",
+            new Uri("https://example.test/graphql"),
+            handler,
+            delayAsync: null);
+
+        var snapshot = await new ProjectExporter(client).ExportAsync(
+            "source",
+            1,
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal("TEXT", Assert.Single(snapshot.Fields).DataType);
+        Assert.DoesNotContain(
+            handler.RequestBodies,
+            body => body.Contains("issueFields", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task Export_falls_back_to_observed_field_names_when_preview_connection_fails()
     {
         using var handler = new StubHandler(

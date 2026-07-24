@@ -323,6 +323,31 @@ public class ProjectVerifierTests
     }
 
     [Fact]
+    public void Same_named_project_and_issue_fields_are_matched_by_identity()
+    {
+        var source = WithMultiSelectIssueField(BuildSnapshot(), ["Platform"]);
+        var teamsIssueField = source.Fields.Single(field => field.Name == "Teams");
+        var target = source with
+        {
+            Fields =
+            [
+                .. source.Fields.Where(field => field.Name != "Teams"),
+                new FieldSnapshot { Name = "Teams", DataType = "TEXT" },
+                teamsIssueField,
+            ],
+        };
+
+        var report = ProjectVerifier.Compare(source, target);
+
+        Assert.DoesNotContain(report.Differences, difference =>
+            difference.Category == "Field" && difference.Severity == VerifySeverity.Error);
+        Assert.Contains(report.Differences, difference =>
+            difference.Category == "Field"
+            && difference.Severity == VerifySeverity.Warning
+            && difference.Message == "field 'Teams' (TEXT) exists only in the target");
+    }
+
+    [Fact]
     public void Iterations_are_matched_by_title_ignoring_completed_classification()
     {
         // The target reports "Sprint 1" as completed (time passed since import); still a match.

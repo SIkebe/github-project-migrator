@@ -99,9 +99,7 @@ public sealed class ProjectExporter
 
         if (OwnerType == ProjectOwnerType.Organization
             && (organizationIssueFields is not null
-                || fieldNodes.Any(node =>
-                node.GetProperty("__typename").GetString() == "ProjectV2Field"
-                && !node.TryGetProperty("dataType", out _))))
+                || issueFieldNames.Count > 0))
         {
             organizationIssueFields ??= await FetchIssueFieldsAsync(ownerLogin, cancellationToken).ConfigureAwait(false);
             issueFields = organizationIssueFields
@@ -113,10 +111,32 @@ public sealed class ProjectExporter
                 .ToHashSet(StringComparer.Ordinal);
         }
 
-        var fieldDataTypes = await FetchFieldDataTypesAsync(
-            fieldNodes,
-            multiSelectIssueFieldNames,
-            cancellationToken).ConfigureAwait(false);
+        Dictionary<string, string> fieldDataTypes;
+        try
+        {
+            fieldDataTypes = await FetchFieldDataTypesAsync(
+                fieldNodes,
+                multiSelectIssueFieldNames,
+                cancellationToken).ConfigureAwait(false);
+        }
+        catch (GitHubGraphQLException exception) when (
+            OwnerType == ProjectOwnerType.Organization
+            && organizationIssueFields is null
+            && IsPreviewFieldResolutionError(exception))
+        {
+            organizationIssueFields = await FetchIssueFieldsAsync(ownerLogin, cancellationToken).ConfigureAwait(false);
+            issueFields = organizationIssueFields
+                .Where(field => issueFieldNames.Contains(field.Name))
+                .ToList();
+            multiSelectIssueFieldNames = organizationIssueFields
+                .Where(field => field.DataType == "MULTI_SELECT")
+                .Select(field => field.Name)
+                .ToHashSet(StringComparer.Ordinal);
+            fieldDataTypes = await FetchFieldDataTypesAsync(
+                fieldNodes,
+                multiSelectIssueFieldNames,
+                cancellationToken).ConfigureAwait(false);
+        }
         var fields = ParseFields(fieldNodes, issueFields, fieldDataTypes);
         OnProgress?.Invoke(string.Create(
             CultureInfo.InvariantCulture,
