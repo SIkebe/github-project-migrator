@@ -153,7 +153,10 @@ public class ProjectImporterLogicTests
             Assert.Equal("IFO_sdk", result.IssueFieldOptionIds["Teams"]["SDK"]);
             Assert.Equal("PVTF_teams", result.FieldIds["Teams"]);
             Assert.Contains(handler.RequestBodies, body => body.Contains("createIssueField", StringComparison.Ordinal));
-            Assert.Contains(handler.RequestBodies, body => body.Contains("createProjectV2IssueField", StringComparison.Ordinal));
+            var linkMutation = Assert.Single(
+                handler.RequestBodies,
+                body => body.Contains("createProjectV2IssueField", StringComparison.Ordinal));
+            Assert.DoesNotContain("id name dataType", linkMutation, StringComparison.Ordinal);
         }
         finally
         {
@@ -209,6 +212,10 @@ public class ProjectImporterLogicTests
             Assert.Equal("PVTF_teams", result.FieldIds["Teams"]);
             Assert.DoesNotContain(handler.RequestBodies, body => body.Contains("createIssueField", StringComparison.Ordinal));
             Assert.DoesNotContain(handler.RequestBodies, body => body.Contains("createProjectV2IssueField", StringComparison.Ordinal));
+            var fieldsQuery = Assert.Single(
+                handler.RequestBodies,
+                body => body.Contains("fields(first:", StringComparison.Ordinal));
+            Assert.DoesNotContain("id name dataType", fieldsQuery, StringComparison.Ordinal);
         }
         finally
         {

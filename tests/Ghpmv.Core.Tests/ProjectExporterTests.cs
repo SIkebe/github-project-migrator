@@ -15,7 +15,7 @@ public class ProjectExporterTests
             {"data":{"organization":{"projectV2":{
               "title":"Roadmap","shortDescription":null,"readme":null,"public":false,"closed":false,
               "fields":{"nodes":[
-                {"__typename":"ProjectV2Field","name":"Title","dataType":"TITLE"}
+                {"__typename":"ProjectV2Field","id":"PVTF_title","name":"Title"}
               ]},
               "views":{"nodes":[]},"workflows":{"nodes":[]},"repositories":{"nodes":[]}
             }}}}
@@ -55,6 +55,11 @@ public class ProjectExporterTests
               ],
               "pageInfo":{"hasNextPage":false,"endCursor":null}
             }}}}
+            """,
+            """
+            {"data":{"nodes":[
+              {"id":"PVTF_title","dataType":"TITLE"}
+            ]}}
             """);
         using var client = new GitHubGraphQLClient(
             "dummy-token",
@@ -78,7 +83,8 @@ public class ProjectExporterTests
         Assert.Equal(
             ["Platform", "SDK"],
             Assert.Single(item.FieldValues).MultiSelectOptionNames);
-        Assert.Equal(3, handler.RequestBodies.Count);
+        Assert.Equal(4, handler.RequestBodies.Count);
+        Assert.DoesNotContain("dataType", handler.RequestBodies[0], StringComparison.Ordinal);
     }
 
     private sealed class StubHandler(params string[] responses) : HttpMessageHandler

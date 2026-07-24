@@ -32,6 +32,18 @@ Issue and pull request content and metadata, including labels, milestones, assig
 | Built-in fields such as Title / Assignees / Repository / Labels / Milestone | ✅ for project/view configuration | Built-in fields are not recreated as custom fields. `ghpmv` preserves their use in project views where GitHub exposes them, but Issue/PR metadata values come from the target issues and pull requests, usually migrated by GEI. Draft issue title and draft assignees are handled separately. |
 | Field value history | ❌ | GitHub has no API to write historical field changes. Only current values are migrated. |
 
+### Current GraphQL limitations for multi-select fields
+
+GitHub announced multi-select fields for both Projects and Issue Fields in [public preview](https://github.blog/changelog/2026-07-23-multi-select-fields-for-projects-and-issues-in-public-preview/), but the GraphQL schema does not yet expose the complete Project field model.
+
+| Limitation | Impact | Current handling |
+|---|---|---|
+| `ProjectV2FieldType` does not contain `MULTI_SELECT`. | Selecting `ProjectV2Field.dataType` for a linked multi-select Issue Field returns a generic GraphQL internal error instead of a usable type. Native Project multi-select fields cannot yet be represented reliably by the API. | Export and import first read field identity without `dataType`, then request `dataType` only for fields that are not known multi-select Issue Fields. |
+| A linked organization Issue Field is returned as `ProjectV2Field`; there is no distinct typename or exposed underlying Issue Field ID. | It cannot be distinguished reliably from a normal Project field by the Project fields connection alone. | Export identifies Issue Fields from `ProjectV2ItemIssueFieldValue`, then matches the organization definition by name. |
+| `ProjectV2ItemIssueFieldValue` exists only when a Project item has a value. | A linked Issue Field that is unset on every item cannot be discovered safely and is omitted from the snapshot. | Set at least one fixture or real item value before export. |
+
+Revisit the workaround when `ProjectV2FieldType` exposes `MULTI_SELECT` and the Project fields connection can identify linked Issue Fields directly. At that point, remove the separate `FieldDataTypesQuery` paths in `ProjectExporter` and `ProjectImporter`, add native Project multi-select migration support, and extend the reusable fixture. `FixtureProjectBuilderTests` enforces that every new snapshot field/value shape is represented in that fixture.
+
 ## Project items
 
 | Area | Supported? | Notes |

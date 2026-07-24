@@ -26,6 +26,7 @@ public sealed class ProjectImporter
     private readonly GitHubGraphQLClient _client;
     private readonly List<string> _warnings = [];
     private ProjectImportLog? _operationLog;
+    private HashSet<string> _snapshotIssueFieldNames = [];
 
     public ProjectImporter(GitHubGraphQLClient client)
     {
@@ -65,6 +66,10 @@ public sealed class ProjectImporter
     {
         ArgumentNullException.ThrowIfNull(snapshot);
         ArgumentException.ThrowIfNullOrWhiteSpace(ownerLogin);
+        _snapshotIssueFieldNames = snapshot.Fields
+            .Where(field => field.IssueField is not null)
+            .Select(field => field.Name)
+            .ToHashSet(StringComparer.Ordinal);
         await LoadOperationLogAsync(cancellationToken).ConfigureAwait(false);
 
         var title = snapshot.Project.Title;
@@ -172,6 +177,10 @@ public sealed class ProjectImporter
     {
         ArgumentNullException.ThrowIfNull(snapshot);
         ArgumentException.ThrowIfNullOrWhiteSpace(ownerLogin);
+        _snapshotIssueFieldNames = snapshot.Fields
+            .Where(field => field.IssueField is not null)
+            .Select(field => field.Name)
+            .ToHashSet(StringComparer.Ordinal);
         await LoadOperationLogAsync(cancellationToken).ConfigureAwait(false);
 
         OnProgress?.Invoke(string.Create(CultureInfo.InvariantCulture,
@@ -713,7 +722,7 @@ public sealed class ProjectImporter
               createProjectV2IssueField(input: { projectId: $projectId, issueFieldId: $issueFieldId, clientMutationId: $clientMutationId }) {
                 projectV2Field {
                   __typename
-                  ... on ProjectV2FieldCommon { id name dataType }
+                  ... on ProjectV2FieldCommon { id name }
                 }
               }
             }
@@ -1051,8 +1060,35 @@ public sealed class ProjectImporter
 
     private async Task<List<TargetField>> FetchFieldListAsync(string projectId, FieldMaps maps, CancellationToken cancellationToken)
     {
-        var data = await _client.QueryAsync(FieldsQuery, new { id = projectId }, cancellationToken).ConfigureAwait(false);
-        return [.. data.GetProperty("node").GetProperty("fields").GetProperty("nodes").EnumerateArray().Select(maps.Register)];
+        if (_snapshotIssueFieldNames.Count == 0)
+        {
+            var data = await _client.QueryAsync(FieldsQuery, new { id = projectId }, cancellationToken).ConfigureAwait(false);
+            return [.. data.GetProperty("node").GetProperty("fields").GetProperty("nodes").EnumerateArray().Select(maps.Register)];
+        }
+
+        var safeData = await _client.QueryAsync(FieldsWithIssueFieldsQuery, new { id = projectId }, cancellationToken).ConfigureAwait(false);
+        var nodes = safeData.GetProperty("node").GetProperty("fields").GetProperty("nodes");
+        var ids = nodes.EnumerateArray()
+            .Where(node => node.TryGetProperty("__typename", out var typeName)
+                && typeName.GetString() == "ProjectV2Field"
+                && !node.TryGetProperty("dataType", out _)
+                && !_snapshotIssueFieldNames.Contains(node.GetProperty("name").GetString() ?? string.Empty))
+            .Select(node => node.GetProperty("id").GetString())
+            .OfType<string>()
+            .ToArray();
+        Dictionary<string, string> dataTypes = [];
+        if (ids.Length > 0)
+        {
+            var typeData = await _client.QueryAsync(FieldDataTypesQuery, new { ids }, cancellationToken).ConfigureAwait(false);
+            dataTypes = typeData.GetProperty("nodes").EnumerateArray()
+                .Where(node => node.ValueKind == JsonValueKind.Object)
+                .ToDictionary(
+                    node => node.GetProperty("id").GetString() ?? string.Empty,
+                    node => node.GetProperty("dataType").GetString() ?? string.Empty,
+                    StringComparer.Ordinal);
+        }
+
+        return [.. nodes.EnumerateArray().Select(node => maps.Register(node, dataTypes))];
     }
 
     private async Task<JsonElement> CreateFieldAsync(
@@ -1383,10 +1419,24 @@ public sealed class ProjectImporter
 
         /// <summary>Registers a field node (from a query or mutation response) and returns its identity.</summary>
         public TargetField Register(JsonElement node)
+            => Register(node, null);
+
+        public TargetField Register(JsonElement node, Dictionary<string, string>? dataTypes)
         {
             var id = node.GetProperty("id").GetString() ?? throw new GitHubGraphQLException("Field id was null.");
             var name = node.GetProperty("name").GetString() ?? throw new GitHubGraphQLException("Field name was null.");
-            var dataType = node.GetProperty("dataType").GetString() ?? string.Empty;
+            var typeName = node.TryGetProperty("__typename", out var typeElement)
+                ? typeElement.GetString() ?? string.Empty
+                : string.Empty;
+            var dataType = node.TryGetProperty("dataType", out var dataTypeElement)
+                ? dataTypeElement.GetString() ?? string.Empty
+                : typeName switch
+                {
+                    "ProjectV2SingleSelectField" => "SINGLE_SELECT",
+                    "ProjectV2IterationField" => "ITERATION",
+                    _ when dataTypes?.TryGetValue(id, out var value) == true => value,
+                    _ => string.Empty,
+                };
 
             FieldIds[name] = id;
 
@@ -1415,9 +1465,6 @@ public sealed class ProjectImporter
                 IterationIds[name] = map;
             }
 
-            var typeName = node.TryGetProperty("__typename", out var typeElement)
-                ? typeElement.GetString() ?? string.Empty
-                : string.Empty;
             return new TargetField(id, name, dataType, typeName);
         }
 
@@ -1487,6 +1534,38 @@ public sealed class ProjectImporter
                 }
               }
             }
+          }
+        }
+        """;
+
+    private const string FieldsWithIssueFieldsQuery =
+        """
+        query($id: ID!) {
+          node(id: $id) {
+            ... on ProjectV2 {
+              fields(first: 50) {
+                nodes {
+                  __typename
+                  ... on ProjectV2FieldCommon { id name }
+                  ... on ProjectV2SingleSelectField { options { id name } }
+                  ... on ProjectV2IterationField {
+                    configuration {
+                      iterations { id title }
+                      completedIterations { id title }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+        """;
+
+    private const string FieldDataTypesQuery =
+        """
+        query($ids: [ID!]!) {
+          nodes(ids: $ids) {
+            ... on ProjectV2Field { id dataType }
           }
         }
         """;
