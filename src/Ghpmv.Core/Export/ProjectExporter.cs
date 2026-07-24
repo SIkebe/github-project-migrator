@@ -63,7 +63,10 @@ public sealed class ProjectExporter
         var items = await FetchItemsAsync(ownerLogin, projectNumber, issueFieldNames, cancellationToken).ConfigureAwait(false);
         List<IssueFieldDefinition> issueFields = [];
         HashSet<string> multiSelectIssueFieldNames = [];
-        if (OwnerType == ProjectOwnerType.Organization && issueFieldNames.Count > 0)
+        if (OwnerType == ProjectOwnerType.Organization
+            && fieldConnection.GetProperty("nodes").EnumerateArray().Any(node =>
+                node.GetProperty("__typename").GetString() == "ProjectV2Field"
+                && !node.TryGetProperty("dataType", out _)))
         {
             var organizationIssueFields = await FetchIssueFieldsAsync(ownerLogin, cancellationToken).ConfigureAwait(false);
             issueFields = organizationIssueFields

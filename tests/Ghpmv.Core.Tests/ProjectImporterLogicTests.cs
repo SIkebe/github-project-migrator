@@ -341,8 +341,12 @@ public class ProjectImporterLogicTests
                     """{"data":{"updateProjectV2":{"projectV2":{"id":"PVT_target"}}}}""",
                 _ when body.Contains("fields(first:", StringComparison.Ordinal) =>
                     existing
-                        ? """{"data":{"node":{"fields":{"nodes":[{"__typename":"ProjectV2Field","id":"PVTF_title","name":"Title","dataType":"TITLE"},{"__typename":"ProjectV2Field","id":"PVTF_teams","name":"Teams","dataType":"SINGLE_SELECT"}]}}}}"""
+                        ? """{"data":{"node":{"fields":{"nodes":[{"__typename":"ProjectV2Field","id":"PVTF_title","name":"Title"},{"__typename":"ProjectV2Field","id":"PVTF_teams","name":"Teams"},{"__typename":"ProjectV2Field","id":"PVTF_areas","name":"Areas"}]}}}}"""
                         : """{"data":{"node":{"fields":{"nodes":[{"id":"PVTF_title","name":"Title","dataType":"TITLE"}]}}}}""",
+                _ when body.Contains("nodes(ids:", StringComparison.Ordinal) =>
+                    body.Contains("PVTF_title", StringComparison.Ordinal)
+                        ? """{"data":{"nodes":[{"id":"PVTF_title","dataType":"TITLE"}]}}"""
+                        : """{"data":{"nodes":[null]},"errors":[{"message":"Something went wrong while executing your query on the preview API."}]}""",
                 _ when body.Contains("issueFields(first:", StringComparison.Ordinal) =>
                     existing
                         ? requiresUpdate
@@ -353,6 +357,9 @@ public class ProjectImporterLogicTests
                                 "options":[
                                   {"id":"IFO_old","name":"Old","color":"GRAY","description":null}
                                 ]
+                              },{
+                                "__typename":"IssueFieldMultiSelect","id":"IFM_areas","name":"Areas",
+                                "dataType":"MULTI_SELECT","description":null,"visibility":"ALL","options":[]
                               }],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}
                               """
                             : """
@@ -363,6 +370,9 @@ public class ProjectImporterLogicTests
                               {"id":"IFO_platform","name":"Platform","color":"PURPLE","description":null},
                               {"id":"IFO_sdk","name":"SDK","color":"GREEN","description":null}
                             ]
+                          },{
+                            "__typename":"IssueFieldMultiSelect","id":"IFM_areas","name":"Areas",
+                            "dataType":"MULTI_SELECT","description":null,"visibility":"ALL","options":[]
                           }],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}
                           """
                         : """{"data":{"organization":{"issueFields":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}""",

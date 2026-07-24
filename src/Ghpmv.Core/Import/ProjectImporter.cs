@@ -27,6 +27,7 @@ public sealed class ProjectImporter
     private readonly List<string> _warnings = [];
     private ProjectImportLog? _operationLog;
     private HashSet<string> _snapshotIssueFieldNames = [];
+    private HashSet<string> _targetMultiSelectIssueFieldNames = [];
 
     public ProjectImporter(GitHubGraphQLClient client)
     {
@@ -283,6 +284,16 @@ public sealed class ProjectImporter
             await UpdateProjectVisibilityAsync(project.Id, snapshot.Project.Public, cancellationToken).ConfigureAwait(false);
         }
 
+        List<TargetIssueField> targetIssueFields = [];
+        _targetMultiSelectIssueFieldNames = new HashSet<string>(_snapshotIssueFieldNames, StringComparer.Ordinal);
+        if (OwnerType == ProjectOwnerType.Organization && _snapshotIssueFieldNames.Count > 0)
+        {
+            targetIssueFields = await FetchIssueFieldListAsync(ownerLogin, cancellationToken).ConfigureAwait(false);
+            _targetMultiSelectIssueFieldNames.UnionWith(targetIssueFields
+                .Where(field => field.DataType == "MULTI_SELECT")
+                .Select(field => field.Name));
+        }
+
         OnProgress?.Invoke("Reading existing project fields...");
         var maps = new FieldMaps();
         var existingFieldList = await FetchFieldListAsync(project.Id, maps, cancellationToken).ConfigureAwait(false);
@@ -414,6 +425,7 @@ public sealed class ProjectImporter
             existingFieldList,
             existingFields,
             maps,
+            targetIssueFields,
             cancellationToken).ConfigureAwait(false);
         await ApplyCollaboratorsAsync(project.Id, ownerLogin, snapshot.Collaborators, cancellationToken).ConfigureAwait(false);
         await ApplyLinkedRepositoriesAsync(project.Id, snapshot.LinkedRepositories, cancellationToken).ConfigureAwait(false);
@@ -430,6 +442,7 @@ public sealed class ProjectImporter
         List<TargetField> projectFields,
         Dictionary<string, TargetField> projectFieldsByName,
         FieldMaps maps,
+        List<TargetIssueField> issueFields,
         CancellationToken cancellationToken)
     {
         if (fields.Count == 0)
@@ -443,7 +456,6 @@ public sealed class ProjectImporter
             return;
         }
 
-        var issueFields = await FetchIssueFieldListAsync(ownerLogin, cancellationToken).ConfigureAwait(false);
         var issueFieldGroups = issueFields.GroupBy(field => field.Name, StringComparer.Ordinal).ToList();
         var duplicateIssueFieldNames = issueFieldGroups
             .Where(group => group.Skip(1).Any())
@@ -1061,7 +1073,7 @@ public sealed class ProjectImporter
 
     private async Task<List<TargetField>> FetchFieldListAsync(string projectId, FieldMaps maps, CancellationToken cancellationToken)
     {
-        if (_snapshotIssueFieldNames.Count == 0)
+        if (_targetMultiSelectIssueFieldNames.Count == 0)
         {
             var data = await _client.QueryAsync(FieldsQuery, new { id = projectId }, cancellationToken).ConfigureAwait(false);
             return [.. data.GetProperty("node").GetProperty("fields").GetProperty("nodes").EnumerateArray().Select(maps.Register)];
@@ -1069,27 +1081,59 @@ public sealed class ProjectImporter
 
         var safeData = await _client.QueryAsync(FieldsWithIssueFieldsQuery, new { id = projectId }, cancellationToken).ConfigureAwait(false);
         var nodes = safeData.GetProperty("node").GetProperty("fields").GetProperty("nodes");
-        var ids = nodes.EnumerateArray()
+        var candidates = nodes.EnumerateArray()
             .Where(node => node.TryGetProperty("__typename", out var typeName)
                 && typeName.GetString() == "ProjectV2Field"
-                && !node.TryGetProperty("dataType", out _)
-                && !_snapshotIssueFieldNames.Contains(node.GetProperty("name").GetString() ?? string.Empty))
-            .Select(node => node.GetProperty("id").GetString())
-            .OfType<string>()
+                && !node.TryGetProperty("dataType", out _))
+            .Select(node => (
+                Id: node.GetProperty("id").GetString() ?? string.Empty,
+                Name: node.GetProperty("name").GetString() ?? string.Empty))
             .ToArray();
         Dictionary<string, string> dataTypes = [];
-        if (ids.Length > 0)
+        var unambiguousIds = candidates
+            .Where(candidate => !_targetMultiSelectIssueFieldNames.Contains(candidate.Name))
+            .Select(candidate => candidate.Id)
+            .ToArray();
+        if (unambiguousIds.Length > 0)
         {
-            var typeData = await _client.QueryAsync(FieldDataTypesQuery, new { ids }, cancellationToken).ConfigureAwait(false);
-            dataTypes = typeData.GetProperty("nodes").EnumerateArray()
-                .Where(node => node.ValueKind == JsonValueKind.Object)
-                .ToDictionary(
-                    node => node.GetProperty("id").GetString() ?? string.Empty,
-                    node => node.GetProperty("dataType").GetString() ?? string.Empty,
-                    StringComparer.Ordinal);
+            AddFieldDataTypes(
+                dataTypes,
+                await _client.QueryAsync(
+                    FieldDataTypesQuery,
+                    new { ids = unambiguousIds },
+                    cancellationToken).ConfigureAwait(false));
+        }
+
+        foreach (var candidate in candidates.Where(candidate => _targetMultiSelectIssueFieldNames.Contains(candidate.Name)))
+        {
+            try
+            {
+                AddFieldDataTypes(
+                    dataTypes,
+                    await _client.QueryWithoutInternalErrorRetryAsync(
+                        FieldDataTypesQuery,
+                        new { ids = new[] { candidate.Id } },
+                        cancellationToken).ConfigureAwait(false));
+            }
+            catch (GitHubGraphQLException exception) when (
+                exception.ErrorsJson?.Contains(
+                    "Something went wrong while executing your query",
+                    StringComparison.OrdinalIgnoreCase) == true)
+            {
+                // GitHub's preview schema cannot resolve dataType for a linked multi-select Issue Field.
+            }
         }
 
         return [.. nodes.EnumerateArray().Select(node => maps.Register(node, dataTypes))];
+    }
+
+    private static void AddFieldDataTypes(Dictionary<string, string> result, JsonElement data)
+    {
+        foreach (var node in data.GetProperty("nodes").EnumerateArray().Where(node => node.ValueKind == JsonValueKind.Object))
+        {
+            result[node.GetProperty("id").GetString() ?? string.Empty] =
+                node.GetProperty("dataType").GetString() ?? string.Empty;
+        }
     }
 
     private async Task<JsonElement> CreateFieldAsync(
