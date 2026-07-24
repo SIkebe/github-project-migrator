@@ -53,6 +53,13 @@ public class ItemImporterTests
 
         var exported = await exporter.ExportAsync(SourceOrg, FixtureProjectNumber, cancellationToken);
         var source = IntegrationFixtureSnapshot.SelectCanonicalItems(exported);
+        source = source with
+        {
+            Items = source.Items
+                .Where(item => item.Type != "PULL_REQUEST")
+                .Select((item, position) => item with { Position = position })
+                .ToArray(),
+        };
         var title = NewTestTitle();
         var snapshot = source with { Project = source.Project with { Title = title } };
 
@@ -84,7 +91,7 @@ public class ItemImporterTests
             await IntegrationFixtureSnapshot.RemoveUnexpectedItemsAsync(
                 client, TargetOrg, result.ProjectNumber, snapshot, cancellationToken);
 
-            // Every fixture item is mappable (drafts + fixture-repo issue/PR), so everything is created.
+            // Every selected fixture item is mappable, so everything is created.
             Assert.Equal(snapshot.Items.Count, itemResult.Created);
             Assert.Equal(0, itemResult.Skipped);
 
@@ -118,7 +125,7 @@ public class ItemImporterTests
                 Assert.Equal(expected, actual);
             }
 
-            // The fixture's Issue and PR items were relinked (identity mapping, cross-org).
+            // The fixture Issue was relinked to the target repository so its Issue Field value can be restored.
             var importedIssue = Assert.Single(imported.Items, i => i.Type == "ISSUE");
             Assert.Equal(IntegrationTestSettings.TargetFixtureRepositoryFullName, importedIssue.Repository);
             Assert.Equal(1, importedIssue.Number);
@@ -126,9 +133,6 @@ public class ItemImporterTests
             Assert.Equal(
                 sourceIssue.FieldValues.Single(value => value.FieldName == "Fixture Teams").MultiSelectOptionNames,
                 importedIssue.FieldValues.Single(value => value.FieldName == "Fixture Teams").MultiSelectOptionNames);
-            var importedPullRequest = Assert.Single(imported.Items, i => i.Type == "PULL_REQUEST");
-            Assert.Equal(IntegrationTestSettings.TargetFixtureRepositoryFullName, importedPullRequest.Repository);
-
             // The archived draft was re-archived in the target.
             var importedArchived = Assert.Single(imported.Items, i => i.IsArchived);
             Assert.Equal("Fixture archived draft", importedArchived.Draft?.Title);

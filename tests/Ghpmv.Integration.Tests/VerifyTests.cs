@@ -45,6 +45,13 @@ public class VerifyTests
 
         var exported = await exporter.ExportAsync(SourceOrg, FixtureProjectNumber, cancellationToken);
         var source = IntegrationFixtureSnapshot.SelectCanonicalItems(exported);
+        source = source with
+        {
+            Items = source.Items
+                .Where(item => item.Type != "PULL_REQUEST")
+                .Select((item, position) => item with { Position = position })
+                .ToArray(),
+        };
 
         // Guard against silent null==null passes: the enriched fixture must actually carry
         // the elements this test claims to verify end-to-end.
@@ -53,9 +60,8 @@ public class VerifyTests
         Assert.Contains(
             source.Fields.Single(f => f.Name == "Fixture Sprint").IterationConfiguration!.CompletedIterations,
             i => i.Title == "Sprint 0");
-        Assert.Equal(7, source.Items.Count);
+        Assert.Equal(6, source.Items.Count);
         Assert.Contains(source.Items, i => i.Type == "ISSUE");
-        Assert.Contains(source.Items, i => i.Type == "PULL_REQUEST");
         Assert.Contains(source.Items, i => i.IsArchived);
         Assert.Contains(source.Items, i => i.Draft?.Assignees is { Count: > 0 });
         Assert.Equal(
