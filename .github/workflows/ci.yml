@@ -94,7 +94,9 @@ jobs:
           GHPMV_TEST_TARGET_ORG: ${{ vars.GHPMV_TEST_TARGET_ORG || vars.GPM_TEST_TARGET_ORG || 'gpm-target' }}
           GHPMV_TEST_TARGET_FIXTURE_REPO: ${{ vars.GHPMV_TEST_TARGET_FIXTURE_REPO || vars.GPM_TEST_TARGET_FIXTURE_REPO || 'fixture-repo' }}
         run: |
-          dotnet run --project src/Ghpmv.Cli -c Release --no-build -- setup --fixture --fixture-org "$env:GHPMV_TEST_ORG" --fixture-title gpm-fixture --fixture-repo "$env:GHPMV_TEST_FIXTURE_REPO" --token "$env:GHPMV_TEST_TOKEN"
+          if (-not [string]::IsNullOrWhiteSpace($env:GHPMV_TEST_TOKEN)) {
+            dotnet run --project src/Ghpmv.Cli -c Release --no-build -- setup --fixture --fixture-org "$env:GHPMV_TEST_ORG" --fixture-title gpm-fixture --fixture-repo "$env:GHPMV_TEST_FIXTURE_REPO" --token "$env:GHPMV_TEST_TOKEN"
+          }
           dotnet test tests/Ghpmv.Integration.Tests/Ghpmv.Integration.Tests.csproj -c Release --no-build --logger trx
       - name: Upload test result logs
         if: ${{ failure() }}
