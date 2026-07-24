@@ -1082,6 +1082,25 @@ public sealed class ProjectImporter
 
         var safeData = await _client.QueryAsync(FieldsWithIssueFieldsQuery, new { id = projectId }, cancellationToken).ConfigureAwait(false);
         var nodes = safeData.GetProperty("node").GetProperty("fields").GetProperty("nodes");
+        Dictionary<string, JsonElement> details = [];
+        var detailIds = nodes.EnumerateArray()
+            .Where(node => node.TryGetProperty("__typename", out var typeName)
+                && typeName.GetString() is "ProjectV2SingleSelectField" or "ProjectV2IterationField")
+            .Select(node => node.GetProperty("id").GetString() ?? string.Empty)
+            .ToArray();
+        if (detailIds.Length > 0)
+        {
+            var detailData = await _client.QueryAsync(
+                FieldDetailsQuery,
+                new { ids = detailIds },
+                cancellationToken).ConfigureAwait(false);
+            details = detailData.GetProperty("nodes").EnumerateArray()
+                .Where(node => node.ValueKind == JsonValueKind.Object)
+                .ToDictionary(
+                    node => node.GetProperty("id").GetString() ?? string.Empty,
+                    StringComparer.Ordinal);
+        }
+
         var candidateIds = nodes.EnumerateArray()
             .Where(node => node.TryGetProperty("__typename", out var typeName)
                 && typeName.GetString() == "ProjectV2Field"
@@ -1109,7 +1128,14 @@ public sealed class ProjectImporter
             }
         }
 
-        return [.. nodes.EnumerateArray().Select(node => maps.Register(node, dataTypes))];
+        return
+        [
+            .. nodes.EnumerateArray().Select(node =>
+            {
+                var id = node.GetProperty("id").GetString() ?? string.Empty;
+                return maps.Register(details.TryGetValue(id, out var detail) ? detail : node, dataTypes);
+            }),
+        ];
     }
 
     private static void AddFieldDataTypes(Dictionary<string, string> result, JsonElement data)
@@ -1577,14 +1603,24 @@ public sealed class ProjectImporter
                 nodes {
                   __typename
                   ... on ProjectV2FieldCommon { id name }
-                  ... on ProjectV2SingleSelectField { options { id name } }
-                  ... on ProjectV2IterationField {
-                    configuration {
-                      iterations { id title }
-                      completedIterations { id title }
-                    }
-                  }
                 }
+              }
+            }
+          }
+        }
+        """;
+
+    private const string FieldDetailsQuery =
+        """
+        query($ids: [ID!]!) {
+          nodes(ids: $ids) {
+            __typename
+            ... on ProjectV2FieldCommon { id name }
+            ... on ProjectV2SingleSelectField { options { id name } }
+            ... on ProjectV2IterationField {
+              configuration {
+                iterations { id title }
+                completedIterations { id title }
               }
             }
           }
