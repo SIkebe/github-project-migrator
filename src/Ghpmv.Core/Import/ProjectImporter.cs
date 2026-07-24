@@ -1173,7 +1173,14 @@ public sealed class ProjectImporter
             .. nodes.Select(node =>
             {
                 var id = node.GetProperty("id").GetString() ?? string.Empty;
-                return maps.Register(details.TryGetValue(id, out var detail) ? detail : node, dataTypes);
+                var fieldNode = details.TryGetValue(id, out var detail) ? detail : node;
+                var isIssueFieldLink = node.TryGetProperty("__typename", out var typeName)
+                    && typeName.GetString() == "ProjectV2Field"
+                    && _targetIssueFieldNames.Contains(node.GetProperty("name").GetString() ?? string.Empty)
+                    && !dataTypes.ContainsKey(id);
+                return isIssueFieldLink
+                    ? maps.RegisterIssueFieldLink(fieldNode)
+                    : maps.Register(fieldNode, dataTypes);
             }),
         ];
     }

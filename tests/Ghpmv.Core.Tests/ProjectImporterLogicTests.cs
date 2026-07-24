@@ -226,7 +226,7 @@ public class ProjectImporterLogicTests
     }
 
     [Fact]
-    public async Task Import_links_issue_field_when_same_named_project_field_has_another_type()
+    public async Task Import_preserves_normal_field_mapping_when_same_named_issue_field_link_exists()
     {
         var directory = Directory.CreateTempSubdirectory("ghpmv-project-import-").FullName;
         try
@@ -234,6 +234,7 @@ public class ProjectImporterLogicTests
             using var handler = new IssueFieldStubHandler(
                 existing: true,
                 normalSameName: true,
+                existingSameNamedLink: true,
                 transientNormalDataTypeFailure: true);
             using var client = new GitHubGraphQLClient(
                 "dummy-token",
@@ -280,7 +281,7 @@ public class ProjectImporterLogicTests
             Assert.Equal("IFM_teams", result.IssueFieldIds["Teams"]);
             Assert.Equal("PVTF_teams", result.FieldIds["Teams"]);
             Assert.Equal(2, handler.NormalDataTypeQueryCount);
-            Assert.Contains(
+            Assert.DoesNotContain(
                 handler.RequestBodies,
                 body => body.Contains("createProjectV2IssueField", StringComparison.Ordinal));
         }
@@ -394,6 +395,7 @@ public class ProjectImporterLogicTests
         bool existing = false,
         bool requiresUpdate = false,
         bool normalSameName = false,
+        bool existingSameNamedLink = false,
         bool transientNormalDataTypeFailure = false) : HttpMessageHandler
     {
         public List<string> RequestBodies { get; } = [];
@@ -413,7 +415,9 @@ public class ProjectImporterLogicTests
                 _ when body.Contains("updateProjectV2(", StringComparison.Ordinal) =>
                     """{"data":{"updateProjectV2":{"projectV2":{"id":"PVT_target"}}}}""",
                 _ when body.Contains("fields(first:", StringComparison.Ordinal) =>
-                    existing
+                    existingSameNamedLink
+                        ? """{"data":{"node":{"fields":{"nodes":[{"__typename":"ProjectV2Field","id":"PVTF_teams","name":"Teams"},{"__typename":"ProjectV2Field","id":"PVTF_linked_teams","name":"Teams"}]}}}}"""
+                        : existing
                         ? """{"data":{"node":null},"errors":[{"message":"Something went wrong while executing your query on the preview API."}]}"""
                         : """{"data":{"node":{"fields":{"nodes":[{"id":"PVTF_title","name":"Title","dataType":"TITLE"}]}}}}""",
                 _ when body.Contains("field(name:", StringComparison.Ordinal) =>

@@ -99,7 +99,7 @@ public class SnapshotTests
                     new FieldValueSnapshot { FieldName = "Fixture Number", Number = 42.5 },
                     new FieldValueSnapshot { FieldName = "Fixture Date", Date = "2026-07-05" },
                     new FieldValueSnapshot { FieldName = "Fixture Select", SingleSelectOptionName = "Alpha" },
-                    new FieldValueSnapshot { FieldName = "Fixture Teams", MultiSelectOptionNames = ["Platform", "SDK"] },
+                    new FieldValueSnapshot { FieldName = "Fixture Teams", IsIssueField = true, MultiSelectOptionNames = ["Platform", "SDK"] },
                     new FieldValueSnapshot { FieldName = "Fixture Sprint", IterationTitle = "Sprint 1" },
                 ],
             },
@@ -177,10 +177,12 @@ public class SnapshotTests
             Assert.Equal(expected.SingleSelectOptionName, actual.SingleSelectOptionName);
             Assert.Equal(expected.MultiSelectOptionNames, actual.MultiSelectOptionNames);
             Assert.Equal(expected.IterationTitle, actual.IterationTitle);
+            Assert.Equal(expected.IsIssueField, actual.IsIssueField);
         }
         Assert.Equal(
             ["Platform", "SDK"],
             issue.FieldValues.Single(value => value.FieldName == "Fixture Teams").MultiSelectOptionNames);
+        Assert.True(issue.FieldValues.Single(value => value.FieldName == "Fixture Teams").IsIssueField);
         var draftItem = restored.Items[1];
         Assert.True(draftItem.IsArchived);
         Assert.NotNull(draftItem.Draft);
