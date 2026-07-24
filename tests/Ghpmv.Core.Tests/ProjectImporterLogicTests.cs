@@ -293,6 +293,56 @@ public class ProjectImporterLogicTests
     }
 
     [Fact]
+    public async Task Import_retries_transient_field_lookup_before_linking_issue_field()
+    {
+        var directory = Directory.CreateTempSubdirectory("ghpmv-project-import-").FullName;
+        try
+        {
+            using var handler = new IssueFieldStubHandler(existing: true, transientFieldByNameFailure: true);
+            using var client = new GitHubGraphQLClient(
+                "dummy-token",
+                new Uri("https://example.test/graphql"),
+                handler,
+                delayAsync: static (_, _) => Task.CompletedTask);
+            var snapshot = MinimalSnapshot("Roadmap") with
+            {
+                Fields =
+                [
+                    new FieldSnapshot
+                    {
+                        Name = "Teams",
+                        DataType = "MULTI_SELECT",
+                        Options =
+                        [
+                            new SingleSelectOptionSnapshot { Id = "source-platform", Name = "Platform", Color = "PURPLE" },
+                            new SingleSelectOptionSnapshot { Id = "source-sdk", Name = "SDK", Color = "GREEN" },
+                        ],
+                        IssueField = new IssueFieldConfigurationSnapshot
+                        {
+                            Description = "Teams involved",
+                            Visibility = "ALL",
+                        },
+                    },
+                ],
+            };
+            var importer = new ProjectImporter(client) { OperationLogDirectory = directory };
+
+            await importer.ImportIntoAsync(
+                snapshot,
+                "target",
+                7,
+                TestContext.Current.CancellationToken);
+
+            Assert.Equal(2, handler.FieldByNameQueryCount);
+            Assert.Contains(handler.RequestBodies, body => body.Contains("createProjectV2IssueField", StringComparison.Ordinal));
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task Import_creates_missing_normal_field_when_preview_connection_falls_back_by_name()
     {
         var directory = Directory.CreateTempSubdirectory("ghpmv-project-import-").FullName;
@@ -450,11 +500,14 @@ public class ProjectImporterLogicTests
         bool normalSameName = false,
         bool existingSameNamedLink = false,
         bool transientNormalDataTypeFailure = false,
-        bool missingNormalField = false) : HttpMessageHandler
+        bool missingNormalField = false,
+        bool transientFieldByNameFailure = false) : HttpMessageHandler
     {
         public List<string> RequestBodies { get; } = [];
 
         public int NormalDataTypeQueryCount { get; private set; }
+
+        public int FieldByNameQueryCount { get; private set; }
 
         protected override async Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request,
@@ -479,6 +532,8 @@ public class ProjectImporterLogicTests
                         ? """{"data":{"node":{"field":null}},"errors":[{"type":"NOT_FOUND","message":"Could not resolve to a Unions::ProjectV2FieldConfiguration with the name Notes"}]}"""
                         : normalSameName
                         ? """{"data":{"node":{"field":{"__typename":"ProjectV2Field","id":"PVTF_teams","name":"Teams"}}}}"""
+                        : transientFieldByNameFailure
+                        ? FieldByNameResponse()
                         : """{"data":{"node":null},"errors":[{"message":"Something went wrong while executing your query on the preview API."}]}""",
                 _ when body.Contains("nodes(ids:", StringComparison.Ordinal) =>
                     body.Contains("PVTF_title", StringComparison.Ordinal)
@@ -557,6 +612,14 @@ public class ProjectImporterLogicTests
             return transientNormalDataTypeFailure && NormalDataTypeQueryCount == 1
                 ? """{"data":{"nodes":[null]},"errors":[{"message":"Something went wrong while executing your query on the preview API."}]}"""
                 : """{"data":{"nodes":[{"id":"PVTF_teams","dataType":"TEXT"}]}}""";
+        }
+
+        private string FieldByNameResponse()
+        {
+            FieldByNameQueryCount++;
+            return FieldByNameQueryCount == 1
+                ? """{"data":{"node":null},"errors":[{"message":"Something went wrong while executing your query on the preview API."}]}"""
+                : """{"data":{"node":{"field":null}}}""";
         }
     }
 }

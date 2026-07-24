@@ -28,6 +28,7 @@ public sealed class ProjectImporter
     private ProjectImportLog? _operationLog;
     private HashSet<string> _snapshotFieldNames = [];
     private HashSet<string> _snapshotIssueFieldNames = [];
+    private HashSet<string> _snapshotMultiSelectIssueFieldNames = [];
     private HashSet<string> _knownLinkedIssueFieldNames = [];
     private HashSet<string> _targetIssueFieldNames = [];
 
@@ -72,6 +73,10 @@ public sealed class ProjectImporter
         _snapshotFieldNames = snapshot.Fields.Select(field => field.Name).ToHashSet(StringComparer.Ordinal);
         _snapshotIssueFieldNames = snapshot.Fields
             .Where(field => field.IssueField is not null)
+            .Select(field => field.Name)
+            .ToHashSet(StringComparer.Ordinal);
+        _snapshotMultiSelectIssueFieldNames = snapshot.Fields
+            .Where(field => field.IssueField is not null && string.Equals(field.DataType, "MULTI_SELECT", StringComparison.Ordinal))
             .Select(field => field.Name)
             .ToHashSet(StringComparer.Ordinal);
         _knownLinkedIssueFieldNames = [];
@@ -185,6 +190,10 @@ public sealed class ProjectImporter
         _snapshotFieldNames = snapshot.Fields.Select(field => field.Name).ToHashSet(StringComparer.Ordinal);
         _snapshotIssueFieldNames = snapshot.Fields
             .Where(field => field.IssueField is not null)
+            .Select(field => field.Name)
+            .ToHashSet(StringComparer.Ordinal);
+        _snapshotMultiSelectIssueFieldNames = snapshot.Fields
+            .Where(field => field.IssueField is not null && string.Equals(field.DataType, "MULTI_SELECT", StringComparison.Ordinal))
             .Select(field => field.Name)
             .ToHashSet(StringComparer.Ordinal);
         _knownLinkedIssueFieldNames = [];
@@ -1208,13 +1217,13 @@ public sealed class ProjectImporter
             JsonElement data;
             try
             {
-                data = await _client.QueryWithoutInternalErrorRetryAsync(
+                data = await _client.QueryAsync(
                     FieldByNameQuery,
                     new { id = projectId, name },
                     cancellationToken).ConfigureAwait(false);
             }
             catch (GitHubGraphQLException exception) when (
-                _snapshotIssueFieldNames.Contains(name)
+                _snapshotMultiSelectIssueFieldNames.Contains(name)
                 && IsPreviewFieldInternalError(exception))
             {
                 _knownLinkedIssueFieldNames.Add(name);
