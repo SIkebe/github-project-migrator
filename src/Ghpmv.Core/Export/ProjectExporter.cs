@@ -387,7 +387,7 @@ public sealed class ProjectExporter
             {
                 AddFieldDataTypes(
                     result,
-                    await _client.QueryWithoutInternalErrorRetryAsync(
+                    await _client.QueryAsync(
                         FieldDataTypesQuery,
                         new { ids = new[] { candidate.Id } },
                         cancellationToken).ConfigureAwait(false));

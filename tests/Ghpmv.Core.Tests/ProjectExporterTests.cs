@@ -94,6 +94,21 @@ public class ProjectExporterTests
             {"data":{"nodes":[null]},"errors":[
               {"message":"Something went wrong while executing your query on the preview API."}
             ]}
+            """,
+            """
+            {"data":{"nodes":[null]},"errors":[
+              {"message":"Something went wrong while executing your query on the preview API."}
+            ]}
+            """,
+            """
+            {"data":{"nodes":[null]},"errors":[
+              {"message":"Something went wrong while executing your query on the preview API."}
+            ]}
+            """,
+            """
+            {"data":{"nodes":[null]},"errors":[
+              {"message":"Something went wrong while executing your query on the preview API."}
+            ]}
             """);
         using var client = new GitHubGraphQLClient(
             "dummy-token",
@@ -129,7 +144,7 @@ public class ProjectExporterTests
             "Project note",
             item.FieldValues.Single(value => value is { FieldName: "Notes", IsIssueField: false }).Text);
         Assert.Equal("High", item.FieldValues.Single(value => value.FieldName == "Priority").SingleSelectOptionName);
-        Assert.Equal(7, handler.RequestBodies.Count);
+        Assert.Equal(10, handler.RequestBodies.Count);
         Assert.DoesNotContain("dataType", handler.RequestBodies[0], StringComparison.Ordinal);
     }
 
@@ -214,6 +229,21 @@ public class ProjectExporterTests
             {"data":{"nodes":[null]},"errors":[
               {"message":"Something went wrong while executing your query on the preview API."}
             ]}
+            """,
+            """
+            {"data":{"nodes":[null]},"errors":[
+              {"message":"Something went wrong while executing your query on the preview API."}
+            ]}
+            """,
+            """
+            {"data":{"nodes":[null]},"errors":[
+              {"message":"Something went wrong while executing your query on the preview API."}
+            ]}
+            """,
+            """
+            {"data":{"nodes":[null]},"errors":[
+              {"message":"Something went wrong while executing your query on the preview API."}
+            ]}
             """);
         using var client = new GitHubGraphQLClient(
             "dummy-token",
@@ -229,6 +259,7 @@ public class ProjectExporterTests
         var teams = snapshot.Fields.Single(field => field.Name == "Teams");
         Assert.Equal("MULTI_SELECT", teams.DataType);
         Assert.Equal(["SDK"], teams.Options!.Select(option => option.Name));
+        Assert.Equal(10, handler.RequestBodies.Count);
     }
 
     [Fact]
