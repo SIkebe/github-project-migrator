@@ -177,10 +177,13 @@ public class ProjectVerifierTests
     {
         using var handler = new StubHandler(
             """
-            {"data":{"organization":{"projectV2":{"title":"Raw target","shortDescription":null,"readme":null,"public":false,"closed":false,"fields":{"nodes":[]},"views":{"nodes":[]},"workflows":{"nodes":[]},"repositories":{"nodes":[]}}}}}
+            {"data":{"organization":{"projectV2":{"title":"Raw target","shortDescription":null,"readme":null,"public":false,"closed":false,"views":{"nodes":[]},"workflows":{"nodes":[]},"repositories":{"nodes":[]}}}}}
             """,
             """
             {"data":{"organization":{"projectV2":{"items":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}
+            """,
+            """
+            {"data":{"organization":{"projectV2":{"fields":{"nodes":[]}}}}}
             """);
         using var client = new GitHubGraphQLClient("dummy-token", baseUrl: null, handler, delayAsync: null);
         var source = BuildSnapshot();

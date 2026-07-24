@@ -14,12 +14,6 @@ public class ProjectExporterTests
             """
             {"data":{"organization":{"projectV2":{
               "title":"Roadmap","shortDescription":null,"readme":null,"public":false,"closed":false,
-              "fields":{"nodes":[
-                {"__typename":"ProjectV2Field","id":"PVTF_title","name":"Title"},
-                {"__typename":"ProjectV2Field","id":"PVTF_unrelated","name":"Unrelated"},
-                {"__typename":"ProjectV2Field","id":"PVTF_notes","name":"Notes"},
-                {"__typename":"ProjectV2Field","id":"PVTF_teams","name":"Teams"}
-              ]},
               "views":{"nodes":[]},"workflows":{"nodes":[]},"repositories":{"nodes":[]}
             }}}}
             """,
@@ -45,6 +39,14 @@ public class ProjectExporterTests
               }],
               "pageInfo":{"hasNextPage":false,"endCursor":null}
             }}}}}
+            """,
+            """
+            {"data":{"organization":{"projectV2":{"fields":{"nodes":[
+              {"__typename":"ProjectV2Field","id":"PVTF_title","name":"Title"},
+              {"__typename":"ProjectV2Field","id":"PVTF_unrelated","name":"Unrelated"},
+              {"__typename":"ProjectV2Field","id":"PVTF_notes","name":"Notes"},
+              {"__typename":"ProjectV2Field","id":"PVTF_teams","name":"Teams"}
+            ]}}}}}
             """,
             """
             {"data":{"organization":{"issueFields":{
@@ -113,8 +115,73 @@ public class ProjectExporterTests
             ["Platform", "SDK"],
             item.FieldValues.Single(value => value.FieldName == "Teams").MultiSelectOptionNames);
         Assert.Equal("Needs review", item.FieldValues.Single(value => value.FieldName == "Notes").Text);
-        Assert.Equal(6, handler.RequestBodies.Count);
+        Assert.Equal(7, handler.RequestBodies.Count);
         Assert.DoesNotContain("dataType", handler.RequestBodies[0], StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Export_falls_back_to_observed_field_names_when_preview_connection_fails()
+    {
+        using var handler = new StubHandler(
+            """
+            {"data":{"organization":{"projectV2":{
+              "title":"Roadmap","shortDescription":null,"readme":null,"public":false,"closed":false,
+              "views":{"nodes":[]},"workflows":{"nodes":[]},"repositories":{"nodes":[]}
+            }}}}
+            """,
+            """
+            {"data":{"organization":{"projectV2":{"items":{
+              "nodes":[{"type":"ISSUE","isArchived":false,
+                "content":{"number":7,"repository":{"nameWithOwner":"source/repo"}},
+                "fieldValues":{"nodes":[
+                  {"__typename":"ProjectV2ItemFieldTextValue","text":"Ready","field":{"name":"Notes"}},
+                  {"__typename":"ProjectV2ItemIssueFieldValue","field":{"name":"Teams"},
+                   "issueFieldValue":{"__typename":"IssueFieldMultiSelectValue","options":[{"name":"SDK"}]}}
+                ]}}],
+              "pageInfo":{"hasNextPage":false,"endCursor":null}
+            }}}}}
+            """,
+            """
+            {"data":{"organization":{"projectV2":{"fields":null}}},"errors":[
+              {"message":"Something went wrong while executing your query on the preview API."}
+            ]}
+            """,
+            """
+            {"data":{"organization":{"issueFields":{"nodes":[
+              {"__typename":"IssueFieldMultiSelect","id":"IFM_teams","name":"Teams",
+               "dataType":"MULTI_SELECT","description":"Teams involved","visibility":"ALL",
+               "options":[{"id":"IFO_sdk","name":"SDK","color":"GREEN","description":null}]}
+            ],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}
+            """,
+            """
+            {"data":{"organization":{"projectV2":{"field":{
+              "__typename":"ProjectV2Field","id":"PVTF_notes","name":"Notes"
+            }}}}}
+            """,
+            """
+            {"data":{"organization":{"projectV2":{"field":null}}},"errors":[
+              {"message":"Something went wrong while executing your query on the preview API."}
+            ]}
+            """,
+            """
+            {"data":{"nodes":[{"id":"PVTF_notes","dataType":"TEXT"}]}}
+            """);
+        using var client = new GitHubGraphQLClient(
+            "dummy-token",
+            new Uri("https://example.test/graphql"),
+            handler,
+            delayAsync: null);
+
+        var snapshot = await new ProjectExporter(client).ExportAsync(
+            "source",
+            1,
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal("TEXT", snapshot.Fields.Single(field => field.Name == "Notes").DataType);
+        Assert.Equal("MULTI_SELECT", snapshot.Fields.Single(field => field.Name == "Teams").DataType);
+        Assert.Equal(7, handler.RequestBodies.Count);
+        Assert.Contains(handler.RequestBodies, body => body.Contains("\"name\":\"Notes\"", StringComparison.Ordinal));
+        Assert.Contains(handler.RequestBodies, body => body.Contains("\"name\":\"Teams\"", StringComparison.Ordinal));
     }
 
     private sealed class StubHandler(params string[] responses) : HttpMessageHandler

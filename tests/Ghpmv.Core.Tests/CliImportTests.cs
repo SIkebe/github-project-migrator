@@ -17,7 +17,7 @@ public class CliImportTests
         var reportPath = Path.Combine(directory, "report.json");
         await SnapshotFile.SaveAsync(VerifySnapshot(), directory, cancellationToken);
 
-        using var server = new GraphQlStubServer(VerifyProjectResponse, VerifyItemsResponse);
+        using var server = new GraphQlStubServer(VerifyProjectResponse, VerifyItemsResponse, VerifyFieldsResponse);
         try
         {
             var result = await RunVerifyCliAsync(directory, server, "--report-json", reportPath);
@@ -403,7 +403,7 @@ public class CliImportTests
         """
         {"data":{"organization":{"projectV2":{
           "title":"Roadmap","shortDescription":null,"readme":null,"public":false,"closed":false,
-          "fields":{"nodes":[]},"views":{"nodes":[]},"workflows":{"nodes":[]},
+          "views":{"nodes":[]},"workflows":{"nodes":[]},
           "repositories":{"nodes":[{"nameWithOwner":"target/extra"}]}
         }}}}
         """;
@@ -414,6 +414,9 @@ public class CliImportTests
           "items":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}
         }}}}
         """;
+
+    private const string VerifyFieldsResponse =
+        """{"data":{"organization":{"projectV2":{"fields":{"nodes":[]}}}}}""";
 
     private sealed class GraphQlStubServer : IDisposable
     {
