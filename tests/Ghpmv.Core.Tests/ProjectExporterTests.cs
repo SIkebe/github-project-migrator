@@ -37,7 +37,7 @@ public class ProjectExporterTests
                   },{
                      "__typename":"ProjectV2ItemIssueFieldValue",
                      "field":{"name":"Priority"},
-                     "issueFieldValue":{"__typename":"IssueFieldSingleSelectValue","option":{"name":"High"}}
+                     "issueFieldValue":{"__typename":"IssueFieldSingleSelectValue","name":"High"}
                   }
                 ]}
               }],

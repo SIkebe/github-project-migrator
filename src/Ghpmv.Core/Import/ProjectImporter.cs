@@ -29,6 +29,7 @@ public sealed class ProjectImporter
     private HashSet<string> _snapshotFieldNames = [];
     private HashSet<string> _snapshotIssueFieldNames = [];
     private HashSet<string> _knownLinkedIssueFieldNames = [];
+    private HashSet<string> _targetIssueFieldNames = [];
 
     public ProjectImporter(GitHubGraphQLClient client)
     {
@@ -232,12 +233,17 @@ public sealed class ProjectImporter
             return;
         }
 
-        var snapshotFields = snapshot.Fields.ToDictionary(field => field.Name, StringComparer.Ordinal);
+        var snapshotProjectFields = snapshot.Fields
+            .Where(field => field.IssueField is null)
+            .ToDictionary(field => field.Name, StringComparer.Ordinal);
+        var snapshotIssueFields = snapshot.Fields
+            .Where(field => field.IssueField is not null)
+            .ToDictionary(field => field.Name, StringComparer.Ordinal);
         foreach (var (name, pending) in _operationLog.PendingFields)
         {
             if (projectId is null
                 || !string.Equals(pending.ProjectId, projectId, StringComparison.Ordinal)
-                || !snapshotFields.TryGetValue(name, out var field)
+                || !snapshotProjectFields.TryGetValue(name, out var field)
                 || !string.Equals(pending.Name, field.Name, StringComparison.Ordinal)
                 || !string.Equals(pending.DataType, field.DataType, StringComparison.Ordinal))
             {
@@ -250,8 +256,7 @@ public sealed class ProjectImporter
         {
             if (projectId is null
                 || !string.Equals(pending.ProjectId, projectId, StringComparison.Ordinal)
-                || !snapshotFields.TryGetValue(name, out var field)
-                || field.IssueField is null
+                || !snapshotIssueFields.TryGetValue(name, out var field)
                 || !string.Equals(pending.Name, field.Name, StringComparison.Ordinal)
                 || !string.Equals(pending.DataType, field.DataType, StringComparison.Ordinal))
             {
@@ -264,8 +269,7 @@ public sealed class ProjectImporter
         {
             if (projectId is null
                 || !string.Equals(pending.ProjectId, projectId, StringComparison.Ordinal)
-                || !snapshotFields.TryGetValue(name, out var field)
-                || field.IssueField is null)
+                || !snapshotIssueFields.ContainsKey(name))
             {
                 throw new InvalidOperationException(
                     $"Pending Issue Field link operation '{pending.OperationId}' does not match the selected project and snapshot. Resume the original import or reconcile it manually.");
@@ -294,6 +298,10 @@ public sealed class ProjectImporter
         {
             targetIssueFields = await FetchIssueFieldListAsync(ownerLogin, cancellationToken).ConfigureAwait(false);
         }
+
+        _targetIssueFieldNames = targetIssueFields
+            .Select(field => field.Name)
+            .ToHashSet(StringComparer.Ordinal);
 
         OnProgress?.Invoke("Reading existing project fields...");
         var maps = new FieldMaps();
@@ -557,6 +565,7 @@ public sealed class ProjectImporter
             }
 
             maps.RegisterIssueField(targetIssueField);
+            _targetIssueFieldNames.Add(targetIssueField.Name);
             await EnsureIssueFieldLinkedAsync(
                 projectId,
                 targetIssueField,
@@ -730,7 +739,8 @@ public sealed class ProjectImporter
                 throw;
             }
 
-            linkedField = maps.Register(linkData.GetProperty("createProjectV2IssueField").GetProperty("projectV2Field"));
+            linkedField = maps.RegisterIssueFieldLink(
+                linkData.GetProperty("createProjectV2IssueField").GetProperty("projectV2Field"));
             if (_operationLog is not null)
             {
                 _operationLog.PendingIssueFieldLinks.Remove(issueField.Name);
@@ -1131,25 +1141,28 @@ public sealed class ProjectImporter
                     StringComparer.Ordinal);
         }
 
-        var candidateIds = nodes
+        var candidates = nodes
             .Where(node => node.TryGetProperty("__typename", out var typeName)
                 && typeName.GetString() == "ProjectV2Field"
                 && !node.TryGetProperty("dataType", out _))
-            .Select(node => node.GetProperty("id").GetString() ?? string.Empty)
             .ToArray();
         Dictionary<string, string> dataTypes = [];
-        foreach (var candidateId in candidateIds)
+        foreach (var candidate in candidates)
         {
+            var candidateId = candidate.GetProperty("id").GetString() ?? string.Empty;
+            var candidateName = candidate.GetProperty("name").GetString() ?? string.Empty;
             try
             {
                 AddFieldDataTypes(
                     dataTypes,
-                    await _client.QueryWithoutInternalErrorRetryAsync(
+                    await _client.QueryAsync(
                         FieldDataTypesQuery,
                         new { ids = new[] { candidateId } },
                         cancellationToken).ConfigureAwait(false));
             }
-            catch (GitHubGraphQLException exception) when (IsPreviewFieldInternalError(exception))
+            catch (GitHubGraphQLException exception) when (
+                _targetIssueFieldNames.Contains(candidateName)
+                && IsPreviewFieldInternalError(exception))
             {
                 // GitHub's preview schema cannot resolve dataType for a linked multi-select Issue Field.
             }
@@ -1540,9 +1553,18 @@ public sealed class ProjectImporter
 
         /// <summary>Registers a field node (from a query or mutation response) and returns its identity.</summary>
         public TargetField Register(JsonElement node)
-            => Register(node, null);
+            => Register(node, null, overwriteFieldId: true);
 
         public TargetField Register(JsonElement node, Dictionary<string, string>? dataTypes)
+            => Register(node, dataTypes, overwriteFieldId: true);
+
+        public TargetField RegisterIssueFieldLink(JsonElement node)
+            => Register(node, null, overwriteFieldId: false);
+
+        private TargetField Register(
+            JsonElement node,
+            Dictionary<string, string>? dataTypes,
+            bool overwriteFieldId)
         {
             var id = node.GetProperty("id").GetString() ?? throw new GitHubGraphQLException("Field id was null.");
             var name = node.GetProperty("name").GetString() ?? throw new GitHubGraphQLException("Field name was null.");
@@ -1559,7 +1581,14 @@ public sealed class ProjectImporter
                     _ => string.Empty,
                 };
 
-            FieldIds[name] = id;
+            if (overwriteFieldId)
+            {
+                FieldIds[name] = id;
+            }
+            else
+            {
+                FieldIds.TryAdd(name, id);
+            }
 
             if (node.TryGetProperty("options", out var options) && options.ValueKind == JsonValueKind.Array)
             {

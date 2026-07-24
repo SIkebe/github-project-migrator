@@ -231,7 +231,10 @@ public class ProjectImporterLogicTests
         var directory = Directory.CreateTempSubdirectory("ghpmv-project-import-").FullName;
         try
         {
-            using var handler = new IssueFieldStubHandler(existing: true, normalSameName: true);
+            using var handler = new IssueFieldStubHandler(
+                existing: true,
+                normalSameName: true,
+                transientNormalDataTypeFailure: true);
             using var client = new GitHubGraphQLClient(
                 "dummy-token",
                 new Uri("https://example.test/graphql"),
@@ -241,6 +244,11 @@ public class ProjectImporterLogicTests
             {
                 Fields =
                 [
+                    new FieldSnapshot
+                    {
+                        Name = "Teams",
+                        DataType = "TEXT",
+                    },
                     new FieldSnapshot
                     {
                         Name = "Teams",
@@ -270,7 +278,8 @@ public class ProjectImporterLogicTests
                 TestContext.Current.CancellationToken);
 
             Assert.Equal("IFM_teams", result.IssueFieldIds["Teams"]);
-            Assert.Equal("PVTF_linked_teams", result.FieldIds["Teams"]);
+            Assert.Equal("PVTF_teams", result.FieldIds["Teams"]);
+            Assert.Equal(2, handler.NormalDataTypeQueryCount);
             Assert.Contains(
                 handler.RequestBodies,
                 body => body.Contains("createProjectV2IssueField", StringComparison.Ordinal));
@@ -384,9 +393,12 @@ public class ProjectImporterLogicTests
     private sealed class IssueFieldStubHandler(
         bool existing = false,
         bool requiresUpdate = false,
-        bool normalSameName = false) : HttpMessageHandler
+        bool normalSameName = false,
+        bool transientNormalDataTypeFailure = false) : HttpMessageHandler
     {
         public List<string> RequestBodies { get; } = [];
+
+        public int NormalDataTypeQueryCount { get; private set; }
 
         protected override async Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request,
@@ -412,8 +424,8 @@ public class ProjectImporterLogicTests
                     body.Contains("PVTF_title", StringComparison.Ordinal)
                         ? """{"data":{"nodes":[{"id":"PVTF_title","dataType":"TITLE"}]}}"""
                         : normalSameName && body.Contains("PVTF_teams", StringComparison.Ordinal)
-                            ? """{"data":{"nodes":[{"id":"PVTF_teams","dataType":"TEXT"}]}}"""
-                        : """{"data":{"nodes":[null]},"errors":[{"message":"Something went wrong while executing your query on the preview API."}]}""",
+                            ? NormalDataTypeResponse()
+                            : """{"data":{"nodes":[null]},"errors":[{"message":"Something went wrong while executing your query on the preview API."}]}""",
                 _ when body.Contains("issueFields(first:", StringComparison.Ordinal) =>
                     existing
                         ? requiresUpdate
@@ -477,6 +489,14 @@ public class ProjectImporterLogicTests
             {
                 Content = new StringContent(response, Encoding.UTF8, "application/json"),
             };
+        }
+
+        private string NormalDataTypeResponse()
+        {
+            NormalDataTypeQueryCount++;
+            return transientNormalDataTypeFailure && NormalDataTypeQueryCount == 1
+                ? """{"data":{"nodes":[null]},"errors":[{"message":"Something went wrong while executing your query on the preview API."}]}"""
+                : """{"data":{"nodes":[{"id":"PVTF_teams","dataType":"TEXT"}]}}""";
         }
     }
 }

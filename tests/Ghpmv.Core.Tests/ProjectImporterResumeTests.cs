@@ -195,9 +195,14 @@ public class ProjectImporterResumeTests
             Assert.True(handler.PendingWasPresentAtMutation);
 
             handler.Resume = true;
-            var result = await importer.ImportIntoAsync(IssueFieldSnapshot(), "target", 7, cancellationToken);
+            var result = await importer.ImportIntoAsync(
+                IssueFieldSnapshot(includeSameNamedProjectField: true),
+                "target",
+                7,
+                cancellationToken);
 
             Assert.Equal("IFM_created", result.IssueFieldIds["Teams"]);
+            Assert.Equal("PVTF_normal_teams", result.FieldIds["Teams"]);
             Assert.Equal(1, handler.IssueFieldCreateMutationCount);
             Assert.Empty((await ProjectImportLog.LoadAsync(directory, cancellationToken)).PendingIssueFields);
         }
@@ -308,10 +313,15 @@ public class ProjectImporterResumeTests
         Items = [],
     };
 
-    private static ProjectSnapshot IssueFieldSnapshot() => Snapshot() with
+    private static ProjectSnapshot IssueFieldSnapshot(bool includeSameNamedProjectField = false)
     {
-        Fields =
-        [
+        List<FieldSnapshot> fields = [];
+        if (includeSameNamedProjectField)
+        {
+            fields.Add(new FieldSnapshot { Name = "Teams", DataType = "TEXT" });
+        }
+
+        fields.Add(
             new FieldSnapshot
             {
                 Name = "Teams",
@@ -325,9 +335,10 @@ public class ProjectImporterResumeTests
                     Description = "Teams involved",
                     Visibility = "ALL",
                 },
-            },
-        ],
-    };
+            });
+
+        return Snapshot() with { Fields = fields };
+    }
 
     private abstract class ResumeHandler(string directory) : HttpMessageHandler
     {
@@ -467,9 +478,14 @@ public class ProjectImporterResumeTests
 
             if (query.Contains("fields(first:", StringComparison.Ordinal))
             {
-                if (!Resume || ambiguousFieldCreate)
+                if (!Resume)
                 {
                     return Json("""{"data":{"node":{"fields":{"nodes":[]}}}}""");
+                }
+
+                if (ambiguousFieldCreate)
+                {
+                    return Json("""{"data":{"node":{"fields":{"nodes":[{"__typename":"ProjectV2Field","id":"PVTF_normal_teams","name":"Teams","dataType":"TEXT"}]}}}}""");
                 }
 
                 return ReturnDuplicates
