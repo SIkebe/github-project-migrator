@@ -28,6 +28,7 @@ public sealed class ProjectImporter
     private ProjectImportLog? _operationLog;
     private HashSet<string> _snapshotFieldNames = [];
     private HashSet<string> _snapshotIssueFieldNames = [];
+    private HashSet<string> _knownLinkedIssueFieldNames = [];
 
     public ProjectImporter(GitHubGraphQLClient client)
     {
@@ -72,6 +73,7 @@ public sealed class ProjectImporter
             .Where(field => field.IssueField is not null)
             .Select(field => field.Name)
             .ToHashSet(StringComparer.Ordinal);
+        _knownLinkedIssueFieldNames = [];
         await LoadOperationLogAsync(cancellationToken).ConfigureAwait(false);
 
         var title = snapshot.Project.Title;
@@ -184,6 +186,7 @@ public sealed class ProjectImporter
             .Where(field => field.IssueField is not null)
             .Select(field => field.Name)
             .ToHashSet(StringComparer.Ordinal);
+        _knownLinkedIssueFieldNames = [];
         await LoadOperationLogAsync(cancellationToken).ConfigureAwait(false);
 
         OnProgress?.Invoke(string.Create(CultureInfo.InvariantCulture,
@@ -647,6 +650,13 @@ public sealed class ProjectImporter
                     $"Pending Issue Field link operation '{pendingLink.OperationId}' does not match field '{issueField.Name}'.");
             }
 
+            if (_knownLinkedIssueFieldNames.Contains(issueField.Name))
+            {
+                _operationLog.PendingIssueFieldLinks.Remove(issueField.Name);
+                await SaveOperationLogAsync(cancellationToken).ConfigureAwait(false);
+                return;
+            }
+
             linkedField = await ReconcilePendingIssueFieldLinkAsync(
                 projectId,
                 issueField.Name,
@@ -659,6 +669,11 @@ public sealed class ProjectImporter
         }
         else
         {
+            if (_knownLinkedIssueFieldNames.Contains(issueField.Name))
+            {
+                return;
+            }
+
             var linkCandidates = projectFields.Where(field =>
                 string.Equals(field.Name, issueField.Name, StringComparison.Ordinal)
                 && string.Equals(field.TypeName, "ProjectV2Field", StringComparison.Ordinal)
@@ -1157,10 +1172,22 @@ public sealed class ProjectImporter
         var nodes = new List<JsonElement>();
         foreach (var name in _snapshotFieldNames)
         {
-            var data = await _client.QueryWithoutInternalErrorRetryAsync(
-                FieldByNameQuery,
-                new { id = projectId, name },
-                cancellationToken).ConfigureAwait(false);
+            JsonElement data;
+            try
+            {
+                data = await _client.QueryWithoutInternalErrorRetryAsync(
+                    FieldByNameQuery,
+                    new { id = projectId, name },
+                    cancellationToken).ConfigureAwait(false);
+            }
+            catch (GitHubGraphQLException exception) when (
+                _snapshotIssueFieldNames.Contains(name)
+                && IsPreviewFieldInternalError(exception))
+            {
+                _knownLinkedIssueFieldNames.Add(name);
+                continue;
+            }
+
             var node = data.GetProperty("node").GetProperty("field");
             if (node.ValueKind == JsonValueKind.Object)
             {

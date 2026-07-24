@@ -209,7 +209,7 @@ public class ProjectImporterLogicTests
                 TestContext.Current.CancellationToken);
 
             Assert.Equal("IFM_teams", result.IssueFieldIds["Teams"]);
-            Assert.Equal("PVTF_teams", result.FieldIds["Teams"]);
+            Assert.False(result.FieldIds.ContainsKey("Teams"));
             Assert.DoesNotContain(handler.RequestBodies, body => body.Contains("createIssueField", StringComparison.Ordinal));
             Assert.DoesNotContain(handler.RequestBodies, body => body.Contains("createProjectV2IssueField", StringComparison.Ordinal));
             var fieldsQuery = Assert.Single(
@@ -405,7 +405,9 @@ public class ProjectImporterLogicTests
                         ? """{"data":{"node":null},"errors":[{"message":"Something went wrong while executing your query on the preview API."}]}"""
                         : """{"data":{"node":{"fields":{"nodes":[{"id":"PVTF_title","name":"Title","dataType":"TITLE"}]}}}}""",
                 _ when body.Contains("field(name:", StringComparison.Ordinal) =>
-                    """{"data":{"node":{"field":{"__typename":"ProjectV2Field","id":"PVTF_teams","name":"Teams"}}}}""",
+                    normalSameName
+                        ? """{"data":{"node":{"field":{"__typename":"ProjectV2Field","id":"PVTF_teams","name":"Teams"}}}}"""
+                        : """{"data":{"node":null},"errors":[{"message":"Something went wrong while executing your query on the preview API."}]}""",
                 _ when body.Contains("nodes(ids:", StringComparison.Ordinal) =>
                     body.Contains("PVTF_title", StringComparison.Ordinal)
                         ? """{"data":{"nodes":[{"id":"PVTF_title","dataType":"TITLE"}]}}"""
