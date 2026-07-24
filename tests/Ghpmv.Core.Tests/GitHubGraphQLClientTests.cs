@@ -324,6 +324,41 @@ public class GitHubGraphQLClientTests
     }
 
     [Fact]
+    public async Task Internal_graphql_errors_are_retried_for_queries()
+    {
+        const string internalError = """{"data":null,"errors":[{"message":"Something went wrong while executing your query. Please include a request ID when reporting this issue."}]}""";
+        using var handler = new StubHandler(
+            JsonResponse(HttpStatusCode.OK, internalError),
+            JsonResponse(HttpStatusCode.OK, ViewerData));
+        var delays = new List<TimeSpan>();
+        using var client = CreateClient(handler, delays);
+
+        var login = await client.GetViewerLoginAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal("octocat", login);
+        Assert.Equal([TimeSpan.FromSeconds(1)], delays);
+    }
+
+    [Fact]
+    public async Task Internal_graphql_error_is_not_retried_for_create_mutation()
+    {
+        const string internalError = """{"data":null,"errors":[{"message":"Something went wrong while executing your query. Please include a request ID when reporting this issue."}]}""";
+        using var handler = new StubHandler(
+            JsonResponse(HttpStatusCode.OK, internalError),
+            JsonResponse(HttpStatusCode.OK, """{"data":{"createThing":{"id":"duplicate"}}}"""));
+        using var client = CreateClient(handler, []);
+
+        await Assert.ThrowsAsync<AmbiguousMutationResultException>(
+            () => client.MutationAsync(
+                "createThing",
+                "mutation($clientMutationId: String!) { createThing(input: { clientMutationId: $clientMutationId }) { id } }",
+                requiredResultPath: "id",
+                cancellationToken: TestContext.Current.CancellationToken));
+
+        Assert.Single(handler.RequestBodies);
+    }
+
+    [Fact]
     public async Task Create_temporary_conflict_with_mutation_payload_is_ambiguous()
     {
         const string conflict = """{"data":{"createThing":{"thing":null}},"errors":[{"type":"UNPROCESSABLE","message":"A child field created a temporary conflict. Please try again."}]}""";

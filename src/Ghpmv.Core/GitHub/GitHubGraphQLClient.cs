@@ -112,6 +112,7 @@ public sealed class GitHubGraphQLClient : IDisposable
     {
         var temporaryConflictRetries = 0;
         var incompleteResultRetries = 0;
+        var internalErrorRetries = 0;
 
         while (true)
         {
@@ -182,6 +183,19 @@ public sealed class GitHubGraphQLClient : IDisposable
                 throw CreateAmbiguousMutationException(
                     mutation,
                     "GitHub returned a GraphQL error that may have occurred after the create side effect.");
+            }
+
+            if (internalErrorRetries < MaxServerErrorRetries
+                && mutation is null or { RetryPolicy: MutationRetryPolicy.Idempotent }
+                && errorsJson.Contains("Something went wrong while executing your query", StringComparison.OrdinalIgnoreCase))
+            {
+                var backoff = GetBackoff(internalErrorRetries);
+                internalErrorRetries++;
+                await NotifyAndDelayAsync(
+                    string.Create(CultureInfo.InvariantCulture, $"GitHub reported an internal GraphQL error; retrying in {backoff.TotalSeconds:0}s (attempt {internalErrorRetries}/{MaxServerErrorRetries})."),
+                    backoff,
+                    cancellationToken).ConfigureAwait(false);
+                continue;
             }
 
             string? errorType = null;
