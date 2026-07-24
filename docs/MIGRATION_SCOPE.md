@@ -27,9 +27,23 @@ Issue and pull request content and metadata, including labels, milestones, assig
 | Number fields and values | ✅ | Includes decimals, negative values and zero. |
 | Date fields and values | ✅ | |
 | Single-select fields and values | ✅ | Option name, color and description are migrated. |
+| Organization Issue Fields, including multi-select | ✅ with API limitation | Issue Field description, visibility, options, Project linkage, and values on issues are migrated when export observes a populated value on at least one Project item. A linked Issue Field that is unset on every item cannot currently be discovered and is omitted. Existing same-name target Issue Fields are updated to match the snapshot because they are organization-wide. User-owned Projects cannot host organization Issue Fields. |
 | Iteration fields and values | ✅ | Active and completed iterations are migrated. Completed iterations are recreated by using past dates. |
 | Built-in fields such as Title / Assignees / Repository / Labels / Milestone | ✅ for project/view configuration | Built-in fields are not recreated as custom fields. `ghpmv` preserves their use in project views where GitHub exposes them, but Issue/PR metadata values come from the target issues and pull requests, usually migrated by GEI. Draft issue title and draft assignees are handled separately. |
 | Field value history | ❌ | GitHub has no API to write historical field changes. Only current values are migrated. |
+
+### Current GraphQL limitations for multi-select fields
+
+GitHub announced multi-select fields for both Projects and Issue Fields in [public preview](https://github.blog/changelog/2026-07-23-multi-select-fields-for-projects-and-issues-in-public-preview/), but the GraphQL schema does not yet expose the complete Project field model.
+
+| Limitation | Impact | Current handling |
+|---|---|---|
+| `ProjectV2FieldType` does not contain `MULTI_SELECT`. | Selecting `ProjectV2Field.dataType` for a linked multi-select Issue Field returns a generic GraphQL internal error instead of a usable type. Some projects also fail when reading the complete field connection or looking up that linked field by name. Native Project multi-select fields cannot yet be represented reliably by the API. | Export and import first read field identity without `dataType`, then resolve potentially linked candidates individually. When the connection fails, both fall back to per-name lookup and treat the same known error for a known Issue Field name as an existing link. Unrelated field errors still fail the migration. |
+| A linked organization Issue Field is returned as `ProjectV2Field`; there is no distinct typename or exposed underlying Issue Field ID. | It cannot be distinguished reliably from a normal Project field by the Project fields connection alone. | Export identifies Issue Fields from `ProjectV2ItemIssueFieldValue`, then matches the organization definition by name. |
+| `ProjectV2ItemIssueFieldValue` exists only when a Project item has a value. | If the fields connection and per-name lookup also fail, a linked Issue Field that is unset on every item and absent from every view cannot be discovered safely and is omitted from the snapshot. | Export matches unresolved field nodes to the organization catalog when GitHub returns them; otherwise set at least one fixture or real item value before export. |
+| The complete Project fields connection can fail after a multi-select Issue Field is linked. | During that failure, the API provides no reliable way to enumerate unused fields that are absent from every item and view. | Export derives field names from item values and view configuration, then queries those fields individually. Unobserved fields are omitted until GitHub fixes the connection. |
+
+Revisit the workaround when `ProjectV2FieldType` exposes `MULTI_SELECT` and the Project fields connection can identify linked Issue Fields directly. At that point, remove the separate `FieldDataTypesQuery` paths in `ProjectExporter` and `ProjectImporter`, add native Project multi-select migration support, and extend the reusable fixture. `FixtureProjectBuilderTests` enforces that every new snapshot field/value shape is represented in that fixture.
 
 ## Project items
 
@@ -39,7 +53,7 @@ Issue and pull request content and metadata, including labels, milestones, assig
 | Draft issue assignees | ✅ | Use `--user-mapping` when logins differ, especially for EMU targets. Unmapped users are dropped with a warning. |
 | Issues | ✅ | Re-linked through `--repo-mapping`. The target account must be able to see the target repository and item. The target repository is expected to contain the same issue number as the source, which is the normal GEI outcome. |
 | Pull requests | ✅ | Same repository mapping, visibility and same-number requirements as issues. |
-| Item field values | ✅ | Text, number, date, single-select, iteration and Status values are restored. |
+| Item field values | ✅ | Text, number, date, single-select, multi-select Issue Field, iteration and Status values are restored. |
 | Item order | ✅ | Restored for non-archived items in the project-level order exposed by GitHub. |
 | Archived items | ✅ | Archived state is restored after values are applied. Archived item position is not restored because GitHub does not allow moving archived items. |
 | Redacted / inaccessible items | ❌ | If GitHub hides an item from the exporting user, `ghpmv` cannot migrate it. |

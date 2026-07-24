@@ -9,8 +9,9 @@ namespace Ghpmv.Core.Import;
 /// <summary>
 /// Imports a <see cref="ProjectSnapshot"/> into a target organization (M3):
 /// creates the project, applies metadata (README, description, visibility, closed state),
-/// creates all custom fields (TEXT/NUMBER/DATE/SINGLE_SELECT/ITERATION) and overwrites
-/// the built-in Status field options with the snapshot's options.
+/// creates all custom fields (TEXT/NUMBER/DATE/SINGLE_SELECT/ITERATION), recreates and
+/// links organization Issue Fields (including MULTI_SELECT), and overwrites the built-in
+/// Status field options with the snapshot's options.
 /// Completed iterations are recreated as past-dated iterations; the API accepts past
 /// start dates and reclassifies them into <c>completedIterations</c> on read (verified by PoC).
 /// </summary>
@@ -25,6 +26,12 @@ public sealed class ProjectImporter
     private readonly GitHubGraphQLClient _client;
     private readonly List<string> _warnings = [];
     private ProjectImportLog? _operationLog;
+    private HashSet<string> _snapshotFieldNames = [];
+    private HashSet<string> _snapshotIssueFieldNames = [];
+    private HashSet<string> _snapshotMultiSelectIssueFieldNames = [];
+    private HashSet<string> _knownLinkedIssueFieldNames = [];
+    private HashSet<string> _targetIssueFieldNames = [];
+    private HashSet<string> _targetMultiSelectIssueFieldNames = [];
 
     public ProjectImporter(GitHubGraphQLClient client)
     {
@@ -64,6 +71,16 @@ public sealed class ProjectImporter
     {
         ArgumentNullException.ThrowIfNull(snapshot);
         ArgumentException.ThrowIfNullOrWhiteSpace(ownerLogin);
+        _snapshotFieldNames = snapshot.Fields.Select(field => field.Name).ToHashSet(StringComparer.Ordinal);
+        _snapshotIssueFieldNames = snapshot.Fields
+            .Where(field => field.IssueField is not null)
+            .Select(field => field.Name)
+            .ToHashSet(StringComparer.Ordinal);
+        _snapshotMultiSelectIssueFieldNames = snapshot.Fields
+            .Where(field => field.IssueField is not null && string.Equals(field.DataType, "MULTI_SELECT", StringComparison.Ordinal))
+            .Select(field => field.Name)
+            .ToHashSet(StringComparer.Ordinal);
+        _knownLinkedIssueFieldNames = [];
         await LoadOperationLogAsync(cancellationToken).ConfigureAwait(false);
 
         var title = snapshot.Project.Title;
@@ -171,6 +188,16 @@ public sealed class ProjectImporter
     {
         ArgumentNullException.ThrowIfNull(snapshot);
         ArgumentException.ThrowIfNullOrWhiteSpace(ownerLogin);
+        _snapshotFieldNames = snapshot.Fields.Select(field => field.Name).ToHashSet(StringComparer.Ordinal);
+        _snapshotIssueFieldNames = snapshot.Fields
+            .Where(field => field.IssueField is not null)
+            .Select(field => field.Name)
+            .ToHashSet(StringComparer.Ordinal);
+        _snapshotMultiSelectIssueFieldNames = snapshot.Fields
+            .Where(field => field.IssueField is not null && string.Equals(field.DataType, "MULTI_SELECT", StringComparison.Ordinal))
+            .Select(field => field.Name)
+            .ToHashSet(StringComparer.Ordinal);
+        _knownLinkedIssueFieldNames = [];
         await LoadOperationLogAsync(cancellationToken).ConfigureAwait(false);
 
         OnProgress?.Invoke(string.Create(CultureInfo.InvariantCulture,
@@ -208,22 +235,54 @@ public sealed class ProjectImporter
 
     private void ValidatePendingFieldOperations(ProjectSnapshot snapshot, string? projectId)
     {
-        if (_operationLog is null || _operationLog.PendingFields.Count == 0)
+        if (_operationLog is null
+            || (_operationLog.PendingFields.Count == 0
+                && _operationLog.PendingIssueFields.Count == 0
+                && _operationLog.PendingIssueFieldLinks.Count == 0))
         {
             return;
         }
 
-        var snapshotFields = snapshot.Fields.ToDictionary(field => field.Name, StringComparer.Ordinal);
+        var snapshotProjectFields = snapshot.Fields
+            .Where(field => field.IssueField is null)
+            .ToDictionary(field => field.Name, StringComparer.Ordinal);
+        var snapshotIssueFields = snapshot.Fields
+            .Where(field => field.IssueField is not null)
+            .ToDictionary(field => field.Name, StringComparer.Ordinal);
         foreach (var (name, pending) in _operationLog.PendingFields)
         {
             if (projectId is null
                 || !string.Equals(pending.ProjectId, projectId, StringComparison.Ordinal)
-                || !snapshotFields.TryGetValue(name, out var field)
+                || !snapshotProjectFields.TryGetValue(name, out var field)
                 || !string.Equals(pending.Name, field.Name, StringComparison.Ordinal)
                 || !string.Equals(pending.DataType, field.DataType, StringComparison.Ordinal))
             {
                 throw new InvalidOperationException(
                     $"Pending field operation '{pending.OperationId}' does not match the selected project and snapshot. Resume the original import or reconcile it manually.");
+            }
+        }
+
+        foreach (var (name, pending) in _operationLog.PendingIssueFields)
+        {
+            if (projectId is null
+                || !string.Equals(pending.ProjectId, projectId, StringComparison.Ordinal)
+                || !snapshotIssueFields.TryGetValue(name, out var field)
+                || !string.Equals(pending.Name, field.Name, StringComparison.Ordinal)
+                || !string.Equals(pending.DataType, field.DataType, StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    $"Pending Issue Field operation '{pending.OperationId}' does not match the selected project and snapshot. Resume the original import or reconcile it manually.");
+            }
+        }
+
+        foreach (var (name, pending) in _operationLog.PendingIssueFieldLinks)
+        {
+            if (projectId is null
+                || !string.Equals(pending.ProjectId, projectId, StringComparison.Ordinal)
+                || !snapshotIssueFields.ContainsKey(name))
+            {
+                throw new InvalidOperationException(
+                    $"Pending Issue Field link operation '{pending.OperationId}' does not match the selected project and snapshot. Resume the original import or reconcile it manually.");
             }
         }
     }
@@ -244,16 +303,44 @@ public sealed class ProjectImporter
             await UpdateProjectVisibilityAsync(project.Id, snapshot.Project.Public, cancellationToken).ConfigureAwait(false);
         }
 
+        List<TargetIssueField> targetIssueFields = [];
+        if (OwnerType == ProjectOwnerType.Organization && _snapshotIssueFieldNames.Count > 0)
+        {
+            targetIssueFields = await FetchIssueFieldListAsync(ownerLogin, cancellationToken).ConfigureAwait(false);
+        }
+
+        _targetIssueFieldNames = targetIssueFields
+            .Select(field => field.Name)
+            .ToHashSet(StringComparer.Ordinal);
+        _targetMultiSelectIssueFieldNames = targetIssueFields
+            .Where(field => string.Equals(field.DataType, "MULTI_SELECT", StringComparison.Ordinal))
+            .Select(field => field.Name)
+            .ToHashSet(StringComparer.Ordinal);
+
+        OnProgress?.Invoke("Reading existing project fields...");
         var maps = new FieldMaps();
         var existingFieldList = await FetchFieldListAsync(project.Id, maps, cancellationToken).ConfigureAwait(false);
         var existingFields = new Dictionary<string, TargetField>(StringComparer.Ordinal);
         foreach (var existingField in existingFieldList)
         {
+            if (string.Equals(existingField.TypeName, "ProjectV2Field", StringComparison.Ordinal)
+                && string.IsNullOrEmpty(existingField.DataType)
+                && _snapshotIssueFieldNames.Contains(existingField.Name)
+                && _targetIssueFieldNames.Contains(existingField.Name))
+            {
+                continue;
+            }
+
             existingFields[existingField.Name] = existingField;
         }
 
         foreach (var field in snapshot.Fields)
         {
+            if (field.IssueField is not null)
+            {
+                continue;
+            }
+
             if (!CreatableDataTypes.Contains(field.DataType))
             {
                 continue; // Built-in field (Title, Assignees, Labels, Repository, Milestone, Reviewers, ...).
@@ -362,6 +449,15 @@ public sealed class ProjectImporter
             }
         }
 
+        await ApplyIssueFieldsAsync(
+            snapshot.Fields.Where(field => field.IssueField is not null).ToList(),
+            ownerLogin,
+            project.Id,
+            existingFieldList,
+            existingFields,
+            maps,
+            targetIssueFields,
+            cancellationToken).ConfigureAwait(false);
         await ApplyCollaboratorsAsync(project.Id, ownerLogin, snapshot.Collaborators, cancellationToken).ConfigureAwait(false);
         await ApplyLinkedRepositoriesAsync(project.Id, snapshot.LinkedRepositories, cancellationToken).ConfigureAwait(false);
 
@@ -369,6 +465,341 @@ public sealed class ProjectImporter
             $"Import finished: project #{project.Number}, {maps.FieldIds.Count} fields mapped."));
         return maps.ToResult(project, outcome);
     }
+
+    private async Task ApplyIssueFieldsAsync(
+        List<FieldSnapshot> fields,
+        string ownerLogin,
+        string projectId,
+        List<TargetField> projectFields,
+        Dictionary<string, TargetField> projectFieldsByName,
+        FieldMaps maps,
+        List<TargetIssueField> issueFields,
+        CancellationToken cancellationToken)
+    {
+        if (fields.Count == 0)
+        {
+            return;
+        }
+
+        if (OwnerType == ProjectOwnerType.User)
+        {
+            Warn("organization Issue Fields cannot be imported into a user-owned project; skipping linked Issue Fields.");
+            return;
+        }
+
+        var issueFieldGroups = issueFields.GroupBy(field => field.Name, StringComparer.Ordinal).ToList();
+        var duplicateIssueFieldNames = issueFieldGroups
+            .Where(group => group.Skip(1).Any())
+            .Select(group => group.Key)
+            .ToHashSet(StringComparer.Ordinal);
+        var issueFieldsByName = issueFieldGroups
+            .Where(group => !duplicateIssueFieldNames.Contains(group.Key))
+            .ToDictionary(group => group.Key, group => group.Single(), StringComparer.Ordinal);
+        string? ownerId = null;
+
+        foreach (var field in fields)
+        {
+            TargetIssueField targetIssueField;
+            if (_operationLog?.PendingIssueFields.TryGetValue(field.Name, out var pendingField) == true)
+            {
+                if (!string.Equals(pendingField.ProjectId, projectId, StringComparison.Ordinal)
+                    || !string.Equals(pendingField.OwnerLogin, ownerLogin, StringComparison.Ordinal)
+                    || !string.Equals(pendingField.DataType, field.DataType, StringComparison.Ordinal))
+                {
+                    throw new InvalidOperationException(
+                        $"Pending Issue Field operation '{pendingField.OperationId}' does not match field '{field.Name}'.");
+                }
+
+                targetIssueField = await ReconcilePendingIssueFieldAsync(
+                    ownerLogin,
+                    field,
+                    issueFields,
+                    pendingField,
+                    cancellationToken).ConfigureAwait(false);
+                if (IssueFieldNeedsUpdate(field, targetIssueField))
+                {
+                    targetIssueField = await UpdateIssueFieldAsync(
+                        targetIssueField.Id,
+                        field,
+                        cancellationToken).ConfigureAwait(false);
+                }
+
+                issueFields.Add(targetIssueField);
+                issueFieldsByName[field.Name] = targetIssueField;
+                _operationLog.PendingIssueFields.Remove(field.Name);
+                await SaveOperationLogAsync(cancellationToken).ConfigureAwait(false);
+            }
+            else if (duplicateIssueFieldNames.Contains(field.Name))
+            {
+                throw new InvalidOperationException(
+                    $"Multiple organization Issue Fields named '{field.Name}' exist in the target. Reconcile them before importing.");
+            }
+            else if (issueFieldsByName.TryGetValue(field.Name, out var existing))
+            {
+                if (!string.Equals(existing.DataType, field.DataType, StringComparison.Ordinal))
+                {
+                    Warn($"Issue Field '{field.Name}' exists with data type {existing.DataType} (snapshot: {field.DataType}); leaving it unchanged and skipping its values.");
+                    continue;
+                }
+
+                targetIssueField = IssueFieldNeedsUpdate(field, existing)
+                    ? await UpdateIssueFieldAsync(existing.Id, field, cancellationToken).ConfigureAwait(false)
+                    : existing;
+                issueFieldsByName[field.Name] = targetIssueField;
+            }
+            else
+            {
+                OnProgress?.Invoke($"Creating organization Issue Field {field.DataType} '{field.Name}'...");
+                ownerId ??= await GetOwnerIdAsync(ownerLogin, cancellationToken).ConfigureAwait(false);
+                var operationId = Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture);
+                if (_operationLog is not null)
+                {
+                    _operationLog.PendingIssueFields[field.Name] = new PendingIssueFieldOperation
+                    {
+                        OperationId = operationId,
+                        ProjectId = projectId,
+                        OwnerLogin = ownerLogin,
+                        Name = field.Name,
+                        DataType = field.DataType,
+                        ExistingIssueFieldIds = [.. issueFields.Select(candidate => candidate.Id)],
+                    };
+                    await SaveOperationLogAsync(cancellationToken).ConfigureAwait(false);
+                }
+
+                try
+                {
+                    targetIssueField = await CreateIssueFieldAsync(ownerId, field, operationId, cancellationToken).ConfigureAwait(false);
+                }
+                catch (AmbiguousMutationResultException)
+                {
+                    throw;
+                }
+                catch
+                {
+                    if (_operationLog is not null)
+                    {
+                        _operationLog.PendingIssueFields.Remove(field.Name);
+                        await SaveOperationLogAsync(CancellationToken.None).ConfigureAwait(false);
+                    }
+
+                    throw;
+                }
+
+                issueFields.Add(targetIssueField);
+                issueFieldsByName[field.Name] = targetIssueField;
+                if (_operationLog is not null)
+                {
+                    _operationLog.PendingIssueFields.Remove(field.Name);
+                    await SaveOperationLogAsync(cancellationToken).ConfigureAwait(false);
+                }
+            }
+
+            maps.RegisterIssueField(targetIssueField);
+            _targetIssueFieldNames.Add(targetIssueField.Name);
+            await EnsureIssueFieldLinkedAsync(
+                projectId,
+                targetIssueField,
+                projectFields,
+                projectFieldsByName,
+                maps,
+                cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    private async Task<List<TargetIssueField>> FetchIssueFieldListAsync(
+        string ownerLogin,
+        CancellationToken cancellationToken)
+    {
+        var fields = new List<TargetIssueField>();
+        await foreach (var node in _client.QueryPaginatedAsync(
+            IssueFieldsQuery,
+            new { login = ownerLogin, first = 100 },
+            "organization.issueFields",
+            cancellationToken: cancellationToken).ConfigureAwait(false))
+        {
+            fields.Add(ParseTargetIssueField(node));
+        }
+
+        return fields;
+    }
+
+    private async Task<TargetIssueField> CreateIssueFieldAsync(
+        string ownerId,
+        FieldSnapshot field,
+        string clientMutationId,
+        CancellationToken cancellationToken)
+    {
+        var data = await _client.MutationAsync(
+            "createIssueField",
+            CreateIssueFieldMutation,
+            new
+            {
+                ownerId,
+                name = field.Name,
+                description = field.IssueField?.Description,
+                dataType = field.DataType,
+                options = IsSelectIssueField(field.DataType) ? BuildIssueFieldOptionInputs(field.Options ?? []) : null,
+                visibility = field.IssueField?.Visibility,
+            },
+            target: ownerId,
+            clientMutationId: clientMutationId,
+            requiredResultPath: "issueField.id",
+            cancellationToken: cancellationToken).ConfigureAwait(false);
+        return ParseTargetIssueField(data.GetProperty("createIssueField").GetProperty("issueField"));
+    }
+
+    private async Task<TargetIssueField> UpdateIssueFieldAsync(
+        string issueFieldId,
+        FieldSnapshot field,
+        CancellationToken cancellationToken)
+    {
+        OnProgress?.Invoke($"Updating organization Issue Field '{field.Name}' metadata and options...");
+        var data = await _client.MutationAsync(
+            "updateIssueField",
+            UpdateIssueFieldMutation,
+            new
+            {
+                id = issueFieldId,
+                description = field.IssueField?.Description,
+                options = IsSelectIssueField(field.DataType) ? BuildIssueFieldOptionInputs(field.Options ?? []) : null,
+                visibility = field.IssueField?.Visibility,
+            },
+            MutationRetryPolicy.Idempotent,
+            target: issueFieldId,
+            requiredResultPath: "issueField.id",
+            cancellationToken: cancellationToken).ConfigureAwait(false);
+        return ParseTargetIssueField(data.GetProperty("updateIssueField").GetProperty("issueField"));
+    }
+
+    private async Task EnsureIssueFieldLinkedAsync(
+        string projectId,
+        TargetIssueField issueField,
+        List<TargetField> projectFields,
+        Dictionary<string, TargetField> projectFieldsByName,
+        FieldMaps maps,
+        CancellationToken cancellationToken)
+    {
+        TargetField linkedField;
+        if (_operationLog?.PendingIssueFieldLinks.TryGetValue(issueField.Name, out var pendingLink) == true)
+        {
+            if (!string.Equals(pendingLink.ProjectId, projectId, StringComparison.Ordinal)
+                || !string.Equals(pendingLink.IssueFieldId, issueField.Id, StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    $"Pending Issue Field link operation '{pendingLink.OperationId}' does not match field '{issueField.Name}'.");
+            }
+
+            if (_knownLinkedIssueFieldNames.Contains(issueField.Name))
+            {
+                _operationLog.PendingIssueFieldLinks.Remove(issueField.Name);
+                await SaveOperationLogAsync(cancellationToken).ConfigureAwait(false);
+                return;
+            }
+
+            linkedField = await ReconcilePendingIssueFieldLinkAsync(
+                projectId,
+                issueField.Name,
+                projectFields,
+                maps,
+                pendingLink,
+                cancellationToken).ConfigureAwait(false);
+            _operationLog.PendingIssueFieldLinks.Remove(issueField.Name);
+            await SaveOperationLogAsync(cancellationToken).ConfigureAwait(false);
+        }
+        else
+        {
+            if (_knownLinkedIssueFieldNames.Contains(issueField.Name))
+            {
+                return;
+            }
+
+            var linkCandidates = projectFields.Where(field =>
+                string.Equals(field.Name, issueField.Name, StringComparison.Ordinal)
+                && string.Equals(field.TypeName, "ProjectV2Field", StringComparison.Ordinal)
+                && (string.Equals(field.DataType, issueField.DataType, StringComparison.Ordinal)
+                    || (string.Equals(issueField.DataType, "MULTI_SELECT", StringComparison.Ordinal)
+                        && string.IsNullOrEmpty(field.DataType)))).ToArray();
+            if (linkCandidates.Length > 1)
+            {
+                throw new InvalidOperationException(
+                    $"Multiple project fields can satisfy the organization Issue Field link '{issueField.Name}'. Reconcile the target manually.");
+            }
+
+            if (linkCandidates.Length == 1)
+            {
+                return;
+            }
+
+            OnProgress?.Invoke($"Linking organization Issue Field '{issueField.Name}' to the project...");
+            var operationId = Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture);
+            if (_operationLog is not null)
+            {
+                _operationLog.PendingIssueFieldLinks[issueField.Name] = new PendingIssueFieldLinkOperation
+                {
+                    OperationId = operationId,
+                    ProjectId = projectId,
+                    IssueFieldId = issueField.Id,
+                    Name = issueField.Name,
+                    ExistingFieldIds = [.. projectFields.Select(field => field.Id)],
+                };
+                await SaveOperationLogAsync(cancellationToken).ConfigureAwait(false);
+            }
+
+            try
+            {
+                await CreateProjectIssueFieldAsync(
+                    projectId,
+                    issueField.Id,
+                    operationId,
+                    cancellationToken).ConfigureAwait(false);
+            }
+            catch (AmbiguousMutationResultException)
+            {
+                throw;
+            }
+            catch
+            {
+                if (_operationLog is not null)
+                {
+                    _operationLog.PendingIssueFieldLinks.Remove(issueField.Name);
+                    await SaveOperationLogAsync(CancellationToken.None).ConfigureAwait(false);
+                }
+
+                throw;
+            }
+
+            if (_operationLog is not null)
+            {
+                _operationLog.PendingIssueFieldLinks.Remove(issueField.Name);
+                await SaveOperationLogAsync(cancellationToken).ConfigureAwait(false);
+            }
+
+            return;
+        }
+
+        projectFields.Add(linkedField);
+        projectFieldsByName[linkedField.Name] = linkedField;
+    }
+
+    private async Task CreateProjectIssueFieldAsync(
+        string projectId,
+        string issueFieldId,
+        string clientMutationId,
+        CancellationToken cancellationToken)
+        => await _client.MutationAsync(
+            "createProjectV2IssueField",
+            """
+            mutation($projectId: ID!, $issueFieldId: ID!, $clientMutationId: String!) {
+              createProjectV2IssueField(input: { projectId: $projectId, issueFieldId: $issueFieldId, clientMutationId: $clientMutationId }) {
+                clientMutationId
+              }
+            }
+            """,
+            new { projectId, issueFieldId },
+            target: projectId,
+            clientMutationId: clientMutationId,
+            requiredResultPath: "clientMutationId",
+            cancellationToken: cancellationToken).ConfigureAwait(false);
 
     /// <summary>
     /// Applies snapshot collaborators through a single <c>updateProjectV2Collaborators</c>
@@ -697,8 +1128,160 @@ public sealed class ProjectImporter
 
     private async Task<List<TargetField>> FetchFieldListAsync(string projectId, FieldMaps maps, CancellationToken cancellationToken)
     {
-        var data = await _client.QueryAsync(FieldsQuery, new { id = projectId }, cancellationToken).ConfigureAwait(false);
-        return [.. data.GetProperty("node").GetProperty("fields").GetProperty("nodes").EnumerateArray().Select(maps.Register)];
+        if (_snapshotIssueFieldNames.Count == 0)
+        {
+            var data = await _client.QueryAsync(FieldsQuery, new { id = projectId }, cancellationToken).ConfigureAwait(false);
+            return [.. data.GetProperty("node").GetProperty("fields").GetProperty("nodes").EnumerateArray().Select(maps.Register)];
+        }
+
+        List<JsonElement> nodes;
+        try
+        {
+            var safeData = await _client.QueryWithoutInternalErrorRetryAsync(
+                FieldsWithIssueFieldsQuery,
+                new { id = projectId },
+                cancellationToken).ConfigureAwait(false);
+            nodes = [.. safeData.GetProperty("node").GetProperty("fields").GetProperty("nodes").EnumerateArray()];
+        }
+        catch (GitHubGraphQLException exception) when (IsPreviewFieldInternalError(exception))
+        {
+            nodes = await FetchFieldNodesByNameAsync(projectId, cancellationToken).ConfigureAwait(false);
+        }
+
+        Dictionary<string, JsonElement> details = [];
+        var detailIds = nodes
+            .Where(node => node.TryGetProperty("__typename", out var typeName)
+                && typeName.GetString() is "ProjectV2SingleSelectField" or "ProjectV2IterationField")
+            .Select(node => node.GetProperty("id").GetString() ?? string.Empty)
+            .ToArray();
+        if (detailIds.Length > 0)
+        {
+            var detailData = await _client.QueryAsync(
+                FieldDetailsQuery,
+                new { ids = detailIds },
+                cancellationToken).ConfigureAwait(false);
+            details = detailData.GetProperty("nodes").EnumerateArray()
+                .Where(node => node.ValueKind == JsonValueKind.Object)
+                .ToDictionary(
+                    node => node.GetProperty("id").GetString() ?? string.Empty,
+                    StringComparer.Ordinal);
+        }
+
+        var candidates = nodes
+            .Where(node => node.TryGetProperty("__typename", out var typeName)
+                && typeName.GetString() == "ProjectV2Field"
+                && !node.TryGetProperty("dataType", out _))
+            .ToArray();
+        Dictionary<string, string> dataTypes = [];
+        var unambiguousIds = candidates
+            .Where(candidate => !_targetMultiSelectIssueFieldNames.Contains(
+                candidate.GetProperty("name").GetString() ?? string.Empty))
+            .Select(candidate => candidate.GetProperty("id").GetString() ?? string.Empty)
+            .ToArray();
+        if (unambiguousIds.Length > 0)
+        {
+            AddFieldDataTypes(
+                dataTypes,
+                await _client.QueryAsync(
+                    FieldDataTypesQuery,
+                    new { ids = unambiguousIds },
+                    cancellationToken).ConfigureAwait(false));
+        }
+
+        foreach (var candidate in candidates.Where(candidate =>
+                     _targetMultiSelectIssueFieldNames.Contains(
+                         candidate.GetProperty("name").GetString() ?? string.Empty)))
+        {
+            var candidateId = candidate.GetProperty("id").GetString() ?? string.Empty;
+            var candidateName = candidate.GetProperty("name").GetString() ?? string.Empty;
+            try
+            {
+                AddFieldDataTypes(
+                    dataTypes,
+                    await _client.QueryAsync(
+                        FieldDataTypesQuery,
+                        new { ids = new[] { candidateId } },
+                        cancellationToken).ConfigureAwait(false));
+            }
+            catch (GitHubGraphQLException exception) when (
+                _targetMultiSelectIssueFieldNames.Contains(candidateName)
+                && IsPreviewFieldInternalError(exception))
+            {
+                // GitHub's preview schema cannot resolve dataType for a linked multi-select Issue Field.
+            }
+        }
+
+        return
+        [
+            .. nodes.Select(node =>
+            {
+                var id = node.GetProperty("id").GetString() ?? string.Empty;
+                var fieldNode = details.TryGetValue(id, out var detail) ? detail : node;
+                var isIssueFieldLink = node.TryGetProperty("__typename", out var typeName)
+                    && typeName.GetString() == "ProjectV2Field"
+                    && _targetIssueFieldNames.Contains(node.GetProperty("name").GetString() ?? string.Empty)
+                    && !node.TryGetProperty("dataType", out _)
+                    && !dataTypes.ContainsKey(id);
+                return isIssueFieldLink
+                    ? ParseIssueFieldLink(fieldNode)
+                    : maps.Register(fieldNode, dataTypes);
+            }),
+        ];
+    }
+
+    private async Task<List<JsonElement>> FetchFieldNodesByNameAsync(
+        string projectId,
+        CancellationToken cancellationToken)
+    {
+        var nodes = new List<JsonElement>();
+        foreach (var name in _snapshotFieldNames)
+        {
+            JsonElement data;
+            try
+            {
+                data = await _client.QueryAsync(
+                    FieldByNameQuery,
+                    new { id = projectId, name },
+                    cancellationToken).ConfigureAwait(false);
+            }
+            catch (GitHubGraphQLException exception) when (
+                _snapshotMultiSelectIssueFieldNames.Contains(name)
+                && IsPreviewFieldInternalError(exception))
+            {
+                _knownLinkedIssueFieldNames.Add(name);
+                continue;
+            }
+            catch (GitHubGraphQLException exception) when (IsMissingProjectFieldError(exception))
+            {
+                continue;
+            }
+
+            var node = data.GetProperty("node").GetProperty("field");
+            if (node.ValueKind == JsonValueKind.Object)
+            {
+                nodes.Add(node);
+            }
+        }
+
+        return nodes;
+    }
+
+    private static bool IsPreviewFieldInternalError(GitHubGraphQLException exception)
+        => exception.ErrorsJson?.Contains(
+            "Something went wrong while executing your query",
+            StringComparison.OrdinalIgnoreCase) == true;
+
+    private static bool IsMissingProjectFieldError(GitHubGraphQLException exception)
+        => exception.ErrorsJson?.Contains("\"type\":\"NOT_FOUND\"", StringComparison.Ordinal) == true
+            && exception.ErrorsJson.Contains("ProjectV2FieldConfiguration", StringComparison.Ordinal);
+
+    private static void AddFieldDataTypes(Dictionary<string, string> result, JsonElement data)
+    {
+        foreach (var node in data.GetProperty("nodes").EnumerateArray().Where(node => node.ValueKind == JsonValueKind.Object))
+        {
+            result[node.GetProperty("id").GetString() ?? string.Empty] =
+                node.GetProperty("dataType").GetString() ?? string.Empty;
+        }
     }
 
     private async Task<JsonElement> CreateFieldAsync(
@@ -769,6 +1352,80 @@ public sealed class ProjectImporter
             $"Pending project operation '{pending.OperationId}' is not visible after reconciliation polling. Do not resend it until the target is reconciled manually.");
     }
 
+    private async Task<TargetIssueField> ReconcilePendingIssueFieldAsync(
+        string ownerLogin,
+        FieldSnapshot field,
+        IReadOnlyList<TargetIssueField> initialFields,
+        PendingIssueFieldOperation pending,
+        CancellationToken cancellationToken)
+    {
+        IReadOnlyList<TargetIssueField> fields = initialFields;
+        for (var attempt = 0; attempt < 3; attempt++)
+        {
+            var baseline = new HashSet<string>(pending.ExistingIssueFieldIds, StringComparer.Ordinal);
+            var candidates = fields.Where(candidate =>
+                string.Equals(candidate.Name, field.Name, StringComparison.Ordinal)
+                && string.Equals(candidate.DataType, field.DataType, StringComparison.Ordinal)
+                && !baseline.Contains(candidate.Id)).ToArray();
+            if (candidates.Length == 1)
+            {
+                return candidates[0];
+            }
+
+            if (candidates.Length > 1)
+            {
+                throw new InvalidOperationException(
+                    $"Pending Issue Field operation '{pending.OperationId}' matches multiple new Issue Fields. Reconcile the target organization manually.");
+            }
+
+            if (attempt < 2)
+            {
+                await Task.Delay(TimeSpan.FromSeconds(Math.Pow(2, attempt)), cancellationToken).ConfigureAwait(false);
+                fields = await FetchIssueFieldListAsync(ownerLogin, cancellationToken).ConfigureAwait(false);
+            }
+        }
+
+        throw new InvalidOperationException(
+            $"Pending Issue Field operation '{pending.OperationId}' is not visible after reconciliation polling. Do not resend it until the target organization is reconciled manually.");
+    }
+
+    private async Task<TargetField> ReconcilePendingIssueFieldLinkAsync(
+        string projectId,
+        string fieldName,
+        IReadOnlyList<TargetField> initialFields,
+        FieldMaps maps,
+        PendingIssueFieldLinkOperation pending,
+        CancellationToken cancellationToken)
+    {
+        IReadOnlyList<TargetField> fields = initialFields;
+        for (var attempt = 0; attempt < 3; attempt++)
+        {
+            var baseline = new HashSet<string>(pending.ExistingFieldIds, StringComparer.Ordinal);
+            var candidates = fields.Where(candidate =>
+                string.Equals(candidate.Name, fieldName, StringComparison.Ordinal)
+                && !baseline.Contains(candidate.Id)).ToArray();
+            if (candidates.Length == 1)
+            {
+                return candidates[0];
+            }
+
+            if (candidates.Length > 1)
+            {
+                throw new InvalidOperationException(
+                    $"Pending Issue Field link operation '{pending.OperationId}' matches multiple new project fields. Reconcile the target project manually.");
+            }
+
+            if (attempt < 2)
+            {
+                await Task.Delay(TimeSpan.FromSeconds(Math.Pow(2, attempt)), cancellationToken).ConfigureAwait(false);
+                fields = await FetchFieldListAsync(projectId, maps, cancellationToken).ConfigureAwait(false);
+            }
+        }
+
+        throw new InvalidOperationException(
+            $"Pending Issue Field link operation '{pending.OperationId}' is not visible after reconciliation polling. Do not resend it until the target project is reconciled manually.");
+    }
+
     private async Task<TargetField> ReconcilePendingFieldAsync(
         string projectId,
         FieldSnapshot field,
@@ -812,6 +1469,7 @@ public sealed class ProjectImporter
             mutation($fieldId: ID!, $options: [ProjectV2SingleSelectFieldOptionInput!]!, $clientMutationId: String!) {
               updateProjectV2Field(input: { fieldId: $fieldId, singleSelectOptions: $options, clientMutationId: $clientMutationId }) {
                 projectV2Field {
+                  __typename
                   ... on ProjectV2FieldCommon { id name dataType }
                   ... on ProjectV2SingleSelectField { options { id name } }
                 }
@@ -830,6 +1488,72 @@ public sealed class ProjectImporter
     /// <summary>Builds option inputs without ids so the target issues fresh option IDs (PLAN §1.2).</summary>
     private static object[] BuildOptionInputs(IReadOnlyList<SingleSelectOptionSnapshot> options)
         => [.. options.Select(o => new { name = o.Name, color = o.Color, description = o.Description ?? string.Empty })];
+
+    private static object[] BuildIssueFieldOptionInputs(IReadOnlyList<SingleSelectOptionSnapshot> options)
+        => [.. options.Select((option, priority) => new
+        {
+            name = option.Name,
+            color = option.Color,
+            description = option.Description ?? string.Empty,
+            priority,
+        })];
+
+    private static bool IsSelectIssueField(string dataType)
+        => dataType is "SINGLE_SELECT" or "MULTI_SELECT";
+
+    private static bool IssueFieldNeedsUpdate(FieldSnapshot source, TargetIssueField target)
+    {
+        if (!string.Equals(source.IssueField?.Description, target.Description, StringComparison.Ordinal)
+            || !string.Equals(source.IssueField?.Visibility, target.Visibility, StringComparison.Ordinal))
+        {
+            return true;
+        }
+
+        var sourceOptions = source.Options ?? [];
+        var targetOptions = target.Options ?? [];
+        return sourceOptions.Count != targetOptions.Count
+            || sourceOptions.Zip(targetOptions).Any(pair =>
+                !string.Equals(pair.First.Name, pair.Second.Name, StringComparison.Ordinal)
+                || !string.Equals(pair.First.Color, pair.Second.Color, StringComparison.Ordinal)
+                || !string.Equals(pair.First.Description, pair.Second.Description, StringComparison.Ordinal));
+    }
+
+    private static TargetIssueField ParseTargetIssueField(JsonElement node)
+    {
+        var options = node.TryGetProperty("options", out var optionNodes)
+            && optionNodes.ValueKind == JsonValueKind.Array
+            ? optionNodes.EnumerateArray().Select(option => new SingleSelectOptionSnapshot
+            {
+                Id = option.GetProperty("id").GetString() ?? string.Empty,
+                Name = option.GetProperty("name").GetString() ?? string.Empty,
+                Color = option.GetProperty("color").GetString() ?? string.Empty,
+                Description = option.TryGetProperty("description", out var description)
+                    && description.ValueKind == JsonValueKind.String
+                    ? description.GetString()
+                    : null,
+            }).ToList()
+            : null;
+        return new TargetIssueField(
+            node.GetProperty("id").GetString() ?? throw new GitHubGraphQLException("Issue Field id was null."),
+            node.GetProperty("name").GetString() ?? throw new GitHubGraphQLException("Issue Field name was null."),
+            node.GetProperty("dataType").GetString() ?? string.Empty,
+            node.TryGetProperty("description", out var description)
+                && description.ValueKind == JsonValueKind.String
+                ? description.GetString()
+                : null,
+            node.GetProperty("visibility").GetString() ?? string.Empty,
+            options);
+    }
+
+    private static TargetField ParseIssueFieldLink(JsonElement node)
+    {
+        var id = node.GetProperty("id").GetString() ?? throw new GitHubGraphQLException("Field id was null.");
+        var name = node.GetProperty("name").GetString() ?? throw new GitHubGraphQLException("Field name was null.");
+        var typeName = node.TryGetProperty("__typename", out var typeElement)
+            ? typeElement.GetString() ?? "ProjectV2Field"
+            : "ProjectV2Field";
+        return new TargetField(id, name, string.Empty, typeName);
+    }
 
     /// <summary>
     /// Builds the iteration configuration input. All iterations (completed included) are
@@ -873,7 +1597,15 @@ public sealed class ProjectImporter
 
     private sealed record ProjectRef(string Id, int Number, string Url, bool Public);
 
-    private sealed record TargetField(string Id, string Name, string DataType);
+    private sealed record TargetField(string Id, string Name, string DataType, string TypeName);
+
+    private sealed record TargetIssueField(
+        string Id,
+        string Name,
+        string DataType,
+        string? Description,
+        string Visibility,
+        IReadOnlyList<SingleSelectOptionSnapshot>? Options);
 
     /// <summary>Accumulates fieldName → id, optionName → id and iterationTitle → id mappings.</summary>
     private sealed class FieldMaps
@@ -884,12 +1616,30 @@ public sealed class ProjectImporter
 
         public Dictionary<string, IReadOnlyDictionary<string, string>> IterationIds { get; } = new(StringComparer.Ordinal);
 
+        public Dictionary<string, string> IssueFieldIds { get; } = new(StringComparer.Ordinal);
+
+        public Dictionary<string, IReadOnlyDictionary<string, string>> IssueFieldOptionIds { get; } = new(StringComparer.Ordinal);
+
         /// <summary>Registers a field node (from a query or mutation response) and returns its identity.</summary>
         public TargetField Register(JsonElement node)
+            => Register(node, null);
+
+        public TargetField Register(JsonElement node, Dictionary<string, string>? dataTypes)
         {
             var id = node.GetProperty("id").GetString() ?? throw new GitHubGraphQLException("Field id was null.");
             var name = node.GetProperty("name").GetString() ?? throw new GitHubGraphQLException("Field name was null.");
-            var dataType = node.GetProperty("dataType").GetString() ?? string.Empty;
+            var typeName = node.TryGetProperty("__typename", out var typeElement)
+                ? typeElement.GetString() ?? string.Empty
+                : string.Empty;
+            var dataType = node.TryGetProperty("dataType", out var dataTypeElement)
+                ? dataTypeElement.GetString() ?? string.Empty
+                : typeName switch
+                {
+                    "ProjectV2SingleSelectField" => "SINGLE_SELECT",
+                    "ProjectV2IterationField" => "ITERATION",
+                    _ when dataTypes?.TryGetValue(id, out var value) == true => value,
+                    _ => string.Empty,
+                };
 
             FieldIds[name] = id;
 
@@ -918,7 +1668,19 @@ public sealed class ProjectImporter
                 IterationIds[name] = map;
             }
 
-            return new TargetField(id, name, dataType);
+            return new TargetField(id, name, dataType, typeName);
+        }
+
+        public void RegisterIssueField(TargetIssueField field)
+        {
+            IssueFieldIds[field.Name] = field.Id;
+            if (field.Options is not null)
+            {
+                IssueFieldOptionIds[field.Name] = field.Options.ToDictionary(
+                    option => option.Name,
+                    option => option.Id,
+                    StringComparer.Ordinal);
+            }
         }
 
         public ImportResult ToResult(ProjectRef project, ProjectImportOutcome outcome) => new()
@@ -930,6 +1692,8 @@ public sealed class ProjectImporter
             FieldIds = FieldIds,
             OptionIds = OptionIds,
             IterationIds = IterationIds,
+            IssueFieldIds = IssueFieldIds,
+            IssueFieldOptionIds = IssueFieldOptionIds,
         };
     }
 
@@ -961,6 +1725,7 @@ public sealed class ProjectImporter
             ... on ProjectV2 {
               fields(first: 50) {
                 nodes {
+                  __typename
                   ... on ProjectV2FieldCommon { id name dataType }
                   ... on ProjectV2SingleSelectField { options { id name } }
                   ... on ProjectV2IterationField {
@@ -972,6 +1737,64 @@ public sealed class ProjectImporter
                 }
               }
             }
+          }
+        }
+        """;
+
+    private const string FieldsWithIssueFieldsQuery =
+        """
+        query($id: ID!) {
+          node(id: $id) {
+            ... on ProjectV2 {
+              fields(first: 50) {
+                nodes {
+                  __typename
+                  ... on ProjectV2FieldCommon { id name }
+                }
+              }
+            }
+          }
+        }
+        """;
+
+    private const string FieldDetailsQuery =
+        """
+        query($ids: [ID!]!) {
+          nodes(ids: $ids) {
+            __typename
+            ... on ProjectV2FieldCommon { id name }
+            ... on ProjectV2SingleSelectField { options { id name } }
+            ... on ProjectV2IterationField {
+              configuration {
+                iterations { id title }
+                completedIterations { id title }
+              }
+            }
+          }
+        }
+        """;
+
+    private const string FieldByNameQuery =
+        """
+        query($id: ID!, $name: String!) {
+          node(id: $id) {
+            ... on ProjectV2 {
+              field(name: $name) {
+                __typename
+                ... on ProjectV2Field { id name }
+                ... on ProjectV2SingleSelectField { id name }
+                ... on ProjectV2IterationField { id name }
+              }
+            }
+          }
+        }
+        """;
+
+    private const string FieldDataTypesQuery =
+        """
+        query($ids: [ID!]!) {
+          nodes(ids: $ids) {
+            ... on ProjectV2Field { id dataType }
           }
         }
         """;
@@ -988,6 +1811,78 @@ public sealed class ProjectImporter
                   iterations { id title }
                   completedIterations { id title }
                 }
+              }
+            }
+          }
+        }
+        """;
+
+    private const string IssueFieldsQuery =
+        """
+        query($login: String!, $first: Int!, $after: String) {
+          organization(login: $login) {
+            issueFields(first: $first, after: $after, orderBy: { field: NAME, direction: ASC }) {
+              nodes {
+                __typename
+                ... on IssueFieldCommon { name dataType description visibility }
+                ... on IssueFieldText { id }
+                ... on IssueFieldNumber { id }
+                ... on IssueFieldDate { id }
+                ... on IssueFieldSingleSelect {
+                  id
+                  options { id name color description }
+                }
+                ... on IssueFieldMultiSelect {
+                  id
+                  options { id name color description }
+                }
+              }
+              pageInfo { hasNextPage endCursor }
+            }
+          }
+        }
+        """;
+
+    private const string CreateIssueFieldMutation =
+        """
+        mutation($ownerId: ID!, $name: String!, $description: String, $dataType: IssueFieldDataType!, $options: [IssueFieldSingleSelectOptionInput!], $visibility: IssueFieldVisibility, $clientMutationId: String!) {
+          createIssueField(input: { ownerId: $ownerId, name: $name, description: $description, dataType: $dataType, options: $options, visibility: $visibility, clientMutationId: $clientMutationId }) {
+            issueField {
+              __typename
+              ... on IssueFieldCommon { name dataType description visibility }
+              ... on IssueFieldText { id }
+              ... on IssueFieldNumber { id }
+              ... on IssueFieldDate { id }
+              ... on IssueFieldSingleSelect {
+                id
+                options { id name color description }
+              }
+              ... on IssueFieldMultiSelect {
+                id
+                options { id name color description }
+              }
+            }
+          }
+        }
+        """;
+
+    private const string UpdateIssueFieldMutation =
+        """
+        mutation($id: ID!, $description: String, $options: [IssueFieldSingleSelectOptionInput!], $visibility: IssueFieldVisibility, $clientMutationId: String!) {
+          updateIssueField(input: { id: $id, description: $description, options: $options, visibility: $visibility, clientMutationId: $clientMutationId }) {
+            issueField {
+              __typename
+              ... on IssueFieldCommon { name dataType description visibility }
+              ... on IssueFieldText { id }
+              ... on IssueFieldNumber { id }
+              ... on IssueFieldDate { id }
+              ... on IssueFieldSingleSelect {
+                id
+                options { id name color description }
+              }
+              ... on IssueFieldMultiSelect {
+                id
+                options { id name color description }
               }
             }
           }

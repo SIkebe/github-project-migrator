@@ -66,6 +66,7 @@ public sealed class ProjectVerifier
             OnProgress = OnProgress,
             OwnerType = OwnerType,
             PostExportAsync = PostExportAsync,
+            FieldNameHints = source.Fields.Select(field => field.Name).ToArray(),
         };
         var target = await exporter.ExportAsync(targetOrgLogin, targetProjectNumber, cancellationToken).ConfigureAwait(false);
         return Compare(source, target, RepositoryMapping, UserMapping, OrganizationMapping);
@@ -123,7 +124,12 @@ public sealed class ProjectVerifier
         CompareFields(source.Fields, target.Fields, differences);
         CompareViews(source.Views, target.Views, differences, notVerified);
         CompareWorkflows(source.Workflows, target.Workflows, differences, notVerified);
-        CompareItems(source.Items, target.Items, differences);
+        CompareItems(
+            source.Items,
+            target.Items,
+            source.Fields.Where(field => field.IssueField is not null).Select(field => field.Name).ToHashSet(StringComparer.Ordinal),
+            target.Fields.Where(field => field.IssueField is not null).Select(field => field.Name).ToHashSet(StringComparer.Ordinal),
+            differences);
         CompareCollaborators(source.Collaborators, target.Collaborators, differences, notVerified);
         CompareLinkedRepositories(source.LinkedRepositories, target.LinkedRepositories, differences, notVerified);
         return new VerifyReport
@@ -226,20 +232,26 @@ public sealed class ProjectVerifier
 
     private static void CompareFields(IReadOnlyList<FieldSnapshot> source, IReadOnlyList<FieldSnapshot> target, List<VerifyDifference> differences)
     {
-        var targetByName = new Dictionary<string, FieldSnapshot>(StringComparer.Ordinal);
-        foreach (var field in target)
-        {
-            targetByName.TryAdd(field.Name, field);
-        }
+        var unmatchedTarget = target.ToList();
 
         foreach (var field in source)
         {
-            if (!targetByName.TryGetValue(field.Name, out var other))
+            var targetIndex = unmatchedTarget.FindIndex(candidate =>
+                FieldIdentityEquals(field, candidate));
+            if (targetIndex < 0)
+            {
+                targetIndex = unmatchedTarget.FindIndex(candidate =>
+                    string.Equals(field.Name, candidate.Name, StringComparison.Ordinal));
+            }
+
+            if (targetIndex < 0)
             {
                 AddError(differences, FieldCategory, $"field '{field.Name}' ({field.DataType}) is missing in the target");
                 continue;
             }
 
+            var other = unmatchedTarget[targetIndex];
+            unmatchedTarget.RemoveAt(targetIndex);
             if (!string.Equals(field.DataType, other.DataType, StringComparison.Ordinal))
             {
                 AddError(differences, FieldCategory,
@@ -249,15 +261,20 @@ public sealed class ProjectVerifier
 
             CompareOptions(field, other, differences);
             CompareIterations(field, other, differences);
+            CompareIssueFieldConfiguration(field, other, differences);
         }
 
-        var sourceNames = source.Select(f => f.Name).ToHashSet(StringComparer.Ordinal);
-        foreach (var extra in target.Where(f => !sourceNames.Contains(f.Name)))
+        foreach (var extra in unmatchedTarget)
         {
             Add(differences, VerifySeverity.Warning, FieldCategory,
                 $"field '{extra.Name}' ({extra.DataType}) exists only in the target");
         }
     }
+
+    private static bool FieldIdentityEquals(FieldSnapshot first, FieldSnapshot second) =>
+        string.Equals(first.Name, second.Name, StringComparison.Ordinal)
+        && string.Equals(first.DataType, second.DataType, StringComparison.Ordinal)
+        && (first.IssueField is null) == (second.IssueField is null);
 
     private static void CompareOptions(FieldSnapshot source, FieldSnapshot target, List<VerifyDifference> differences)
     {
@@ -330,6 +347,34 @@ public sealed class ProjectVerifier
         foreach (var title in targetIterations.Keys.Where(k => !sourceIterations.ContainsKey(k)))
         {
             AddError(differences, FieldCategory, $"field '{source.Name}': iteration '{title}' exists only in the target");
+        }
+    }
+
+    private static void CompareIssueFieldConfiguration(
+        FieldSnapshot source,
+        FieldSnapshot target,
+        List<VerifyDifference> differences)
+    {
+        if (source.IssueField is null && target.IssueField is null)
+        {
+            return;
+        }
+
+        if (source.IssueField is null || target.IssueField is null)
+        {
+            AddError(differences, FieldCategory, $"field '{source.Name}': Issue Field linkage mismatch");
+            return;
+        }
+
+        if (!TextEquals(source.IssueField.Description, target.IssueField.Description))
+        {
+            AddError(differences, FieldCategory, $"field '{source.Name}': Issue Field description mismatch");
+        }
+
+        if (!string.Equals(source.IssueField.Visibility, target.IssueField.Visibility, StringComparison.Ordinal))
+        {
+            AddError(differences, FieldCategory,
+                $"field '{source.Name}': Issue Field visibility mismatch (source {source.IssueField.Visibility}, target {target.IssueField.Visibility})");
         }
     }
 
@@ -753,7 +798,12 @@ public sealed class ProjectVerifier
 
     // ----- items -----
 
-    private static void CompareItems(IReadOnlyList<ItemSnapshot> source, IReadOnlyList<ItemSnapshot> target, List<VerifyDifference> differences)
+    private static void CompareItems(
+        IReadOnlyList<ItemSnapshot> source,
+        IReadOnlyList<ItemSnapshot> target,
+        IReadOnlySet<string> sourceIssueFields,
+        IReadOnlySet<string> targetIssueFields,
+        List<VerifyDifference> differences)
     {
         var sourceOrdered = source.OrderBy(i => i.Position).ToList();
         var targetOrdered = target.OrderBy(i => i.Position).ToList();
@@ -794,7 +844,7 @@ public sealed class ProjectVerifier
 
             for (var i = 0; i < Math.Min(items.Count, targetItems.Count); i++)
             {
-                CompareItemPair(items[i], targetItems[i], key, differences);
+                CompareItemPair(items[i], targetItems[i], key, sourceIssueFields, targetIssueFields, differences);
             }
         }
 
@@ -827,7 +877,13 @@ public sealed class ProjectVerifier
         }
     }
 
-    private static void CompareItemPair(ItemSnapshot source, ItemSnapshot target, string key, List<VerifyDifference> differences)
+    private static void CompareItemPair(
+        ItemSnapshot source,
+        ItemSnapshot target,
+        string key,
+        IReadOnlySet<string> sourceIssueFields,
+        IReadOnlySet<string> targetIssueFields,
+        List<VerifyDifference> differences)
     {
         if (source.IsArchived != target.IsArchived)
         {
@@ -835,7 +891,7 @@ public sealed class ProjectVerifier
                 $"{key}: archived state mismatch (source {source.IsArchived}, target {target.IsArchived})"));
         }
 
-        CompareFieldValues(source, target, key, differences);
+        CompareFieldValues(source, target, key, sourceIssueFields, targetIssueFields, differences);
 
         if (source.Draft is not null && target.Draft is not null)
         {
@@ -849,46 +905,102 @@ public sealed class ProjectVerifier
         }
     }
 
-    private static void CompareFieldValues(ItemSnapshot source, ItemSnapshot target, string key, List<VerifyDifference> differences)
+    private static void CompareFieldValues(
+        ItemSnapshot source,
+        ItemSnapshot target,
+        string key,
+        IReadOnlySet<string> sourceIssueFields,
+        IReadOnlySet<string> targetIssueFields,
+        List<VerifyDifference> differences)
     {
-        var sourceValues = ToValueMap(source.FieldValues);
-        var targetValues = ToValueMap(target.FieldValues);
+        var sourceValues = ToValueMap(source.FieldValues, sourceIssueFields);
+        var targetValues = ToValueMap(target.FieldValues, targetIssueFields);
 
-        foreach (var name in Names(sourceValues.Keys, targetValues.Keys))
+        var identities = sourceValues.Keys
+            .Concat(targetValues.Keys)
+            .Distinct()
+            .OrderBy(identity => identity.FieldName, StringComparer.Ordinal)
+            .ThenBy(identity => identity.IsIssueField);
+        foreach (var identity in identities)
         {
-            sourceValues.TryGetValue(name, out var s);
-            targetValues.TryGetValue(name, out var t);
-            if (!string.Equals(s ?? string.Empty, t ?? string.Empty, StringComparison.Ordinal))
+            sourceValues.TryGetValue(identity, out var sourceValue);
+            targetValues.TryGetValue(identity, out var targetValue);
+            if (!FieldValuesEqual(sourceValue, targetValue))
             {
                 AddError(differences, ItemCategory,
-                    $"{key}: field '{name}' value mismatch (source {Display(s)}, target {Display(t)})");
+                    $"{key}: field '{identity.FieldName}' value mismatch (source {Display(sourceValue)}, target {Display(targetValue)})");
             }
         }
     }
 
-    private static Dictionary<string, string> ToValueMap(IReadOnlyList<FieldValueSnapshot> values)
+    private static Dictionary<FieldValueIdentity, FieldValueSnapshot> ToValueMap(
+        IReadOnlyList<FieldValueSnapshot> values,
+        IReadOnlySet<string> issueFields)
     {
-        var map = new Dictionary<string, string>(StringComparer.Ordinal);
+        var map = new Dictionary<FieldValueIdentity, FieldValueSnapshot>();
         foreach (var value in values)
         {
-            var formatted = FormatValue(value);
-            if (!string.IsNullOrEmpty(formatted))
+            if (HasValue(value))
             {
-                map.TryAdd(value.FieldName, formatted);
+                map.TryAdd(
+                    new FieldValueIdentity(value.FieldName, value.IsIssueField ?? issueFields.Contains(value.FieldName)),
+                    value);
             }
         }
 
         return map;
     }
 
-    private static string? FormatValue(FieldValueSnapshot value)
-        => value.Text
+    private readonly record struct FieldValueIdentity(string FieldName, bool IsIssueField);
+
+    private static bool HasValue(FieldValueSnapshot value)
+        => !string.IsNullOrEmpty(value.Text)
+            || value.Number is not null
+            || !string.IsNullOrEmpty(value.Date)
+            || !string.IsNullOrEmpty(value.SingleSelectOptionName)
+            || value.MultiSelectOptionNames is { Count: > 0 }
+            || !string.IsNullOrEmpty(value.IterationTitle);
+
+    private static bool FieldValuesEqual(FieldValueSnapshot? source, FieldValueSnapshot? target)
+    {
+        if (source is null || target is null)
+        {
+            return source is null && target is null;
+        }
+
+        return string.Equals(source.Text, target.Text, StringComparison.Ordinal)
+            && source.Number == target.Number
+            && string.Equals(source.Date, target.Date, StringComparison.Ordinal)
+            && string.Equals(source.SingleSelectOptionName, target.SingleSelectOptionName, StringComparison.Ordinal)
+            && MultiSelectValuesEqual(source.MultiSelectOptionNames, target.MultiSelectOptionNames)
+            && string.Equals(source.IterationTitle, target.IterationTitle, StringComparison.Ordinal);
+    }
+
+    private static bool MultiSelectValuesEqual(IReadOnlyList<string>? source, IReadOnlyList<string>? target)
+    {
+        if (source is null || target is null)
+        {
+            return source is null && target is null;
+        }
+
+        return source.Order(StringComparer.Ordinal).SequenceEqual(target.Order(StringComparer.Ordinal), StringComparer.Ordinal);
+    }
+
+    private static string Display(FieldValueSnapshot? value)
+    {
+        if (value is null)
+        {
+            return "(none)";
+        }
+
+        var formatted = value.Text
             ?? value.Date
             ?? value.SingleSelectOptionName
+            ?? (value.MultiSelectOptionNames is null ? null : $"[{string.Join(", ", value.MultiSelectOptionNames.Select(name => $"'{name}'"))}]")
             ?? value.IterationTitle
             ?? value.Number?.ToString("R", CultureInfo.InvariantCulture);
-
-    private static string Display(string? value) => value is null ? "(none)" : $"'{value}'";
+        return formatted is null ? "(none)" : $"'{formatted}'";
+    }
 
     private static Dictionary<string, List<ItemSnapshot>> GroupByKey(List<ItemSnapshot> items)
     {

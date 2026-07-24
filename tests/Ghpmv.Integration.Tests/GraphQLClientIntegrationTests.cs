@@ -1,4 +1,5 @@
 using System.Net;
+using Ghpmv.Core.Export;
 using Ghpmv.Core.GitHub;
 
 namespace Ghpmv.Integration.Tests;
@@ -27,33 +28,14 @@ public class GraphQLClientIntegrationTests
     {
         using var client = new GitHubGraphQLClient(Token);
 
-        var data = await client.QueryAsync(
-            """
-            query($login: String!, $number: Int!) {
-              organization(login: $login) {
-                projectV2(number: $number) {
-                  title
-                  fields(first: 20) {
-                    nodes {
-                      ... on ProjectV2FieldCommon { name }
-                    }
-                  }
-                }
-              }
-            }
-            """,
-            new { login = Org, number = IntegrationTestSettings.FixtureProjectNumber },
+        var snapshot = await new ProjectExporter(client).ExportAsync(
+            Org,
+            IntegrationTestSettings.FixtureProjectNumber,
             TestContext.Current.CancellationToken);
+        Assert.False(string.IsNullOrWhiteSpace(snapshot.Project.Title));
+        var fieldNames = snapshot.Fields.Select(field => field.Name).ToList();
 
-        var project = data.GetProperty("organization").GetProperty("projectV2");
-        Assert.False(string.IsNullOrWhiteSpace(project.GetProperty("title").GetString()));
-
-        var fieldNames = project.GetProperty("fields").GetProperty("nodes")
-            .EnumerateArray()
-            .Select(n => n.GetProperty("name").GetString())
-            .ToList();
-
-        string[] expected = ["Fixture Text", "Fixture Number", "Fixture Date", "Fixture Select", "Fixture Sprint"];
+        string[] expected = ["Fixture Text", "Fixture Number", "Fixture Date", "Fixture Select", "Fixture Sprint", "Fixture Teams"];
         foreach (var name in expected)
         {
             Assert.Contains(name, fieldNames);

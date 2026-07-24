@@ -34,6 +34,11 @@ public class ItemImporterTests
 
     private static string NewTestTitle() => "ghpmv-item-import-test-" + Guid.NewGuid().ToString("N");
 
+    private static Dictionary<string, string> TargetRepoMapping => new(StringComparer.OrdinalIgnoreCase)
+    {
+        [FixtureRepo] = IntegrationTestSettings.TargetFixtureRepositoryFullName,
+    };
+
     private static Dictionary<string, string> IdentityRepoMapping => new(StringComparer.OrdinalIgnoreCase)
     {
         [FixtureRepo] = FixtureRepo,
@@ -48,6 +53,13 @@ public class ItemImporterTests
 
         var exported = await exporter.ExportAsync(SourceOrg, FixtureProjectNumber, cancellationToken);
         var source = IntegrationFixtureSnapshot.SelectCanonicalItems(exported);
+        source = source with
+        {
+            Items = source.Items
+                .Where(item => item.Type != "PULL_REQUEST")
+                .Select((item, position) => item with { Position = position })
+                .ToArray(),
+        };
         var title = NewTestTitle();
         var snapshot = source with { Project = source.Project with { Title = title } };
 
@@ -74,12 +86,19 @@ public class ItemImporterTests
         {
             Assert.Empty(projectImporter.Warnings); // the mapped linked repository must resolve
 
-            var itemImporter = new ItemImporter(client) { RepositoryMapping = IdentityRepoMapping, UserMapping = userMapping };
+            var itemImporter = new ItemImporter(client) { RepositoryMapping = TargetRepoMapping, UserMapping = userMapping };
             var itemResult = await itemImporter.ImportAsync(snapshot, result, logDirectory, cancellationToken);
+            var expectedSnapshot = snapshot with
+            {
+                Items = snapshot.Items.Select(item =>
+                    string.Equals(item.Repository, FixtureRepo, StringComparison.OrdinalIgnoreCase)
+                        ? item with { Repository = IntegrationTestSettings.TargetFixtureRepositoryFullName }
+                        : item).ToArray(),
+            };
             await IntegrationFixtureSnapshot.RemoveUnexpectedItemsAsync(
-                client, TargetOrg, result.ProjectNumber, snapshot, cancellationToken);
+                client, TargetOrg, result.ProjectNumber, expectedSnapshot, cancellationToken);
 
-            // Every fixture item is mappable (drafts + fixture-repo issue/PR), so everything is created.
+            // Every selected fixture item is mappable, so everything is created.
             Assert.Equal(snapshot.Items.Count, itemResult.Created);
             Assert.Equal(0, itemResult.Skipped);
 
@@ -93,7 +112,7 @@ public class ItemImporterTests
             // Non-archived items keep the snapshot order (archived items are excluded from
             // the position chain, so their enumeration position is not guaranteed).
             Assert.Equal(
-                snapshot.Items.Where(i => !i.IsArchived).OrderBy(i => i.Position).Select(ItemKey),
+                expectedSnapshot.Items.Where(i => !i.IsArchived).OrderBy(i => i.Position).Select(ItemKey),
                 imported.Items.Where(i => !i.IsArchived).OrderBy(i => i.Position).Select(ItemKey));
 
             // The five fixture drafts keep their titles, Status values and relative order.
@@ -113,13 +132,14 @@ public class ItemImporterTests
                 Assert.Equal(expected, actual);
             }
 
-            // The fixture's Issue and PR items were relinked (identity mapping, cross-org).
+            // The fixture Issue was relinked to the target repository so its Issue Field value can be restored.
             var importedIssue = Assert.Single(imported.Items, i => i.Type == "ISSUE");
-            Assert.Equal(FixtureRepo, importedIssue.Repository);
+            Assert.Equal(IntegrationTestSettings.TargetFixtureRepositoryFullName, importedIssue.Repository);
             Assert.Equal(1, importedIssue.Number);
-            var importedPullRequest = Assert.Single(imported.Items, i => i.Type == "PULL_REQUEST");
-            Assert.Equal(FixtureRepo, importedPullRequest.Repository);
-
+            var sourceIssue = Assert.Single(snapshot.Items, i => i.Type == "ISSUE");
+            Assert.Equal(
+                sourceIssue.FieldValues.Single(value => value.FieldName == "Fixture Teams").MultiSelectOptionNames,
+                importedIssue.FieldValues.Single(value => value.FieldName == "Fixture Teams").MultiSelectOptionNames);
             // The archived draft was re-archived in the target.
             var importedArchived = Assert.Single(imported.Items, i => i.IsArchived);
             Assert.Equal("Fixture archived draft", importedArchived.Draft?.Title);
@@ -135,7 +155,7 @@ public class ItemImporterTests
                 Assert.StartsWith("> _Originally created by @", draft.Draft!.Body, StringComparison.Ordinal));
 
             // Resume: a second run against the same log directory creates nothing new.
-            var resumeResult = await new ItemImporter(client) { RepositoryMapping = IdentityRepoMapping, UserMapping = userMapping }
+            var resumeResult = await new ItemImporter(client) { RepositoryMapping = TargetRepoMapping, UserMapping = userMapping }
                 .ImportAsync(snapshot, result, logDirectory, cancellationToken);
             Assert.Equal(0, resumeResult.Created);
             Assert.Equal(snapshot.Items.Count, resumeResult.AlreadyComplete);

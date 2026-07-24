@@ -44,6 +44,7 @@ public class ProjectImporterTests
         var source = IntegrationFixtureSnapshot.SelectCanonicalItems(exported);
         var title = NewTestTitle();
         var snapshot = source with { Project = source.Project with { Title = title } };
+        exporter.FieldNameHints = snapshot.Fields.Select(field => field.Name).ToArray();
 
         var importer = new ProjectImporter(client)
         {
@@ -111,6 +112,14 @@ public class ProjectImporterTests
 
                 // All created fields must be present in the id map for M4.
                 Assert.True(result.FieldIds.ContainsKey(sourceField.Name));
+            }
+
+            foreach (var sourceField in snapshot.Fields.Where(field => field.IssueField is not null))
+            {
+                Assert.True(result.IssueFieldIds.ContainsKey(sourceField.Name));
+                Assert.Equal(
+                    (sourceField.Options ?? []).Select(option => option.Name).Order(StringComparer.Ordinal),
+                    result.IssueFieldOptionIds[sourceField.Name].Keys.Order(StringComparer.Ordinal));
             }
         }
         finally
@@ -210,10 +219,25 @@ public class ProjectImporterTests
             // Export the fixture and apply it to the existing project by number.
             var exporter = new ProjectExporter(client);
             var exported = await exporter.ExportAsync(SourceOrg, FixtureProjectNumber, cancellationToken);
-            var snapshot = IntegrationFixtureSnapshot.SelectCanonicalItems(exported);
+            var source = IntegrationFixtureSnapshot.SelectCanonicalItems(exported);
+            var snapshot = source with
+            {
+                // The target fixture repository mirrors issues but does not contain the
+                // source fixture pull request.
+                Items = source.Items
+                    .Where(item => item.Type != "PULL_REQUEST")
+                    .Select((item, position) => item with { Position = position })
+                    .ToArray(),
+            };
+            var repositoryMapping = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                [IntegrationTestSettings.FixtureRepositoryFullName] =
+                    IntegrationTestSettings.TargetFixtureRepositoryFullName,
+            };
 
             var importer = new ProjectImporter(client)
             {
+                RepositoryMapping = repositoryMapping,
                 OperationLogDirectory = logDirectory,
             };
             var result = await importer.ImportIntoAsync(snapshot, TargetOrg, emptyProjectNumber, cancellationToken);
@@ -223,11 +247,11 @@ public class ProjectImporterTests
             Assert.Equal(emptyProjectId, result.ProjectId);
             Assert.Equal(emptyProjectNumber, result.ProjectNumber);
 
-            // Items go in through the normal item import path (identity repo mapping).
-            var repositories = snapshot.Items.Where(i => i.Repository is not null).Select(i => i.Repository!).Distinct(StringComparer.OrdinalIgnoreCase);
+            // Issue Fields belong to the repository owner's organization, so relink fixture
+            // issues before applying their organization-scoped values.
             var itemImporter = new ItemImporter(client)
             {
-                RepositoryMapping = repositories.ToDictionary(r => r, r => r, StringComparer.OrdinalIgnoreCase),
+                RepositoryMapping = repositoryMapping,
             };
             var itemResult = await itemImporter.ImportAsync(snapshot, result, logDirectory, cancellationToken);
             Assert.Equal(snapshot.Items.Count, itemResult.Created);

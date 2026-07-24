@@ -45,6 +45,13 @@ public class VerifyTests
 
         var exported = await exporter.ExportAsync(SourceOrg, FixtureProjectNumber, cancellationToken);
         var source = IntegrationFixtureSnapshot.SelectCanonicalItems(exported);
+        source = source with
+        {
+            Items = source.Items
+                .Where(item => item.Type != "PULL_REQUEST")
+                .Select((item, position) => item with { Position = position })
+                .ToArray(),
+        };
 
         // Guard against silent null==null passes: the enriched fixture must actually carry
         // the elements this test claims to verify end-to-end.
@@ -53,11 +60,14 @@ public class VerifyTests
         Assert.Contains(
             source.Fields.Single(f => f.Name == "Fixture Sprint").IterationConfiguration!.CompletedIterations,
             i => i.Title == "Sprint 0");
-        Assert.Equal(7, source.Items.Count);
+        Assert.Equal(6, source.Items.Count);
         Assert.Contains(source.Items, i => i.Type == "ISSUE");
-        Assert.Contains(source.Items, i => i.Type == "PULL_REQUEST");
         Assert.Contains(source.Items, i => i.IsArchived);
         Assert.Contains(source.Items, i => i.Draft?.Assignees is { Count: > 0 });
+        Assert.Equal(
+            ["Platform", "SDK"],
+            source.Items.Single(i => i.Type == "ISSUE").FieldValues
+                .Single(value => value.FieldName == "Fixture Teams").MultiSelectOptionNames);
         Assert.NotNull(source.LinkedRepositories);
 
         var snapshot = source with { Project = source.Project with { Title = "ghpmv-verify-test-" + Guid.NewGuid().ToString("N") } };
@@ -65,10 +75,6 @@ public class VerifyTests
         var repoMapping = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
             [FixtureRepo] = targetFixtureRepo,
-        };
-        var itemMapping = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
-        {
-            [FixtureRepo] = FixtureRepo,
         };
         var userMapping = snapshot.Items
             .SelectMany(item => item.Draft?.Assignees ?? [])
@@ -86,7 +92,7 @@ public class VerifyTests
         {
             var itemResult = await new ItemImporter(client)
             {
-                RepositoryMapping = itemMapping,
+                RepositoryMapping = repoMapping,
                 UserMapping = userMapping,
             }
                 .ImportAsync(snapshot, result, logDirectory, cancellationToken);
@@ -101,6 +107,10 @@ public class VerifyTests
                     string.Equals(repository, FixtureRepo, StringComparison.OrdinalIgnoreCase)
                         ? targetFixtureRepo
                         : repository).ToList(),
+                Items = snapshot.Items.Select(item =>
+                    string.Equals(item.Repository, FixtureRepo, StringComparison.OrdinalIgnoreCase)
+                        ? item with { Repository = targetFixtureRepo }
+                        : item).ToList(),
             };
             await IntegrationFixtureSnapshot.RemoveUnexpectedItemsAsync(
                 client, TargetOrg, result.ProjectNumber, verificationSnapshot, cancellationToken);

@@ -115,6 +115,36 @@ public class ProjectVerifierTests
     private static ProjectSnapshot WithItems(ProjectSnapshot snapshot, Func<ItemSnapshot, ItemSnapshot> transform)
         => snapshot with { Items = snapshot.Items.Select(transform).ToList() };
 
+    private static ProjectSnapshot WithMultiSelectIssueField(ProjectSnapshot snapshot, IReadOnlyList<string> values)
+        => snapshot with
+        {
+            Fields =
+            [
+                .. snapshot.Fields,
+                new FieldSnapshot
+                {
+                    Name = "Teams",
+                    DataType = "MULTI_SELECT",
+                    Options = [Option("m1", "Platform", "PURPLE"), Option("m2", "SDK", "GREEN")],
+                    IssueField = new IssueFieldConfigurationSnapshot
+                    {
+                        Description = "Teams involved",
+                        Visibility = "ALL",
+                    },
+                },
+            ],
+            Items = snapshot.Items.Select(item => item.Type == "ISSUE"
+                ? item with
+                {
+                    FieldValues =
+                    [
+                        .. item.FieldValues,
+                        new FieldValueSnapshot { FieldName = "Teams", IsIssueField = true, MultiSelectOptionNames = values },
+                    ],
+                }
+                : item).ToList(),
+        };
+
     private sealed class StubHandler(params string[] responses) : HttpMessageHandler
     {
         private readonly Queue<string> _responses = new(responses);
@@ -147,10 +177,13 @@ public class ProjectVerifierTests
     {
         using var handler = new StubHandler(
             """
-            {"data":{"organization":{"projectV2":{"title":"Raw target","shortDescription":null,"readme":null,"public":false,"closed":false,"fields":{"nodes":[]},"views":{"nodes":[]},"workflows":{"nodes":[]},"repositories":{"nodes":[]}}}}}
+            {"data":{"organization":{"projectV2":{"title":"Raw target","shortDescription":null,"readme":null,"public":false,"closed":false,"views":{"nodes":[]},"workflows":{"nodes":[]},"repositories":{"nodes":[]}}}}}
             """,
             """
             {"data":{"organization":{"projectV2":{"items":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}
+            """,
+            """
+            {"data":{"organization":{"projectV2":{"fields":{"nodes":[]}}}}}
             """);
         using var client = new GitHubGraphQLClient("dummy-token", baseUrl: null, handler, delayAsync: null);
         var source = BuildSnapshot();
@@ -268,6 +301,50 @@ public class ProjectVerifierTests
 
         Assert.Contains(report.Differences, d =>
             d.Severity == VerifySeverity.Error && d.Category == "Field" && d.Message.Contains("name mismatch", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Issue_field_visibility_difference_is_an_error()
+    {
+        var source = WithMultiSelectIssueField(BuildSnapshot(), ["Platform"]);
+        var target = WithFields(source, field => field.Name == "Teams"
+            ? field with
+            {
+                IssueField = field.IssueField! with { Visibility = "ORG_ONLY" },
+            }
+            : field);
+
+        var report = ProjectVerifier.Compare(source, target);
+
+        Assert.Contains(report.Differences, difference =>
+            difference.Severity == VerifySeverity.Error
+            && difference.Category == "Field"
+            && difference.Message.Contains("Issue Field visibility mismatch", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Same_named_project_and_issue_fields_are_matched_by_identity()
+    {
+        var source = WithMultiSelectIssueField(BuildSnapshot(), ["Platform"]);
+        var teamsIssueField = source.Fields.Single(field => field.Name == "Teams");
+        var target = source with
+        {
+            Fields =
+            [
+                .. source.Fields.Where(field => field.Name != "Teams"),
+                new FieldSnapshot { Name = "Teams", DataType = "TEXT" },
+                teamsIssueField,
+            ],
+        };
+
+        var report = ProjectVerifier.Compare(source, target);
+
+        Assert.DoesNotContain(report.Differences, difference =>
+            difference.Category == "Field" && difference.Severity == VerifySeverity.Error);
+        Assert.Contains(report.Differences, difference =>
+            difference.Category == "Field"
+            && difference.Severity == VerifySeverity.Warning
+            && difference.Message == "field 'Teams' (TEXT) exists only in the target");
     }
 
     [Fact]
@@ -609,6 +686,105 @@ public class ProjectVerifierTests
             && d.Category == "Item"
             && d.Message.Contains("draft 'Draft A'", StringComparison.Ordinal)
             && d.Message.Contains("'Status' value mismatch", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Multi_select_values_are_order_independent()
+    {
+        var source = WithMultiSelectIssueField(BuildSnapshot(), ["Platform", "SDK"]);
+        var target = WithMultiSelectIssueField(BuildSnapshot(), ["SDK", "Platform"]);
+
+        var report = ProjectVerifier.Compare(source, target);
+
+        Assert.True(report.IsMatch);
+    }
+
+    [Fact]
+    public void Legacy_issue_field_value_without_discriminator_uses_field_definition()
+    {
+        var target = WithMultiSelectIssueField(BuildSnapshot(), ["Platform"]);
+        var source = target with
+        {
+            Items = target.Items.Select(item => item.Type == "ISSUE"
+                ? item with
+                {
+                    FieldValues = item.FieldValues.Select(value =>
+                        value is { FieldName: "Teams", IsIssueField: true }
+                            ? value with { IsIssueField = null }
+                            : value).ToList(),
+                }
+                : item).ToList(),
+        };
+
+        var report = ProjectVerifier.Compare(source, target);
+
+        Assert.True(report.IsMatch);
+    }
+
+    [Fact]
+    public void Same_named_project_and_issue_field_values_are_compared_independently()
+    {
+        var source = WithMultiSelectIssueField(BuildSnapshot(), ["Platform"]);
+        source = source with
+        {
+            Fields = [.. source.Fields, new FieldSnapshot { Name = "Teams", DataType = "TEXT" }],
+            Items = source.Items.Select(item => item.Type == "ISSUE"
+                ? item with
+                {
+                    FieldValues =
+                    [
+                        .. item.FieldValues,
+                        new FieldValueSnapshot { FieldName = "Teams", IsIssueField = false, Text = "source notes" },
+                    ],
+                }
+                : item).ToList(),
+        };
+        var target = source with
+        {
+            Items = source.Items.Select(item => item.Type == "ISSUE"
+                ? item with
+                {
+                    FieldValues = item.FieldValues.Select(value =>
+                        value is { FieldName: "Teams", IsIssueField: false }
+                            ? value with { Text = "target notes" }
+                            : value).ToList(),
+                }
+                : item).ToList(),
+        };
+
+        var report = ProjectVerifier.Compare(source, target);
+
+        Assert.Contains(report.Differences, difference =>
+            difference.Category == "Item"
+            && difference.Message.Contains("field 'Teams' value mismatch", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Multi_select_value_difference_is_an_error()
+    {
+        var source = WithMultiSelectIssueField(BuildSnapshot(), ["Platform", "SDK"]);
+        var target = WithMultiSelectIssueField(BuildSnapshot(), ["Platform"]);
+
+        var report = ProjectVerifier.Compare(source, target);
+
+        Assert.Contains(report.Differences, difference =>
+            difference.Severity == VerifySeverity.Error
+            && difference.Category == "Item"
+            && difference.Message.Contains("field 'Teams' value mismatch", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Multi_select_values_with_delimiters_are_compared_structurally()
+    {
+        var source = WithMultiSelectIssueField(BuildSnapshot(), ["A, B", "C"]);
+        var target = WithMultiSelectIssueField(BuildSnapshot(), ["A", "B, C"]);
+
+        var report = ProjectVerifier.Compare(source, target);
+
+        Assert.Contains(report.Differences, difference =>
+            difference.Severity == VerifySeverity.Error
+            && difference.Category == "Item"
+            && difference.Message.Contains("field 'Teams' value mismatch", StringComparison.Ordinal));
     }
 
     [Fact]

@@ -33,6 +33,21 @@ public class SnapshotTests
             },
             new FieldSnapshot
             {
+                Name = "Fixture Teams",
+                DataType = "MULTI_SELECT",
+                Options =
+                [
+                    new SingleSelectOptionSnapshot { Id = "m1", Name = "Platform", Color = "PURPLE", Description = "Platform work" },
+                    new SingleSelectOptionSnapshot { Id = "m2", Name = "SDK", Color = "GREEN", Description = null },
+                ],
+                IssueField = new IssueFieldConfigurationSnapshot
+                {
+                    Description = "Teams involved",
+                    Visibility = "ALL",
+                },
+            },
+            new FieldSnapshot
+            {
                 Name = "Fixture Sprint",
                 DataType = "ITERATION",
                 IterationConfiguration = new IterationConfigurationSnapshot
@@ -84,6 +99,7 @@ public class SnapshotTests
                     new FieldValueSnapshot { FieldName = "Fixture Number", Number = 42.5 },
                     new FieldValueSnapshot { FieldName = "Fixture Date", Date = "2026-07-05" },
                     new FieldValueSnapshot { FieldName = "Fixture Select", SingleSelectOptionName = "Alpha" },
+                    new FieldValueSnapshot { FieldName = "Fixture Teams", IsIssueField = true, MultiSelectOptionNames = ["Platform", "SDK"] },
                     new FieldValueSnapshot { FieldName = "Fixture Sprint", IterationTitle = "Sprint 1" },
                 ],
             },
@@ -122,6 +138,12 @@ public class SnapshotTests
         Assert.Equal(["Alpha", "Beta"], select.Options.Select(o => o.Name));
         Assert.Equal(["RED", "BLUE"], select.Options.Select(o => o.Color));
 
+        var multiSelect = restored.Fields.Single(f => f.Name == "Fixture Teams");
+        Assert.Equal("MULTI_SELECT", multiSelect.DataType);
+        Assert.Equal(["Platform", "SDK"], multiSelect.Options!.Select(o => o.Name));
+        Assert.Equal("Teams involved", multiSelect.IssueField!.Description);
+        Assert.Equal("ALL", multiSelect.IssueField.Visibility);
+
         var sprint = restored.Fields.Single(f => f.Name == "Fixture Sprint");
         Assert.NotNull(sprint.IterationConfiguration);
         Assert.Equal(14, sprint.IterationConfiguration.Duration);
@@ -144,7 +166,23 @@ public class SnapshotTests
         var issue = restored.Items[0];
         Assert.Equal("gpm-source/fixture-repo", issue.Repository);
         Assert.Equal(1, issue.Number);
-        Assert.Equal(original.Items[0].FieldValues, issue.FieldValues);
+        Assert.Equal(
+            original.Items[0].FieldValues.Select(value => value.FieldName),
+            issue.FieldValues.Select(value => value.FieldName));
+        foreach (var (expected, actual) in original.Items[0].FieldValues.Zip(issue.FieldValues))
+        {
+            Assert.Equal(expected.Text, actual.Text);
+            Assert.Equal(expected.Number, actual.Number);
+            Assert.Equal(expected.Date, actual.Date);
+            Assert.Equal(expected.SingleSelectOptionName, actual.SingleSelectOptionName);
+            Assert.Equal(expected.MultiSelectOptionNames, actual.MultiSelectOptionNames);
+            Assert.Equal(expected.IterationTitle, actual.IterationTitle);
+            Assert.Equal(expected.IsIssueField, actual.IsIssueField);
+        }
+        Assert.Equal(
+            ["Platform", "SDK"],
+            issue.FieldValues.Single(value => value.FieldName == "Fixture Teams").MultiSelectOptionNames);
+        Assert.True(issue.FieldValues.Single(value => value.FieldName == "Fixture Teams").IsIssueField);
         var draftItem = restored.Items[1];
         Assert.True(draftItem.IsArchived);
         Assert.NotNull(draftItem.Draft);

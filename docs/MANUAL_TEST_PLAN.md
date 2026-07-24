@@ -55,9 +55,9 @@ GitHub Copilot に一問一答で案内させる場合は、repository-local Ski
 |---|---|---|
 | Repository / Issues / Pull Requests | GEI + 目視 / `gh` | `ghpmv` のスコープ外。Project item relink の前提条件。 |
 | Project metadata | `ghpmv verify` + 目視 | title / shortDescription / README / public / closed state。 |
-| Fields | `ghpmv verify` + 目視 | Text / Number / Date / Single-select / Iteration / Status options。 |
+| Fields | `ghpmv verify` + 目視 | Text / Number / Date / Single-select / Iteration / organization multi-select Issue Field / Status options。 |
 | Items | `ghpmv verify` + 目視 | Draft / Issue / PR / archived / assigned draft。 |
-| Field values | `ghpmv verify` + 目視 | Unicode、emoji、number、date、option、iteration。 |
+| Field values | `ghpmv verify` + 目視 | Unicode、emoji、number、date、single-select option、multi-select options、iteration。 |
 | Item order | `ghpmv verify` + 目視 | archived item の position は GitHub API 制限により対象外。 |
 | Linked repositories | `ghpmv verify` warning 確認 + 目視 | `--repo-mapping` が必須。 |
 | Explicit project collaborators | browser export/import + 目視 | inherited access は対象外。 |
@@ -106,7 +106,7 @@ EMU / SAML / OIDC backed organization の場合は、PAT と browser session の
 - Issue 2 件
 - open Pull Request 1 件
 - Project `gpm-fixture`
-- custom fields(Text / Number / Date / Single-select / Iteration)
+- custom fields(Text / Number / Date / Single-select / Iteration) と organization multi-select Issue Field (`Fixture Teams`)
 - draft items、Issue item、PR item、archived draft、assigned draft
 - linked repository
 
@@ -317,7 +317,7 @@ dotnet run --project src/Ghpmv.Cli -- setup `
 
 - `dotnet run --project src/Ghpmv.Cli -- setup --browsers` が完了している。
 - `dotnet run --project src/Ghpmv.Cli -- login --profile source` で source org を編集できる browser session が保存されている。
-- 対象 Project は `ghpmv setup --fixture` で作成済みで、`Fixture Text` / `Fixture Number` / `Fixture Date` / `Fixture Select` / `Fixture Sprint` fields と `$env:GHPMV_FIXTURE_REPO` repository が存在する。
+- 対象 Project は `ghpmv setup --fixture` で作成済みで、`Fixture Text` / `Fixture Number` / `Fixture Date` / `Fixture Select` / `Fixture Sprint` / `Fixture Teams` fields と `$env:GHPMV_FIXTURE_REPO` repository が存在する。
 
 `ghpmv setup --fixture-ui` が GitHub UI 変更などで失敗した場合のみ、フォールバックとして Source Project を開き、以下を手動で設定します。
 
@@ -560,7 +560,7 @@ warning / error が出た場合は、次の観点で切り分けます。
 - [ ] Project title が import 時指定どおり。
 - [ ] short description が一致。
 - [ ] README が改行・emoji を含めて概ね一致。
-- [ ] Text / Number / Date / Single-select / Iteration fields が存在する。
+- [ ] Text / Number / Date / Single-select / Iteration fields と organization multi-select Issue Field が存在する。
 - [ ] Single-select options の name / color / description が一致。
 - [ ] Iteration の completed / current / future 相当が再現されている。
 
@@ -572,7 +572,7 @@ warning / error が出た場合は、次の観点で切り分けます。
 - [ ] PR item が target repository の PR にリンクしている。
 - [ ] Unicode / emoji text value が壊れていない。
 - [ ] Number value の decimal / negative / zero が維持されている。
-- [ ] Date / Single-select / Iteration values が維持されている。
+- [ ] Date / Single-select / Multi-select / Iteration values が維持されている。
 - [ ] archived draft が archived state になっている。
 - [ ] assigned draft の assignee が user mapping 後の target user になっている、または mapping 不足 warning が出ている。
 

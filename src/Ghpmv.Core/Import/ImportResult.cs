@@ -1,3 +1,5 @@
+using System.Collections.ObjectModel;
+
 namespace Ghpmv.Core.Import;
 
 /// <summary>
@@ -29,4 +31,12 @@ public sealed record ImportResult
 
     /// <summary>Field name → (iteration title → iteration ID). Includes completed iterations.</summary>
     public required IReadOnlyDictionary<string, IReadOnlyDictionary<string, string>> IterationIds { get; init; }
+
+    /// <summary>Linked organization Issue Field name → Issue Field node ID.</summary>
+    public IReadOnlyDictionary<string, string> IssueFieldIds { get; init; } =
+        ReadOnlyDictionary<string, string>.Empty;
+
+    /// <summary>Issue Field name → (select option name → option ID).</summary>
+    public IReadOnlyDictionary<string, IReadOnlyDictionary<string, string>> IssueFieldOptionIds { get; init; } =
+        ReadOnlyDictionary<string, IReadOnlyDictionary<string, string>>.Empty;
 }

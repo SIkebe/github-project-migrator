@@ -80,8 +80,8 @@ Tokens are resolved from `--token`, then the `GITHUB_TOKEN` / `GHPMV_TOKEN` envi
 | Category | Verification coverage |
 |---|---|
 | Project | Description, README, visibility, and closed state. A changed title is informational because import supports title overrides. |
-| Field | Field presence/type, single-select option order/name/color/description, and iteration dates/durations. |
-| Item | Counts/types, issue and pull request identity, draft body, field values, active-item order, and archived state. Archived-item order is excluded because GitHub cannot restore it. |
+| Field | Field presence/type, select option order/name/color/description, Issue Field description/visibility/linkage, and iteration dates/durations. |
+| Item | Counts/types, issue and pull request identity, draft body, field values (including multi-select Issue Fields), active-item order, and archived state. Archived-item order is excluded because GitHub cannot restore it. |
 | View | Name/layout plus GraphQL filter, visible fields/order, grouping, and sorting. Browser mode adds slice, swimlanes, field sums, and roadmap dates/zoom/markers. |
 | Workflow | Name/enabled state. Browser mode adds content types, status, filter, and repository. |
 | Collaborator | Browser-captured explicit user/team collaborators and roles. Inherited and base-role access is excluded. |
@@ -101,9 +101,9 @@ GitHub documents `read:project` for Project queries and `project` for queries an
 
 | Command | Classic PAT scopes |
 |---|---|
-| `ghpmv export` | `read:project`. Add `repo` when the source Project contains items or linked repositories from private repositories. |
-| `ghpmv import` | `project`. For an organization-owned target, also add `read:org` because `ghpmv` resolves the organization node ID. Add `repo` when resolving items or linked repositories in private target repositories. |
-| `ghpmv verify` | `read:project`. Add `repo` when the target Project contains items or linked repositories from private repositories. |
+| `ghpmv export` | `read:project`. For an organization Project containing Issue Fields, also add `read:org` to read the organization Issue Field catalog. Add `repo` when the source Project contains items or linked repositories from private repositories. |
+| `ghpmv import` | `project`. For an organization-owned target, also add `read:org` because `ghpmv` resolves the organization node ID; use `admin:org` instead when the snapshot contains Issue Fields because import creates or updates organization Issue Field definitions. Add `repo` when resolving private target repositories or writing Issue Field values (`public_repo` is sufficient when every affected repository is public). |
+| `ghpmv verify` | `read:project`. For an organization Project containing Issue Fields, also add `read:org`. Add `repo` when the target Project contains items or linked repositories from private repositories. |
 
 Authorize the token for organizations or enterprises that require SSO, including SAML- or OIDC-backed environments.
 
@@ -115,8 +115,8 @@ Create each fine-grained token for the organization that owns the source or targ
 
 | Command | Fine-grained PAT permissions |
 |---|---|
-| `ghpmv export` | **Organization permissions → Projects: Read-only**. **Repository permissions → Metadata: Read-only**, plus **Issues: Read-only** and **Pull requests: Read-only** for private repositories that contain project items. |
-| `ghpmv import` | **Organization permissions → Projects: Read and write**. **Repository permissions → Metadata: Read-only**; add **Contents: Read and write** for linked repositories, plus **Issues: Read-only** and **Pull requests: Read-only** for private repositories referenced by `--repo-mapping` or auto-add workflows. If you import project collaborators that include teams, also grant **Organization permissions → Members: Read-only** when required to resolve those teams. |
+| `ghpmv export` | **Organization permissions → Projects: Read-only**. Add **Organization permissions → Issue Fields: Read-only** when the Project contains organization Issue Fields. **Repository permissions → Metadata: Read-only**, plus **Issues: Read-only** and **Pull requests: Read-only** for private repositories that contain project items. |
+| `ghpmv import` | **Organization permissions → Projects: Read and write**. When the snapshot contains organization Issue Fields, add **Organization permissions → Issue Fields: Read and write** for their definitions and **Repository permissions → Issues: Read and write** for their values. **Repository permissions → Metadata: Read-only**; add **Contents: Read and write** for linked repositories, plus **Issues: Read-only** and **Pull requests: Read-only** for private repositories referenced by `--repo-mapping` or auto-add workflows. If you import project collaborators that include teams, also grant **Organization permissions → Members: Read-only** when required to resolve those teams. |
 | `ghpmv verify` | Same as `ghpmv export` for the target project. |
 
 GitHub supports [pre-filled fine-grained PAT creation URLs](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens#pre-filling-fine-grained-personal-access-token-details-using-url-parameters). Replace `SOURCE_ORG` or `TARGET_ORG` before opening these templates:
@@ -129,7 +129,7 @@ https://github.com/settings/personal-access-tokens/new?name=ghpmv-source-export&
 https://github.com/settings/personal-access-tokens/new?name=ghpmv-target-import&description=Import+and+verify+an+organization+Project+with+ghpmv&target_name=TARGET_ORG&expires_in=30&organization_projects=write&metadata=read
 ```
 
-Append only the permissions needed for the selected migration path: `&issues=read&pull_requests=read` for private repository items, `&contents=write` when importing linked repositories, and `&members=read` when resolving team collaborators. The URL cannot select **Repository access**; after opening it, select every repository used by Project items, linked repositories, or Workflows. Review the pre-filled values and adjust the expiration if required by organization policy before generating the token.
+Append only the permissions needed for the selected migration path: `&issues=read&pull_requests=read` for private repository items, `&issues=write` when importing Issue Field values, `&contents=write` when importing linked repositories, and `&members=read` when resolving team collaborators. When organization Issue Fields are present, also select **Organization permissions → Issue Fields: Read-only** for export/verify or **Read and write** for import in the token form. The URL cannot select **Repository access**; after opening it, select every repository used by Project items, linked repositories, or Workflows. Review the pre-filled values and adjust the expiration if required by organization policy before generating the token.
 
 GitHub does not publish fine-grained PAT requirements for each Projects GraphQL mutation. The **Contents: Read and write** requirement for `linkProjectV2ToRepository` is based on ghpmv's live GitHub testing: read-only Contents access was insufficient. GitHub separately documents a Contents permission for GitHub App installation tokens when `createProjectV2` links a repository, but that guidance is not PAT-specific and does not document `linkProjectV2ToRepository`.
 
@@ -170,7 +170,7 @@ Creating a new project emits `result=created`. The result line also includes the
 
 Read-only GraphQL queries and explicitly idempotent updates are retried after transient network or server failures. Resource-creation mutations are not: if GitHub may have accepted a mutation but its response was lost, `ghpmv` exits with `Mutation result is ambiguous` instead of risking a duplicate. The error includes the operation, target, and a non-secret client mutation ID; mutation variables and tokens are never included.
 
-Inspect the named target operation in GitHub before retrying. Rerun with the same snapshot directory so `project-import-log.json` and `import-log.json` can reconcile pending work. Project, custom-field, Draft, and Issue/PR item creation atomically records an operation and matching target baseline before sending. On resume, `ghpmv` polls for and adopts exactly one new match; no match or multiple matches stop the import for manual reconciliation instead of resending.
+Inspect the named target operation in GitHub before retrying. Rerun with the same snapshot directory so `project-import-log.json` and `import-log.json` can reconcile pending work. Project, custom-field, organization Issue Field, Issue Field link, Draft, and Issue/PR item creation atomically records an operation and matching target baseline before sending. On resume, `ghpmv` polls for and adopts exactly one new match; no match or multiple matches stop the import for manual reconciliation instead of resending.
 
 If the target project was created before the interruption, resume with `--on-conflict update`; when the original import targeted an existing project, pass the same `--project-number`. The default `--on-conflict fail` and `skip` modes intentionally do not modify an existing project and therefore cannot continue pending field or item reconciliation.
 

@@ -35,6 +35,7 @@ public sealed class GitHubGraphQLClient : IDisposable
         _httpClient = new HttpClient(handler) { BaseAddress = baseUrl ?? DefaultEndpoint };
         _httpClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
         _httpClient.DefaultRequestHeaders.UserAgent.ParseAdd("ghpmv");
+        _httpClient.DefaultRequestHeaders.Add("GraphQL-Features", "issue_fields");
         _delayAsync = delayAsync ?? (static (delay, ct) => Task.Delay(delay, ct));
     }
 
@@ -76,7 +77,18 @@ public sealed class GitHubGraphQLClient : IDisposable
         ArgumentException.ThrowIfNullOrWhiteSpace(query);
 
         var payload = JsonSerializer.Serialize(new { query, variables });
-        return await ExecuteOperationAsync(payload, mutation: null, cancellationToken).ConfigureAwait(false);
+        return await ExecuteOperationAsync(payload, mutation: null, retryInternalErrors: true, cancellationToken).ConfigureAwait(false);
+    }
+
+    internal async Task<JsonElement> QueryWithoutInternalErrorRetryAsync(
+        string query,
+        object? variables,
+        CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(query);
+
+        var payload = JsonSerializer.Serialize(new { query, variables });
+        return await ExecuteOperationAsync(payload, mutation: null, retryInternalErrors: false, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -102,16 +114,18 @@ public sealed class GitHubGraphQLClient : IDisposable
         variableMap["clientMutationId"] = clientMutationId;
         var payload = JsonSerializer.Serialize(new { query = mutation, variables = variableMap });
         var context = new MutationContext(operationName, clientMutationId, DateTimeOffset.UtcNow, target, retryPolicy, requiredResultPath);
-        return await ExecuteOperationAsync(payload, context, cancellationToken).ConfigureAwait(false);
+        return await ExecuteOperationAsync(payload, context, retryInternalErrors: true, cancellationToken).ConfigureAwait(false);
     }
 
     private async Task<JsonElement> ExecuteOperationAsync(
         string payload,
         MutationContext? mutation,
+        bool retryInternalErrors,
         CancellationToken cancellationToken)
     {
         var temporaryConflictRetries = 0;
         var incompleteResultRetries = 0;
+        var internalErrorRetries = 0;
 
         while (true)
         {
@@ -182,6 +196,20 @@ public sealed class GitHubGraphQLClient : IDisposable
                 throw CreateAmbiguousMutationException(
                     mutation,
                     "GitHub returned a GraphQL error that may have occurred after the create side effect.");
+            }
+
+            if (retryInternalErrors
+                && internalErrorRetries < MaxServerErrorRetries
+                && mutation is null or { RetryPolicy: MutationRetryPolicy.Idempotent }
+                && errorsJson.Contains("Something went wrong while executing your query", StringComparison.OrdinalIgnoreCase))
+            {
+                var backoff = GetBackoff(internalErrorRetries);
+                internalErrorRetries++;
+                await NotifyAndDelayAsync(
+                    string.Create(CultureInfo.InvariantCulture, $"GitHub reported an internal GraphQL error; retrying in {backoff.TotalSeconds:0}s (attempt {internalErrorRetries}/{MaxServerErrorRetries})."),
+                    backoff,
+                    cancellationToken).ConfigureAwait(false);
+                continue;
             }
 
             string? errorType = null;
