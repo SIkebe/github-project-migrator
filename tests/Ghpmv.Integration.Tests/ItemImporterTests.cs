@@ -88,8 +88,15 @@ public class ItemImporterTests
 
             var itemImporter = new ItemImporter(client) { RepositoryMapping = TargetRepoMapping, UserMapping = userMapping };
             var itemResult = await itemImporter.ImportAsync(snapshot, result, logDirectory, cancellationToken);
+            var expectedSnapshot = snapshot with
+            {
+                Items = snapshot.Items.Select(item =>
+                    string.Equals(item.Repository, FixtureRepo, StringComparison.OrdinalIgnoreCase)
+                        ? item with { Repository = IntegrationTestSettings.TargetFixtureRepositoryFullName }
+                        : item).ToArray(),
+            };
             await IntegrationFixtureSnapshot.RemoveUnexpectedItemsAsync(
-                client, TargetOrg, result.ProjectNumber, snapshot, cancellationToken);
+                client, TargetOrg, result.ProjectNumber, expectedSnapshot, cancellationToken);
 
             // Every selected fixture item is mappable, so everything is created.
             Assert.Equal(snapshot.Items.Count, itemResult.Created);
@@ -105,7 +112,7 @@ public class ItemImporterTests
             // Non-archived items keep the snapshot order (archived items are excluded from
             // the position chain, so their enumeration position is not guaranteed).
             Assert.Equal(
-                snapshot.Items.Where(i => !i.IsArchived).OrderBy(i => i.Position).Select(ItemKey),
+                expectedSnapshot.Items.Where(i => !i.IsArchived).OrderBy(i => i.Position).Select(ItemKey),
                 imported.Items.Where(i => !i.IsArchived).OrderBy(i => i.Position).Select(ItemKey));
 
             // The five fixture drafts keep their titles, Status values and relative order.

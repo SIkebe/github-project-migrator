@@ -223,6 +223,71 @@ public class ProjectImporterLogicTests
         }
     }
 
+    [Fact]
+    public async Task Import_updates_existing_issue_field_and_registers_replaced_options()
+    {
+        var directory = Directory.CreateTempSubdirectory("ghpmv-project-import-").FullName;
+        try
+        {
+            using var handler = new IssueFieldStubHandler(existing: true, requiresUpdate: true);
+            using var client = new GitHubGraphQLClient(
+                "dummy-token",
+                new Uri("https://example.test/graphql"),
+                handler,
+                delayAsync: null);
+            var snapshot = MinimalSnapshot("Roadmap") with
+            {
+                Fields =
+                [
+                    new FieldSnapshot
+                    {
+                        Name = "Teams",
+                        DataType = "MULTI_SELECT",
+                        Options =
+                        [
+                            new SingleSelectOptionSnapshot { Id = "source-platform", Name = "Platform", Color = "PURPLE" },
+                            new SingleSelectOptionSnapshot { Id = "source-sdk", Name = "SDK", Color = "GREEN" },
+                        ],
+                        IssueField = new IssueFieldConfigurationSnapshot
+                        {
+                            Description = "Teams involved",
+                            Visibility = "ALL",
+                        },
+                    },
+                ],
+            };
+            var importer = new ProjectImporter(client)
+            {
+                OperationLogDirectory = directory,
+            };
+
+            var result = await importer.ImportIntoAsync(
+                snapshot,
+                "target",
+                7,
+                TestContext.Current.CancellationToken);
+
+            var updateRequest = Assert.Single(
+                handler.RequestBodies,
+                body => body.Contains("updateIssueField", StringComparison.Ordinal));
+            using var document = JsonDocument.Parse(updateRequest);
+            var variables = document.RootElement.GetProperty("variables");
+            Assert.Equal("IFM_teams", variables.GetProperty("id").GetString());
+            Assert.Equal("Teams involved", variables.GetProperty("description").GetString());
+            Assert.Equal("ALL", variables.GetProperty("visibility").GetString());
+            Assert.Equal(
+                ["Platform", "SDK"],
+                variables.GetProperty("options").EnumerateArray().Select(option => option.GetProperty("name").GetString()));
+            Assert.Equal("IFO_platform_updated", result.IssueFieldOptionIds["Teams"]["Platform"]);
+            Assert.Equal("IFO_sdk_updated", result.IssueFieldOptionIds["Teams"]["SDK"]);
+            Assert.DoesNotContain(handler.RequestBodies, body => body.Contains("createIssueField", StringComparison.Ordinal));
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
     private static ProjectSnapshot MinimalSnapshot(string title) => new()
     {
         SchemaVersion = ProjectSnapshot.CurrentSchemaVersion,
@@ -258,7 +323,7 @@ public class ProjectImporterLogicTests
         }
     }
 
-    private sealed class IssueFieldStubHandler(bool existing = false) : HttpMessageHandler
+    private sealed class IssueFieldStubHandler(bool existing = false, bool requiresUpdate = false) : HttpMessageHandler
     {
         public List<string> RequestBodies { get; } = [];
 
@@ -280,7 +345,17 @@ public class ProjectImporterLogicTests
                         : """{"data":{"node":{"fields":{"nodes":[{"id":"PVTF_title","name":"Title","dataType":"TITLE"}]}}}}""",
                 _ when body.Contains("issueFields(first:", StringComparison.Ordinal) =>
                     existing
-                        ? """
+                        ? requiresUpdate
+                            ? """
+                              {"data":{"organization":{"issueFields":{"nodes":[{
+                                "__typename":"IssueFieldMultiSelect","id":"IFM_teams","name":"Teams",
+                                "dataType":"MULTI_SELECT","description":"Old description","visibility":"ALL",
+                                "options":[
+                                  {"id":"IFO_old","name":"Old","color":"GRAY","description":null}
+                                ]
+                              }],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}
+                              """
+                            : """
                           {"data":{"organization":{"issueFields":{"nodes":[{
                             "__typename":"IssueFieldMultiSelect","id":"IFM_teams","name":"Teams",
                             "dataType":"MULTI_SELECT","description":"Teams involved","visibility":"ALL",
@@ -291,6 +366,17 @@ public class ProjectImporterLogicTests
                           }],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}
                           """
                         : """{"data":{"organization":{"issueFields":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}""",
+                _ when body.Contains("updateIssueField(", StringComparison.Ordinal) =>
+                    """
+                    {"data":{"updateIssueField":{"issueField":{
+                      "__typename":"IssueFieldMultiSelect","id":"IFM_teams","name":"Teams",
+                      "dataType":"MULTI_SELECT","description":"Teams involved","visibility":"ALL",
+                      "options":[
+                        {"id":"IFO_platform_updated","name":"Platform","color":"PURPLE","description":null},
+                        {"id":"IFO_sdk_updated","name":"SDK","color":"GREEN","description":null}
+                      ]
+                    }}}}
+                    """,
                 _ when body.Contains("organization(login:", StringComparison.Ordinal) =>
                     """{"data":{"organization":{"id":"O_target"}}}""",
                 _ when body.Contains("createIssueField(", StringComparison.Ordinal) =>

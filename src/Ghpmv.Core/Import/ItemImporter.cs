@@ -66,10 +66,9 @@ public sealed class ItemImporter
 
         var warnings = new List<string>();
         var items = snapshot.Items.OrderBy(i => i.Position).ToList();
-        var issueFieldNames = snapshot.Fields
+        var issueFields = snapshot.Fields
             .Where(field => field.IssueField is not null)
-            .Select(field => field.Name)
-            .ToHashSet(StringComparer.Ordinal);
+            .ToDictionary(field => field.Name, StringComparer.Ordinal);
         var total = items.Count;
         var created = 0;
         var resumed = 0;
@@ -212,7 +211,7 @@ public sealed class ItemImporter
                     target,
                     label,
                     warnings,
-                    issueFieldNames,
+                    issueFields,
                     cancellationToken).ConfigureAwait(false);
                 itemState.FieldValuesError = itemState.FieldValuesApplied
                     ? null
@@ -663,12 +662,16 @@ public sealed class ItemImporter
         ImportResult target,
         string label,
         List<string> warnings,
-        HashSet<string> issueFieldNames,
+        Dictionary<string, FieldSnapshot> issueFields,
         CancellationToken cancellationToken)
     {
-        var allApplied = true;
-        string? targetIssueId = null;
-        var targetIssueIdResolved = false;
+        var allApplied = await ApplyIssueFieldValuesAsync(
+            item,
+            target,
+            label,
+            warnings,
+            issueFields,
+            cancellationToken).ConfigureAwait(false);
         foreach (var value in item.FieldValues)
         {
             if (string.Equals(value.FieldName, TitleFieldName, StringComparison.Ordinal))
@@ -676,56 +679,8 @@ public sealed class ItemImporter
                 continue; // Set through item content.
             }
 
-            if (issueFieldNames.Contains(value.FieldName))
+            if (issueFields.ContainsKey(value.FieldName))
             {
-                if (!target.IssueFieldIds.TryGetValue(value.FieldName, out var issueFieldId))
-                {
-                    Warn(warnings, $"{label}: Issue Field '{value.FieldName}' was not created or mapped in the target organization; skipping the value.");
-                    allApplied = false;
-                    continue;
-                }
-
-                if (item.Type != "ISSUE")
-                {
-                    Warn(warnings, $"{label}: Issue Field '{value.FieldName}' can only be applied to issues; skipping the value.");
-                    allApplied = false;
-                    continue;
-                }
-
-                if (!targetIssueIdResolved)
-                {
-                    targetIssueId = await ResolveTargetIssueIdAsync(item, cancellationToken).ConfigureAwait(false);
-                    targetIssueIdResolved = true;
-                }
-
-                if (targetIssueId is null)
-                {
-                    Warn(warnings, $"{label}: target issue could not be resolved for Issue Field '{value.FieldName}'; skipping the value.");
-                    allApplied = false;
-                    continue;
-                }
-
-                var issueValueInput = BuildIssueFieldValueInput(value, issueFieldId, target, label, warnings);
-                if (issueValueInput is null)
-                {
-                    allApplied = false;
-                    continue;
-                }
-
-                await _client.MutationAsync(
-                    "setIssueFieldValue",
-                    """
-                    mutation($issueId: ID!, $issueFields: [IssueFieldCreateOrUpdateInput!]!, $clientMutationId: String!) {
-                      setIssueFieldValue(input: { issueId: $issueId, issueFields: $issueFields, clientMutationId: $clientMutationId }) {
-                        issue { id }
-                      }
-                    }
-                    """,
-                    new { issueId = targetIssueId, issueFields = new[] { issueValueInput } },
-                    MutationRetryPolicy.Idempotent,
-                    target: targetIssueId,
-                    requiredResultPath: "issue.id",
-                    cancellationToken: cancellationToken).ConfigureAwait(false);
                 continue;
             }
 
@@ -791,6 +746,83 @@ public sealed class ItemImporter
                 MutationRetryPolicy.Idempotent,
                 target: itemId,
                 requiredResultPath: "projectV2Item.id",
+                cancellationToken: cancellationToken).ConfigureAwait(false);
+        }
+
+        return allApplied;
+    }
+
+    private async Task<bool> ApplyIssueFieldValuesAsync(
+        ItemSnapshot item,
+        ImportResult target,
+        string label,
+        List<string> warnings,
+        Dictionary<string, FieldSnapshot> issueFields,
+        CancellationToken cancellationToken)
+    {
+        if (issueFields.Count == 0)
+        {
+            return true;
+        }
+
+        var sourceValues = item.FieldValues
+            .Where(value => issueFields.ContainsKey(value.FieldName))
+            .ToDictionary(value => value.FieldName, StringComparer.Ordinal);
+        if (item.Type != "ISSUE")
+        {
+            foreach (var value in sourceValues.Values)
+            {
+                Warn(warnings, $"{label}: Issue Field '{value.FieldName}' can only be applied to issues; skipping the value.");
+            }
+
+            return sourceValues.Count == 0;
+        }
+
+        var targetIssueId = await ResolveTargetIssueIdAsync(item, cancellationToken).ConfigureAwait(false);
+        if (targetIssueId is null)
+        {
+            Warn(warnings, $"{label}: target issue could not be resolved; skipping Issue Field values.");
+            return false;
+        }
+
+        var allApplied = true;
+        foreach (var field in issueFields.Values)
+        {
+            if (!target.IssueFieldIds.TryGetValue(field.Name, out var issueFieldId))
+            {
+                Warn(warnings, $"{label}: Issue Field '{field.Name}' was not created or mapped in the target organization; skipping the value.");
+                allApplied = false;
+                continue;
+            }
+
+            object? issueValueInput;
+            if (sourceValues.TryGetValue(field.Name, out var sourceValue))
+            {
+                issueValueInput = BuildIssueFieldValueInput(sourceValue, issueFieldId, target, label, warnings);
+                if (issueValueInput is null)
+                {
+                    allApplied = false;
+                    continue;
+                }
+            }
+            else
+            {
+                issueValueInput = new { fieldId = issueFieldId, delete = true };
+            }
+
+            await _client.MutationAsync(
+                "setIssueFieldValue",
+                """
+                mutation($issueId: ID!, $issueFields: [IssueFieldCreateOrUpdateInput!]!, $clientMutationId: String!) {
+                  setIssueFieldValue(input: { issueId: $issueId, issueFields: $issueFields, clientMutationId: $clientMutationId }) {
+                    issue { id }
+                  }
+                }
+                """,
+                new { issueId = targetIssueId, issueFields = new[] { issueValueInput } },
+                MutationRetryPolicy.Idempotent,
+                target: targetIssueId,
+                requiredResultPath: "issue.id",
                 cancellationToken: cancellationToken).ConfigureAwait(false);
         }
 

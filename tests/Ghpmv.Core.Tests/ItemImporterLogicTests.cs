@@ -59,7 +59,7 @@ public class ItemImporterLogicTests
     }
 
     [Fact]
-    public async Task Import_sets_multi_select_value_on_target_issue()
+    public async Task Import_synchronizes_present_and_absent_issue_field_values()
     {
         var directory = Directory.CreateTempSubdirectory("ghpmv-multi-select-").FullName;
         try
@@ -69,6 +69,7 @@ public class ItemImporterLogicTests
                 """{"data":{"node":{"items":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}""",
                 """{"data":{"addProjectV2ItemById":{"item":{"id":"PVTI_target"}}}}""",
                 """{"data":{"repository":{"issueOrPullRequest":{"id":"I_target"}}}}""",
+                """{"data":{"setIssueFieldValue":{"issue":{"id":"I_target"}}}}""",
                 """{"data":{"setIssueFieldValue":{"issue":{"id":"I_target"}}}}""",
                 """{"data":{"updateProjectV2ItemPosition":{"clientMutationId":"positioned"}}}""");
             using var client = new GitHubGraphQLClient(
@@ -85,6 +86,12 @@ public class ItemImporterLogicTests
                     new FieldSnapshot
                     {
                         Name = "Teams",
+                        DataType = "MULTI_SELECT",
+                        IssueField = new IssueFieldConfigurationSnapshot { Visibility = "ALL" },
+                    },
+                    new FieldSnapshot
+                    {
+                        Name = "Areas",
                         DataType = "MULTI_SELECT",
                         IssueField = new IssueFieldConfigurationSnapshot { Visibility = "ALL" },
                     },
@@ -120,7 +127,11 @@ public class ItemImporterLogicTests
                 FieldIds = new Dictionary<string, string> { ["Teams"] = "PVTF_teams" },
                 OptionIds = new Dictionary<string, IReadOnlyDictionary<string, string>>(),
                 IterationIds = new Dictionary<string, IReadOnlyDictionary<string, string>>(),
-                IssueFieldIds = new Dictionary<string, string> { ["Teams"] = "IFM_teams" },
+                IssueFieldIds = new Dictionary<string, string>
+                {
+                    ["Teams"] = "IFM_teams",
+                    ["Areas"] = "IFM_areas",
+                },
                 IssueFieldOptionIds = new Dictionary<string, IReadOnlyDictionary<string, string>>
                 {
                     ["Teams"] = new Dictionary<string, string>
@@ -145,15 +156,25 @@ public class ItemImporterLogicTests
                 TestContext.Current.CancellationToken);
 
             Assert.Empty(result.Warnings);
-            var request = handler.RequestBodies.Single(body => body.Contains("setIssueFieldValue", StringComparison.Ordinal));
-            using var document = JsonDocument.Parse(request);
-            var issueField = document.RootElement
+            var requests = handler.RequestBodies
+                .Where(body => body.Contains("setIssueFieldValue", StringComparison.Ordinal))
+                .ToArray();
+            Assert.Equal(2, requests.Length);
+            using var setDocument = JsonDocument.Parse(requests[0]);
+            var setIssueField = setDocument.RootElement
                 .GetProperty("variables")
                 .GetProperty("issueFields")[0];
-            Assert.Equal("IFM_teams", issueField.GetProperty("fieldId").GetString());
+            Assert.Equal("IFM_teams", setIssueField.GetProperty("fieldId").GetString());
             Assert.Equal(
                 ["IFO_platform", "IFO_sdk"],
-                issueField.GetProperty("multiSelectOptionIds").EnumerateArray().Select(id => id.GetString()));
+                setIssueField.GetProperty("multiSelectOptionIds").EnumerateArray().Select(id => id.GetString()));
+
+            using var clearDocument = JsonDocument.Parse(requests[1]);
+            var clearIssueField = clearDocument.RootElement
+                .GetProperty("variables")
+                .GetProperty("issueFields")[0];
+            Assert.Equal("IFM_areas", clearIssueField.GetProperty("fieldId").GetString());
+            Assert.True(clearIssueField.GetProperty("delete").GetBoolean());
         }
         finally
         {
