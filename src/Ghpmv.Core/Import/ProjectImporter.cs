@@ -1184,7 +1184,7 @@ public sealed class ProjectImporter
                     && !node.TryGetProperty("dataType", out _)
                     && !dataTypes.ContainsKey(id);
                 return isIssueFieldLink
-                    ? FieldMaps.RegisterIssueFieldLink(fieldNode)
+                    ? ParseIssueFieldLink(fieldNode)
                     : maps.Register(fieldNode, dataTypes);
             }),
         ];
@@ -1212,6 +1212,10 @@ public sealed class ProjectImporter
                 _knownLinkedIssueFieldNames.Add(name);
                 continue;
             }
+            catch (GitHubGraphQLException exception) when (IsMissingProjectFieldError(exception))
+            {
+                continue;
+            }
 
             var node = data.GetProperty("node").GetProperty("field");
             if (node.ValueKind == JsonValueKind.Object)
@@ -1227,6 +1231,10 @@ public sealed class ProjectImporter
         => exception.ErrorsJson?.Contains(
             "Something went wrong while executing your query",
             StringComparison.OrdinalIgnoreCase) == true;
+
+    private static bool IsMissingProjectFieldError(GitHubGraphQLException exception)
+        => exception.ErrorsJson?.Contains("\"type\":\"NOT_FOUND\"", StringComparison.Ordinal) == true
+            && exception.ErrorsJson.Contains("ProjectV2FieldConfiguration", StringComparison.Ordinal);
 
     private static void AddFieldDataTypes(Dictionary<string, string> result, JsonElement data)
     {
@@ -1498,6 +1506,16 @@ public sealed class ProjectImporter
             options);
     }
 
+    private static TargetField ParseIssueFieldLink(JsonElement node)
+    {
+        var id = node.GetProperty("id").GetString() ?? throw new GitHubGraphQLException("Field id was null.");
+        var name = node.GetProperty("name").GetString() ?? throw new GitHubGraphQLException("Field name was null.");
+        var typeName = node.TryGetProperty("__typename", out var typeElement)
+            ? typeElement.GetString() ?? "ProjectV2Field"
+            : "ProjectV2Field";
+        return new TargetField(id, name, string.Empty, typeName);
+    }
+
     /// <summary>
     /// Builds the iteration configuration input. All iterations (completed included) are
     /// recreated in chronological order; the API accepts past start dates and reclassifies
@@ -1565,25 +1583,9 @@ public sealed class ProjectImporter
 
         /// <summary>Registers a field node (from a query or mutation response) and returns its identity.</summary>
         public TargetField Register(JsonElement node)
-            => Register(node, null, overwriteFieldId: true);
+            => Register(node, null);
 
         public TargetField Register(JsonElement node, Dictionary<string, string>? dataTypes)
-            => Register(node, dataTypes, overwriteFieldId: true);
-
-        public static TargetField RegisterIssueFieldLink(JsonElement node)
-        {
-            var id = node.GetProperty("id").GetString() ?? throw new GitHubGraphQLException("Field id was null.");
-            var name = node.GetProperty("name").GetString() ?? throw new GitHubGraphQLException("Field name was null.");
-            var typeName = node.TryGetProperty("__typename", out var typeElement)
-                ? typeElement.GetString() ?? "ProjectV2Field"
-                : "ProjectV2Field";
-            return new TargetField(id, name, string.Empty, typeName);
-        }
-
-        private TargetField Register(
-            JsonElement node,
-            Dictionary<string, string>? dataTypes,
-            bool overwriteFieldId)
         {
             var id = node.GetProperty("id").GetString() ?? throw new GitHubGraphQLException("Field id was null.");
             var name = node.GetProperty("name").GetString() ?? throw new GitHubGraphQLException("Field name was null.");
@@ -1600,14 +1602,7 @@ public sealed class ProjectImporter
                     _ => string.Empty,
                 };
 
-            if (overwriteFieldId)
-            {
-                FieldIds[name] = id;
-            }
-            else
-            {
-                FieldIds.TryAdd(name, id);
-            }
+            FieldIds[name] = id;
 
             if (node.TryGetProperty("options", out var options) && options.ValueKind == JsonValueKind.Array)
             {

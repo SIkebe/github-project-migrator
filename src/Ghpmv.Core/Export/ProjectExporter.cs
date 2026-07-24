@@ -480,8 +480,6 @@ public sealed class ProjectExporter
                 {
                     "ProjectV2SingleSelectField" => "SINGLE_SELECT",
                     "ProjectV2IterationField" => "ITERATION",
-                    "ProjectV2RepositoryField" => "REPOSITORY",
-                    "ProjectV2MilestoneField" => "MILESTONE",
                     _ when fieldDataTypes.TryGetValue(id, out var value) => value,
                     _ => null,
                 };
@@ -823,26 +821,31 @@ public sealed class ProjectExporter
                 "ProjectV2ItemFieldTextValue" => new FieldValueSnapshot
                 {
                     FieldName = fieldName,
+                    IsIssueField = false,
                     Text = GetOptionalString(node, "text"),
                 },
                 "ProjectV2ItemFieldNumberValue" => new FieldValueSnapshot
                 {
                     FieldName = fieldName,
+                    IsIssueField = false,
                     Number = node.GetProperty("number").ValueKind == JsonValueKind.Number ? node.GetProperty("number").GetDouble() : null,
                 },
                 "ProjectV2ItemFieldDateValue" => new FieldValueSnapshot
                 {
                     FieldName = fieldName,
+                    IsIssueField = false,
                     Date = GetOptionalString(node, "date"),
                 },
                 "ProjectV2ItemFieldSingleSelectValue" => new FieldValueSnapshot
                 {
                     FieldName = fieldName,
+                    IsIssueField = false,
                     SingleSelectOptionName = GetOptionalString(node, "name"),
                 },
                 _ => new FieldValueSnapshot
                 {
                     FieldName = fieldName,
+                    IsIssueField = false,
                     IterationTitle = GetOptionalString(node, "title"),
                 },
             });

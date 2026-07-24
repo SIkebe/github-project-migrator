@@ -35,7 +35,11 @@ public class ProjectExporterTests
                     "field":{"name":"Notes"},
                     "issueFieldValue":{"__typename":"IssueFieldTextValue","value":"Needs review"}
                   },{
-                     "__typename":"ProjectV2ItemIssueFieldValue",
+                     "__typename":"ProjectV2ItemFieldTextValue",
+                     "field":{"name":"Notes"},
+                     "text":"Project note"
+                  },{
+                      "__typename":"ProjectV2ItemIssueFieldValue",
                      "field":{"name":"Priority"},
                      "issueFieldValue":{"__typename":"IssueFieldSingleSelectValue","name":"High"}
                   }
@@ -49,9 +53,7 @@ public class ProjectExporterTests
               {"__typename":"ProjectV2Field","id":"PVTF_title","name":"Title"},
               {"__typename":"ProjectV2Field","id":"PVTF_unrelated","name":"Unrelated"},
               {"__typename":"ProjectV2Field","id":"PVTF_notes","name":"Notes"},
-              {"__typename":"ProjectV2Field","id":"PVTF_teams","name":"Teams"},
-              {"__typename":"ProjectV2RepositoryField","id":"PVTF_repository","name":"Repository"},
-              {"__typename":"ProjectV2MilestoneField","id":"PVTF_milestone","name":"Milestone"}
+              {"__typename":"ProjectV2Field","id":"PVTF_teams","name":"Teams"}
             ]}}}}}
             """,
             """
@@ -115,14 +117,17 @@ public class ProjectExporterTests
         var notes = snapshot.Fields.Single(candidate => candidate.Name == "Notes");
         Assert.Equal("TEXT", notes.DataType);
         Assert.Equal("Review notes", notes.IssueField!.Description);
-        Assert.Equal("REPOSITORY", snapshot.Fields.Single(candidate => candidate.Name == "Repository").DataType);
-        Assert.Equal("MILESTONE", snapshot.Fields.Single(candidate => candidate.Name == "Milestone").DataType);
 
         var item = Assert.Single(snapshot.Items);
         Assert.Equal(
             ["Platform", "SDK"],
             item.FieldValues.Single(value => value.FieldName == "Teams").MultiSelectOptionNames);
-        Assert.Equal("Needs review", item.FieldValues.Single(value => value.FieldName == "Notes").Text);
+        Assert.Equal(
+            "Needs review",
+            item.FieldValues.Single(value => value is { FieldName: "Notes", IsIssueField: true }).Text);
+        Assert.Equal(
+            "Project note",
+            item.FieldValues.Single(value => value is { FieldName: "Notes", IsIssueField: false }).Text);
         Assert.Equal("High", item.FieldValues.Single(value => value.FieldName == "Priority").SingleSelectOptionName);
         Assert.Equal(7, handler.RequestBodies.Count);
         Assert.DoesNotContain("dataType", handler.RequestBodies[0], StringComparison.Ordinal);

@@ -293,6 +293,58 @@ public class ProjectImporterLogicTests
     }
 
     [Fact]
+    public async Task Import_creates_missing_normal_field_when_preview_connection_falls_back_by_name()
+    {
+        var directory = Directory.CreateTempSubdirectory("ghpmv-project-import-").FullName;
+        try
+        {
+            using var handler = new IssueFieldStubHandler(existing: true, missingNormalField: true);
+            using var client = new GitHubGraphQLClient(
+                "dummy-token",
+                new Uri("https://example.test/graphql"),
+                handler,
+                delayAsync: null);
+            var snapshot = MinimalSnapshot("Roadmap") with
+            {
+                Fields =
+                [
+                    new FieldSnapshot { Name = "Notes", DataType = "TEXT" },
+                    new FieldSnapshot
+                    {
+                        Name = "Teams",
+                        DataType = "MULTI_SELECT",
+                        Options =
+                        [
+                            new SingleSelectOptionSnapshot { Id = "source-platform", Name = "Platform", Color = "PURPLE" },
+                            new SingleSelectOptionSnapshot { Id = "source-sdk", Name = "SDK", Color = "GREEN" },
+                        ],
+                        IssueField = new IssueFieldConfigurationSnapshot
+                        {
+                            Description = "Teams involved",
+                            Visibility = "ALL",
+                        },
+                    },
+                ],
+            };
+            var importer = new ProjectImporter(client) { OperationLogDirectory = directory };
+
+            var result = await importer.ImportIntoAsync(
+                snapshot,
+                "target",
+                7,
+                TestContext.Current.CancellationToken);
+
+            Assert.Equal("PVTF_notes", result.FieldIds["Notes"]);
+            Assert.Contains(handler.RequestBodies, body => body.Contains("createProjectV2Field", StringComparison.Ordinal));
+            Assert.DoesNotContain(handler.RequestBodies, body => body.Contains("createProjectV2IssueField", StringComparison.Ordinal));
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task Import_updates_existing_issue_field_and_registers_replaced_options()
     {
         var directory = Directory.CreateTempSubdirectory("ghpmv-project-import-").FullName;
@@ -397,7 +449,8 @@ public class ProjectImporterLogicTests
         bool requiresUpdate = false,
         bool normalSameName = false,
         bool existingSameNamedLink = false,
-        bool transientNormalDataTypeFailure = false) : HttpMessageHandler
+        bool transientNormalDataTypeFailure = false,
+        bool missingNormalField = false) : HttpMessageHandler
     {
         public List<string> RequestBodies { get; } = [];
 
@@ -422,7 +475,9 @@ public class ProjectImporterLogicTests
                         ? """{"data":{"node":null},"errors":[{"message":"Something went wrong while executing your query on the preview API."}]}"""
                         : """{"data":{"node":{"fields":{"nodes":[{"id":"PVTF_title","name":"Title","dataType":"TITLE"}]}}}}""",
                 _ when body.Contains("field(name:", StringComparison.Ordinal) =>
-                    normalSameName
+                    missingNormalField && body.Contains("\"name\":\"Notes\"", StringComparison.Ordinal)
+                        ? """{"data":{"node":{"field":null}},"errors":[{"type":"NOT_FOUND","message":"Could not resolve to a Unions::ProjectV2FieldConfiguration with the name Notes"}]}"""
+                        : normalSameName
                         ? """{"data":{"node":{"field":{"__typename":"ProjectV2Field","id":"PVTF_teams","name":"Teams"}}}}"""
                         : """{"data":{"node":null},"errors":[{"message":"Something went wrong while executing your query on the preview API."}]}""",
                 _ when body.Contains("nodes(ids:", StringComparison.Ordinal) =>
@@ -484,6 +539,8 @@ public class ProjectImporterLogicTests
                       ]
                     }}}}
                     """,
+                _ when body.Contains("createProjectV2Field(", StringComparison.Ordinal) =>
+                    """{"data":{"createProjectV2Field":{"projectV2Field":{"__typename":"ProjectV2Field","id":"PVTF_notes","name":"Notes","dataType":"TEXT"}}}}""",
                 _ when body.Contains("createProjectV2IssueField(", StringComparison.Ordinal) =>
                     """{"data":{"createProjectV2IssueField":{"clientMutationId":"link-operation"}}}""",
                 _ => throw new InvalidOperationException($"Unexpected request: {body}"),
