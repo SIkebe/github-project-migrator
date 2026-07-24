@@ -283,6 +283,7 @@ public sealed class ProjectImporter
             await UpdateProjectVisibilityAsync(project.Id, snapshot.Project.Public, cancellationToken).ConfigureAwait(false);
         }
 
+        OnProgress?.Invoke("Reading existing project fields...");
         var maps = new FieldMaps();
         var existingFieldList = await FetchFieldListAsync(project.Id, maps, cancellationToken).ConfigureAwait(false);
         var existingFields = new Dictionary<string, TargetField>(StringComparer.Ordinal);
