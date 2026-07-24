@@ -177,6 +177,124 @@ public class ProjectImporterResumeTests
         }
     }
 
+    [Fact]
+    public async Task Ambiguous_issue_field_create_is_adopted_without_resending()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var directory = Directory.CreateTempSubdirectory("ghpmv-issue-field-resume-").FullName;
+        try
+        {
+            using var handler = new IssueFieldResumeHandler(directory, ambiguousFieldCreate: true);
+            using var client = CreateClient(handler);
+            var importer = new ProjectImporter(client) { OperationLogDirectory = directory };
+
+            await Assert.ThrowsAsync<AmbiguousMutationResultException>(
+                () => importer.ImportIntoAsync(IssueFieldSnapshot(), "target", 7, cancellationToken));
+
+            Assert.Single((await ProjectImportLog.LoadAsync(directory, cancellationToken)).PendingIssueFields);
+            Assert.True(handler.PendingWasPresentAtMutation);
+
+            handler.Resume = true;
+            var result = await importer.ImportIntoAsync(IssueFieldSnapshot(), "target", 7, cancellationToken);
+
+            Assert.Equal("IFM_created", result.IssueFieldIds["Teams"]);
+            Assert.Equal(1, handler.IssueFieldCreateMutationCount);
+            Assert.Empty((await ProjectImportLog.LoadAsync(directory, cancellationToken)).PendingIssueFields);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Issue_field_reconciliation_rejects_multiple_candidates()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var directory = Directory.CreateTempSubdirectory("ghpmv-issue-field-duplicates-").FullName;
+        try
+        {
+            using var handler = new IssueFieldResumeHandler(directory, ambiguousFieldCreate: true);
+            using var client = CreateClient(handler);
+            var importer = new ProjectImporter(client) { OperationLogDirectory = directory };
+
+            await Assert.ThrowsAsync<AmbiguousMutationResultException>(
+                () => importer.ImportIntoAsync(IssueFieldSnapshot(), "target", 7, cancellationToken));
+
+            handler.Resume = true;
+            handler.ReturnDuplicates = true;
+            var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+                () => importer.ImportIntoAsync(IssueFieldSnapshot(), "target", 7, cancellationToken));
+
+            Assert.Contains("multiple new Issue Fields", exception.Message, StringComparison.Ordinal);
+            Assert.Equal(1, handler.IssueFieldCreateMutationCount);
+            Assert.Single((await ProjectImportLog.LoadAsync(directory, cancellationToken)).PendingIssueFields);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Ambiguous_issue_field_link_is_adopted_without_resending()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var directory = Directory.CreateTempSubdirectory("ghpmv-issue-field-link-resume-").FullName;
+        try
+        {
+            using var handler = new IssueFieldResumeHandler(directory, ambiguousFieldCreate: false);
+            using var client = CreateClient(handler);
+            var importer = new ProjectImporter(client) { OperationLogDirectory = directory };
+
+            await Assert.ThrowsAsync<AmbiguousMutationResultException>(
+                () => importer.ImportIntoAsync(IssueFieldSnapshot(), "target", 7, cancellationToken));
+
+            Assert.Single((await ProjectImportLog.LoadAsync(directory, cancellationToken)).PendingIssueFieldLinks);
+            Assert.True(handler.PendingWasPresentAtMutation);
+
+            handler.Resume = true;
+            var result = await importer.ImportIntoAsync(IssueFieldSnapshot(), "target", 7, cancellationToken);
+
+            Assert.Equal("PVTF_created", result.FieldIds["Teams"]);
+            Assert.Equal(1, handler.LinkCreateMutationCount);
+            Assert.Empty((await ProjectImportLog.LoadAsync(directory, cancellationToken)).PendingIssueFieldLinks);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Issue_field_link_reconciliation_rejects_multiple_candidates()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var directory = Directory.CreateTempSubdirectory("ghpmv-issue-field-link-duplicates-").FullName;
+        try
+        {
+            using var handler = new IssueFieldResumeHandler(directory, ambiguousFieldCreate: false);
+            using var client = CreateClient(handler);
+            var importer = new ProjectImporter(client) { OperationLogDirectory = directory };
+
+            await Assert.ThrowsAsync<AmbiguousMutationResultException>(
+                () => importer.ImportIntoAsync(IssueFieldSnapshot(), "target", 7, cancellationToken));
+
+            handler.Resume = true;
+            handler.ReturnDuplicates = true;
+            var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+                () => importer.ImportIntoAsync(IssueFieldSnapshot(), "target", 7, cancellationToken));
+
+            Assert.Contains("multiple new project fields", exception.Message, StringComparison.Ordinal);
+            Assert.Equal(1, handler.LinkCreateMutationCount);
+            Assert.Single((await ProjectImportLog.LoadAsync(directory, cancellationToken)).PendingIssueFieldLinks);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
     private static GitHubGraphQLClient CreateClient(HttpMessageHandler handler)
         => new("token", new Uri("https://example.test/graphql"), handler, (_, _) => Task.CompletedTask);
 
@@ -188,6 +306,27 @@ public class ProjectImporterResumeTests
         Views = [],
         Workflows = [],
         Items = [],
+    };
+
+    private static ProjectSnapshot IssueFieldSnapshot() => Snapshot() with
+    {
+        Fields =
+        [
+            new FieldSnapshot
+            {
+                Name = "Teams",
+                DataType = "MULTI_SELECT",
+                Options =
+                [
+                    new SingleSelectOptionSnapshot { Id = "source-platform", Name = "Platform", Color = "PURPLE" },
+                ],
+                IssueField = new IssueFieldConfigurationSnapshot
+                {
+                    Description = "Teams involved",
+                    Visibility = "ALL",
+                },
+            },
+        ],
     };
 
     private abstract class ResumeHandler(string directory) : HttpMessageHandler
@@ -301,5 +440,89 @@ public class ProjectImporterResumeTests
 
             throw new InvalidOperationException($"Unexpected operation: {query}");
         }
+    }
+
+    private sealed class IssueFieldResumeHandler(string directory, bool ambiguousFieldCreate) : ResumeHandler(directory)
+    {
+        public bool ReturnDuplicates { get; set; }
+
+        public int IssueFieldCreateMutationCount { get; private set; }
+
+        public int LinkCreateMutationCount { get; private set; }
+
+        protected override async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            var (query, _) = await ReadAsync(request, cancellationToken);
+            if (query.Contains("projectV2(number:", StringComparison.Ordinal))
+            {
+                return Json("""{"data":{"organization":{"projectV2":{"id":"PVT_existing","number":7,"title":"Project","url":"https://github.com/orgs/target/projects/7"}}}}""");
+            }
+
+            if (query.Contains("updateProjectV2", StringComparison.Ordinal))
+            {
+                return Json("""{"data":{"updateProjectV2":{"projectV2":{"id":"PVT_existing"}}}}""");
+            }
+
+            if (query.Contains("fields(first:", StringComparison.Ordinal))
+            {
+                if (!Resume || ambiguousFieldCreate)
+                {
+                    return Json("""{"data":{"node":{"fields":{"nodes":[]}}}}""");
+                }
+
+                return ReturnDuplicates
+                    ? Json("""{"data":{"node":{"fields":{"nodes":[{"__typename":"ProjectV2Field","id":"PVTF_created_1","name":"Teams","dataType":"MULTI_SELECT"},{"__typename":"ProjectV2Field","id":"PVTF_created_2","name":"Teams","dataType":"MULTI_SELECT"}]}}}}""")
+                    : Json("""{"data":{"node":{"fields":{"nodes":[{"__typename":"ProjectV2Field","id":"PVTF_created","name":"Teams","dataType":"MULTI_SELECT"}]}}}}""");
+            }
+
+            if (query.Contains("issueFields(first:", StringComparison.Ordinal))
+            {
+                if (ambiguousFieldCreate && !Resume)
+                {
+                    return Json("""{"data":{"organization":{"issueFields":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}""");
+                }
+
+                var nodes = ReturnDuplicates && ambiguousFieldCreate
+                    ? IssueFieldNode("IFM_created_1") + "," + IssueFieldNode("IFM_created_2")
+                    : IssueFieldNode("IFM_created");
+                return Json(string.Concat(
+                    """{"data":{"organization":{"issueFields":{"nodes":[""",
+                    nodes,
+                    """],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}"""));
+            }
+
+            if (query.Contains("createIssueField(", StringComparison.Ordinal))
+            {
+                IssueFieldCreateMutationCount++;
+                var log = await ProjectImportLog.LoadAsync(Directory, cancellationToken);
+                PendingWasPresentAtMutation = log.PendingIssueFields.Count == 1;
+                throw new HttpRequestException("Response ended prematurely.");
+            }
+
+            if (query.Contains("createProjectV2IssueField(", StringComparison.Ordinal))
+            {
+                LinkCreateMutationCount++;
+                if (!ambiguousFieldCreate)
+                {
+                    var log = await ProjectImportLog.LoadAsync(Directory, cancellationToken);
+                    PendingWasPresentAtMutation = log.PendingIssueFieldLinks.Count == 1;
+                    throw new HttpRequestException("Response ended prematurely.");
+                }
+
+                return Json("""{"data":{"createProjectV2IssueField":{"projectV2Field":{"__typename":"ProjectV2Field","id":"PVTF_created","name":"Teams","dataType":"MULTI_SELECT"}}}}""");
+            }
+
+            if (query.Contains("organization(login:", StringComparison.Ordinal))
+            {
+                return Json("""{"data":{"organization":{"id":"O_target"}}}""");
+            }
+
+            throw new InvalidOperationException($"Unexpected operation: {query}");
+        }
+
+        private static string IssueFieldNode(string id)
+            => $$"""{"__typename":"IssueFieldMultiSelect","id":"{{id}}","name":"Teams","dataType":"MULTI_SELECT","description":"Teams involved","visibility":"ALL","options":[{"id":"IFO_platform","name":"Platform","color":"PURPLE","description":null}]}""";
     }
 }

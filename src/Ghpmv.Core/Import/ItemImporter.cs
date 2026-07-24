@@ -1053,7 +1053,7 @@ public sealed class ItemImporter
             && archived.GetBoolean();
     }
 
-    internal static string BuildItemStateKey(ItemSnapshot item)
+    private static string BuildItemStateKey(ItemSnapshot item)
     {
         var identity = item.Type switch
         {

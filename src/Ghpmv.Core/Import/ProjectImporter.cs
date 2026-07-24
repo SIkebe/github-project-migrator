@@ -434,7 +434,14 @@ public sealed class ProjectImporter
         }
 
         var issueFields = await FetchIssueFieldListAsync(ownerLogin, cancellationToken).ConfigureAwait(false);
-        var issueFieldsByName = issueFields.ToDictionary(field => field.Name, StringComparer.Ordinal);
+        var issueFieldGroups = issueFields.GroupBy(field => field.Name, StringComparer.Ordinal).ToList();
+        var duplicateIssueFieldNames = issueFieldGroups
+            .Where(group => group.Skip(1).Any())
+            .Select(group => group.Key)
+            .ToHashSet(StringComparer.Ordinal);
+        var issueFieldsByName = issueFieldGroups
+            .Where(group => !duplicateIssueFieldNames.Contains(group.Key))
+            .ToDictionary(group => group.Key, group => group.Single(), StringComparer.Ordinal);
         string? ownerId = null;
 
         foreach (var field in fields)
@@ -460,6 +467,11 @@ public sealed class ProjectImporter
                 issueFieldsByName[field.Name] = targetIssueField;
                 _operationLog.PendingIssueFields.Remove(field.Name);
                 await SaveOperationLogAsync(cancellationToken).ConfigureAwait(false);
+            }
+            else if (duplicateIssueFieldNames.Contains(field.Name))
+            {
+                throw new InvalidOperationException(
+                    $"Multiple organization Issue Fields named '{field.Name}' exist in the target. Reconcile them before importing.");
             }
             else if (issueFieldsByName.TryGetValue(field.Name, out var existing))
             {

@@ -75,18 +75,8 @@ public sealed class FixtureProjectBuilder
                     snapshotFingerprint,
                     StringComparison.Ordinal))
             {
-                if (hasPendingOperations)
-                {
-                    throw new InvalidOperationException(
-                        $"{ImportLog.FileName} in '{operationDirectory}' belongs to an older fixture snapshot with incomplete operations. Resume or recreate that fixture before upgrading it.");
-                }
-
-                itemLog = await UpgradeCompletedItemLogAsync(
-                    itemLog,
-                    snapshot,
-                    snapshotFingerprint,
-                    operationDirectory,
-                    cancellationToken).ConfigureAwait(false);
+                throw new InvalidOperationException(
+                    $"{ImportLog.FileName} in '{operationDirectory}' belongs to a different fixture snapshot. Recreate the preview fixture instead of reusing incompatible artifacts.");
             }
         }
 
@@ -462,47 +452,6 @@ public sealed class FixtureProjectBuilder
             cancellationToken: cancellationToken).ConfigureAwait(false);
     }
 
-    private async Task<ImportLog> UpgradeCompletedItemLogAsync(
-        ImportLog itemLog,
-        ProjectSnapshot snapshot,
-        string snapshotFingerprint,
-        string operationDirectory,
-        CancellationToken cancellationToken)
-    {
-        var desiredItems = snapshot.Items.ToDictionary(
-            ItemImporter.BuildItemStateKey,
-            StringComparer.Ordinal);
-        var removedItemKeys = itemLog.ItemStates.Keys
-            .Where(key => !desiredItems.ContainsKey(key))
-            .ToList();
-        if (removedItemKeys.Count > 0)
-        {
-            throw new InvalidOperationException(
-                "The fixture snapshot removed or reordered existing items. Recreate the fixture project so obsolete items are not left behind.");
-        }
-
-        foreach (var item in snapshot.Items)
-        {
-            var stateKey = ItemImporter.BuildItemStateKey(item);
-            var positionKey = item.Position.ToString(CultureInfo.InvariantCulture);
-            if (!itemLog.ItemStates.ContainsKey(stateKey) && itemLog.Items.ContainsKey(positionKey))
-            {
-                throw new InvalidOperationException(
-                    $"The new fixture item at position {item.Position} conflicts with an existing item. Recreate the fixture project.");
-            }
-        }
-
-        foreach (var state in itemLog.ItemStates.Values)
-        {
-            state.FieldValuesApplied = false;
-            state.FieldValuesError = null;
-        }
-
-        var upgraded = itemLog with { SourceSnapshotFingerprint = snapshotFingerprint };
-        await upgraded.SaveAsync(operationDirectory, cancellationToken).ConfigureAwait(false);
-        OnProgress?.Invoke("Upgraded the fixture import log; existing item field values will be synchronized.");
-        return upgraded;
-    }
 
     private async Task<ProjectRef?> FindProjectByTitleAsync(string organization, string title, CancellationToken cancellationToken)
     {
