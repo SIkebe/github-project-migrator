@@ -296,7 +296,7 @@ public sealed class ProjectExporter
         int projectNumber,
         CancellationToken cancellationToken)
     {
-        var data = await _client.QueryWithoutInternalErrorRetryAsync(
+        var data = await _client.QueryAsync(
             FieldsQuery,
             new { login = ownerLogin, number = projectNumber },
             cancellationToken).ConfigureAwait(false);
@@ -420,6 +420,15 @@ public sealed class ProjectExporter
         IReadOnlyList<IssueFieldDefinition> issueFields,
         Dictionary<string, string> fieldDataTypes)
     {
+        var duplicateIssueField = issueFields
+            .GroupBy(field => field.Name, StringComparer.Ordinal)
+            .FirstOrDefault(group => group.Skip(1).Any());
+        if (duplicateIssueField is not null)
+        {
+            throw new GitHubGraphQLException(
+                $"Organization Issue Field name '{duplicateIssueField.Key}' is ambiguous. Rename or remove duplicate Issue Fields before exporting.");
+        }
+
         var issueFieldsByName = issueFields.ToDictionary(field => field.Name, StringComparer.Ordinal);
         var capturedIssueFieldNames = new HashSet<string>(StringComparer.Ordinal);
         var fields = new List<FieldSnapshot>();
@@ -783,7 +792,7 @@ public sealed class ProjectExporter
                 };
                 if (issueValue is not null)
                 {
-                    values.Add(issueValue);
+                    values.Add(issueValue with { IsIssueField = true });
                 }
 
                 continue;

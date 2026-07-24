@@ -139,7 +139,7 @@ public class ProjectVerifierTests
                     FieldValues =
                     [
                         .. item.FieldValues,
-                        new FieldValueSnapshot { FieldName = "Teams", MultiSelectOptionNames = values },
+                        new FieldValueSnapshot { FieldName = "Teams", IsIssueField = true, MultiSelectOptionNames = values },
                     ],
                 }
                 : item).ToList(),
@@ -697,6 +697,44 @@ public class ProjectVerifierTests
         var report = ProjectVerifier.Compare(source, target);
 
         Assert.True(report.IsMatch);
+    }
+
+    [Fact]
+    public void Same_named_project_and_issue_field_values_are_compared_independently()
+    {
+        var source = WithMultiSelectIssueField(BuildSnapshot(), ["Platform"]);
+        source = source with
+        {
+            Fields = [.. source.Fields, new FieldSnapshot { Name = "Teams", DataType = "TEXT" }],
+            Items = source.Items.Select(item => item.Type == "ISSUE"
+                ? item with
+                {
+                    FieldValues =
+                    [
+                        .. item.FieldValues,
+                        new FieldValueSnapshot { FieldName = "Teams", IsIssueField = false, Text = "source notes" },
+                    ],
+                }
+                : item).ToList(),
+        };
+        var target = source with
+        {
+            Items = source.Items.Select(item => item.Type == "ISSUE"
+                ? item with
+                {
+                    FieldValues = item.FieldValues.Select(value =>
+                        value is { FieldName: "Teams", IsIssueField: false }
+                            ? value with { Text = "target notes" }
+                            : value).ToList(),
+                }
+                : item).ToList(),
+        };
+
+        var report = ProjectVerifier.Compare(source, target);
+
+        Assert.Contains(report.Differences, difference =>
+            difference.Category == "Item"
+            && difference.Message.Contains("field 'Teams' value mismatch", StringComparison.Ordinal));
     }
 
     [Fact]

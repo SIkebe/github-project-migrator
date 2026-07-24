@@ -289,6 +289,9 @@ public sealed record FieldValueSnapshot
 {
     public required string FieldName { get; init; }
 
+    /// <summary>True when this value belongs to an organization Issue Field rather than a same-named Project field.</summary>
+    public bool? IsIssueField { get; init; }
+
     public string? Text { get; init; }
 
     public double? Number { get; init; }

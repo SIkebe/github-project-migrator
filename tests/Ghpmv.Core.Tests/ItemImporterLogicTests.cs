@@ -70,6 +70,7 @@ public class ItemImporterLogicTests
                 """{"data":{"addProjectV2ItemById":{"item":{"id":"PVTI_target"}}}}""",
                 """{"data":{"repository":{"issueOrPullRequest":{"id":"I_target"}}}}""",
                 """{"data":{"setIssueFieldValue":{"issue":{"id":"I_target"}}}}""",
+                """{"data":{"updateProjectV2ItemFieldValue":{"projectV2Item":{"id":"PVTI_target"}}}}""",
                 """{"data":{"updateProjectV2ItemPosition":{"clientMutationId":"positioned"}}}""");
             using var client = new GitHubGraphQLClient(
                 "dummy-token",
@@ -82,6 +83,11 @@ public class ItemImporterLogicTests
                 Project = new ProjectInfoSnapshot { Title = "Roadmap", Public = false, Closed = false },
                 Fields =
                 [
+                    new FieldSnapshot
+                    {
+                        Name = "Teams",
+                        DataType = "TEXT",
+                    },
                     new FieldSnapshot
                     {
                         Name = "Teams",
@@ -111,6 +117,13 @@ public class ItemImporterLogicTests
                             new FieldValueSnapshot
                             {
                                 FieldName = "Teams",
+                                IsIssueField = false,
+                                Text = "Project notes",
+                            },
+                            new FieldValueSnapshot
+                            {
+                                FieldName = "Teams",
+                                IsIssueField = true,
                                 MultiSelectOptionNames = ["Platform", "SDK"],
                             },
                         ],
@@ -173,6 +186,10 @@ public class ItemImporterLogicTests
             var clearIssueField = issueFieldInputs[1];
             Assert.Equal("IFM_areas", clearIssueField.GetProperty("fieldId").GetString());
             Assert.True(clearIssueField.GetProperty("delete").GetBoolean());
+            Assert.Contains(
+                handler.RequestBodies,
+                body => body.Contains("\"fieldId\":\"PVTF_teams\"", StringComparison.Ordinal)
+                    && body.Contains("\"text\":\"Project notes\"", StringComparison.Ordinal));
         }
         finally
         {

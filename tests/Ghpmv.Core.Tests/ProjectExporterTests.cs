@@ -245,6 +245,21 @@ public class ProjectExporterTests
             ]}
             """,
             """
+            {"data":{"organization":{"projectV2":{"fields":null}}},"errors":[
+              {"message":"Something went wrong while executing your query on the preview API."}
+            ]}
+            """,
+            """
+            {"data":{"organization":{"projectV2":{"fields":null}}},"errors":[
+              {"message":"Something went wrong while executing your query on the preview API."}
+            ]}
+            """,
+            """
+            {"data":{"organization":{"projectV2":{"fields":null}}},"errors":[
+              {"message":"Something went wrong while executing your query on the preview API."}
+            ]}
+            """,
+            """
             {"data":{"organization":{"issueFields":{"nodes":[
               {"__typename":"IssueFieldMultiSelect","id":"IFM_teams","name":"Teams",
                "dataType":"MULTI_SELECT","description":"Teams involved","visibility":"ALL",
@@ -268,7 +283,7 @@ public class ProjectExporterTests
             "dummy-token",
             new Uri("https://example.test/graphql"),
             handler,
-            delayAsync: null);
+            delayAsync: static (_, _) => Task.CompletedTask);
 
         var snapshot = await new ProjectExporter(client).ExportAsync(
             "source",
@@ -277,7 +292,7 @@ public class ProjectExporterTests
 
         Assert.Equal("TEXT", snapshot.Fields.Single(field => field.Name == "Notes").DataType);
         Assert.Equal("MULTI_SELECT", snapshot.Fields.Single(field => field.Name == "Teams").DataType);
-        Assert.Equal(7, handler.RequestBodies.Count);
+        Assert.Equal(10, handler.RequestBodies.Count);
         Assert.Contains(handler.RequestBodies, body => body.Contains("\"name\":\"Notes\"", StringComparison.Ordinal));
         Assert.Contains(handler.RequestBodies, body => body.Contains("\"name\":\"Teams\"", StringComparison.Ordinal));
     }

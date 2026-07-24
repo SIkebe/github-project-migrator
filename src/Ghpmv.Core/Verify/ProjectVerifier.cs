@@ -893,31 +893,38 @@ public sealed class ProjectVerifier
         var sourceValues = ToValueMap(source.FieldValues);
         var targetValues = ToValueMap(target.FieldValues);
 
-        foreach (var name in Names(sourceValues.Keys, targetValues.Keys))
+        var identities = sourceValues.Keys
+            .Concat(targetValues.Keys)
+            .Distinct()
+            .OrderBy(identity => identity.FieldName, StringComparer.Ordinal)
+            .ThenBy(identity => identity.IsIssueField);
+        foreach (var identity in identities)
         {
-            sourceValues.TryGetValue(name, out var sourceValue);
-            targetValues.TryGetValue(name, out var targetValue);
+            sourceValues.TryGetValue(identity, out var sourceValue);
+            targetValues.TryGetValue(identity, out var targetValue);
             if (!FieldValuesEqual(sourceValue, targetValue))
             {
                 AddError(differences, ItemCategory,
-                    $"{key}: field '{name}' value mismatch (source {Display(sourceValue)}, target {Display(targetValue)})");
+                    $"{key}: field '{identity.FieldName}' value mismatch (source {Display(sourceValue)}, target {Display(targetValue)})");
             }
         }
     }
 
-    private static Dictionary<string, FieldValueSnapshot> ToValueMap(IReadOnlyList<FieldValueSnapshot> values)
+    private static Dictionary<FieldValueIdentity, FieldValueSnapshot> ToValueMap(IReadOnlyList<FieldValueSnapshot> values)
     {
-        var map = new Dictionary<string, FieldValueSnapshot>(StringComparer.Ordinal);
+        var map = new Dictionary<FieldValueIdentity, FieldValueSnapshot>();
         foreach (var value in values)
         {
             if (HasValue(value))
             {
-                map.TryAdd(value.FieldName, value);
+                map.TryAdd(new FieldValueIdentity(value.FieldName, value.IsIssueField == true), value);
             }
         }
 
         return map;
     }
+
+    private readonly record struct FieldValueIdentity(string FieldName, bool IsIssueField);
 
     private static bool HasValue(FieldValueSnapshot value)
         => !string.IsNullOrEmpty(value.Text)

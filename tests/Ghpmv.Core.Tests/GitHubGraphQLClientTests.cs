@@ -32,6 +32,19 @@ public class GitHubGraphQLClientTests
             () => client.QueryAsync("", cancellationToken: TestContext.Current.CancellationToken));
     }
 
+    [Fact]
+    public async Task Requests_enable_the_issue_fields_preview()
+    {
+        using var handler = new StubHandler(JsonResponse(HttpStatusCode.OK, ViewerData));
+        using var client = CreateClient(handler, []);
+
+        await client.QueryAsync(
+            "query { viewer { login } }",
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Equal(["issue_fields"], Assert.Single(handler.GraphQlFeatures));
+    }
+
     [Theory]
     [InlineData("https://api.tenant.ghe.com", "https://api.tenant.ghe.com/graphql")]
     [InlineData("https://api.tenant.ghe.com/", "https://api.tenant.ghe.com/graphql")]
@@ -661,9 +674,15 @@ public class GitHubGraphQLClientTests
 
         public List<string> RequestBodies { get; } = [];
 
+        public List<string[]> GraphQlFeatures { get; } = [];
+
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             RequestBodies.Add(await request.Content!.ReadAsStringAsync(cancellationToken));
+            GraphQlFeatures.Add(
+                request.Headers.TryGetValues("GraphQL-Features", out var values)
+                    ? [.. values]
+                    : []);
             return _responses.Dequeue();
         }
 

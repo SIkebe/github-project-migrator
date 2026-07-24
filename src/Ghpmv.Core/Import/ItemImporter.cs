@@ -679,7 +679,7 @@ public sealed class ItemImporter
                 continue; // Set through item content.
             }
 
-            if (issueFields.ContainsKey(value.FieldName))
+            if (IsIssueFieldValue(value, issueFields))
             {
                 continue;
             }
@@ -766,7 +766,7 @@ public sealed class ItemImporter
         }
 
         var sourceValues = item.FieldValues
-            .Where(value => issueFields.ContainsKey(value.FieldName))
+            .Where(value => IsIssueFieldValue(value, issueFields))
             .ToDictionary(value => value.FieldName, StringComparer.Ordinal);
         if (item.Type != "ISSUE")
         {
@@ -834,6 +834,13 @@ public sealed class ItemImporter
 
         return allApplied;
     }
+
+    private static bool IsIssueFieldValue(
+        FieldValueSnapshot value,
+        Dictionary<string, FieldSnapshot> issueFields) =>
+        value.IsIssueField == true
+        || (value.IsIssueField is null
+            && issueFields.ContainsKey(value.FieldName));
 
     private object? BuildIssueFieldValueInput(
         FieldValueSnapshot value,

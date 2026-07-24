@@ -387,7 +387,7 @@ public sealed class FixtureProjectBuilder
         static FieldValueSnapshot Number(double value) => new() { FieldName = "Fixture Number", Number = value };
         static FieldValueSnapshot Date(DateTime value) => new() { FieldName = "Fixture Date", Date = value.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) };
         static FieldValueSnapshot Select(string value) => new() { FieldName = "Fixture Select", SingleSelectOptionName = value };
-        static FieldValueSnapshot MultiSelect(params string[] values) => new() { FieldName = "Fixture Teams", MultiSelectOptionNames = values };
+        static FieldValueSnapshot MultiSelect(params string[] values) => new() { FieldName = "Fixture Teams", IsIssueField = true, MultiSelectOptionNames = values };
         static FieldValueSnapshot Sprint(string value) => new() { FieldName = "Fixture Sprint", IterationTitle = value };
         static FieldValueSnapshot Status(string value) => new() { FieldName = "Status", SingleSelectOptionName = value };
     }

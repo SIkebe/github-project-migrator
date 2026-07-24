@@ -35,6 +35,7 @@ public sealed class GitHubGraphQLClient : IDisposable
         _httpClient = new HttpClient(handler) { BaseAddress = baseUrl ?? DefaultEndpoint };
         _httpClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
         _httpClient.DefaultRequestHeaders.UserAgent.ParseAdd("ghpmv");
+        _httpClient.DefaultRequestHeaders.Add("GraphQL-Features", "issue_fields");
         _delayAsync = delayAsync ?? (static (delay, ct) => Task.Delay(delay, ct));
     }
 
