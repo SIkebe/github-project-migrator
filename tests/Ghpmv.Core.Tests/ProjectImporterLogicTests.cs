@@ -161,6 +161,61 @@ public class ProjectImporterLogicTests
         }
     }
 
+    [Fact]
+    public async Task Import_reuses_existing_multi_select_issue_field_link()
+    {
+        var directory = Directory.CreateTempSubdirectory("ghpmv-project-import-").FullName;
+        try
+        {
+            using var handler = new IssueFieldStubHandler(existing: true);
+            using var client = new GitHubGraphQLClient(
+                "dummy-token",
+                new Uri("https://example.test/graphql"),
+                handler,
+                delayAsync: null);
+            var snapshot = MinimalSnapshot("Roadmap") with
+            {
+                Fields =
+                [
+                    new FieldSnapshot
+                    {
+                        Name = "Teams",
+                        DataType = "MULTI_SELECT",
+                        Options =
+                        [
+                            new SingleSelectOptionSnapshot { Id = "source-platform", Name = "Platform", Color = "PURPLE" },
+                            new SingleSelectOptionSnapshot { Id = "source-sdk", Name = "SDK", Color = "GREEN" },
+                        ],
+                        IssueField = new IssueFieldConfigurationSnapshot
+                        {
+                            Description = "Teams involved",
+                            Visibility = "ALL",
+                        },
+                    },
+                ],
+            };
+            var importer = new ProjectImporter(client)
+            {
+                OperationLogDirectory = directory,
+            };
+
+            var result = await importer.ImportIntoAsync(
+                snapshot,
+                "target",
+                7,
+                TestContext.Current.CancellationToken);
+
+            Assert.Equal("IFM_teams", result.IssueFieldIds["Teams"]);
+            Assert.Equal("PVTF_teams", result.FieldIds["Teams"]);
+            Assert.DoesNotContain(handler.RequestBodies, body => body.Contains("createIssueField", StringComparison.Ordinal));
+            Assert.DoesNotContain(handler.RequestBodies, body => body.Contains("createProjectV2IssueField", StringComparison.Ordinal));
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
     private static ProjectSnapshot MinimalSnapshot(string title) => new()
     {
         SchemaVersion = ProjectSnapshot.CurrentSchemaVersion,
@@ -196,7 +251,7 @@ public class ProjectImporterLogicTests
         }
     }
 
-    private sealed class IssueFieldStubHandler : HttpMessageHandler
+    private sealed class IssueFieldStubHandler(bool existing = false) : HttpMessageHandler
     {
         public List<string> RequestBodies { get; } = [];
 
@@ -213,9 +268,22 @@ public class ProjectImporterLogicTests
                 _ when body.Contains("updateProjectV2(", StringComparison.Ordinal) =>
                     """{"data":{"updateProjectV2":{"projectV2":{"id":"PVT_target"}}}}""",
                 _ when body.Contains("fields(first:", StringComparison.Ordinal) =>
-                    """{"data":{"node":{"fields":{"nodes":[{"id":"PVTF_title","name":"Title","dataType":"TITLE"}]}}}}""",
+                    existing
+                        ? """{"data":{"node":{"fields":{"nodes":[{"__typename":"ProjectV2Field","id":"PVTF_title","name":"Title","dataType":"TITLE"},{"__typename":"ProjectV2Field","id":"PVTF_teams","name":"Teams","dataType":"SINGLE_SELECT"}]}}}}"""
+                        : """{"data":{"node":{"fields":{"nodes":[{"id":"PVTF_title","name":"Title","dataType":"TITLE"}]}}}}""",
                 _ when body.Contains("issueFields(first:", StringComparison.Ordinal) =>
-                    """{"data":{"organization":{"issueFields":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}""",
+                    existing
+                        ? """
+                          {"data":{"organization":{"issueFields":{"nodes":[{
+                            "__typename":"IssueFieldMultiSelect","id":"IFM_teams","name":"Teams",
+                            "dataType":"MULTI_SELECT","description":"Teams involved","visibility":"ALL",
+                            "options":[
+                              {"id":"IFO_platform","name":"Platform","color":"PURPLE","description":null},
+                              {"id":"IFO_sdk","name":"SDK","color":"GREEN","description":null}
+                            ]
+                          }],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}
+                          """
+                        : """{"data":{"organization":{"issueFields":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}""",
                 _ when body.Contains("organization(login:", StringComparison.Ordinal) =>
                     """{"data":{"organization":{"id":"O_target"}}}""",
                 _ when body.Contains("createIssueField(", StringComparison.Ordinal) =>

@@ -628,7 +628,7 @@ public sealed class ProjectImporter
         else if (projectFieldsByName.TryGetValue(issueField.Name, out var existingProjectField))
         {
             if (!string.IsNullOrEmpty(existingProjectField.TypeName)
-                && !string.Equals(existingProjectField.TypeName, "ProjectV2IssueField", StringComparison.Ordinal))
+                && !string.Equals(existingProjectField.TypeName, "ProjectV2Field", StringComparison.Ordinal))
             {
                 throw new InvalidOperationException(
                     $"Project field '{issueField.Name}' already exists as {existingProjectField.TypeName}; it cannot satisfy the organization Issue Field link.");
