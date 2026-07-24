@@ -463,6 +463,7 @@ public sealed class FixtureProjectBuilder
                   items(first: 100, archivedStates: [ARCHIVED, NOT_ARCHIVED]) {
                     nodes {
                       id
+                      isArchived
                       content {
                         __typename
                         ... on DraftIssue { title }
@@ -482,8 +483,10 @@ public sealed class FixtureProjectBuilder
             .Where(node => node.GetProperty("content").ValueKind == JsonValueKind.Object)
             .ToDictionary(
                 node => GetFixtureItemIdentity(node.GetProperty("content")),
-                node => node.GetProperty("id").GetString()
-                    ?? throw new GitHubGraphQLException("Fixture Project item id was null."),
+                node => (
+                    Id: node.GetProperty("id").GetString()
+                        ?? throw new GitHubGraphQLException("Fixture Project item id was null."),
+                    IsArchived: node.GetProperty("isArchived").GetBoolean()),
                 StringComparer.Ordinal);
 
         foreach (var item in snapshot.Items)
@@ -497,44 +500,99 @@ public sealed class FixtureProjectBuilder
             }
 
             var identity = GetFixtureItemIdentity(item);
-            if (!itemIds.TryGetValue(identity, out var itemId))
+            if (!itemIds.TryGetValue(identity, out var itemReference))
             {
                 throw new InvalidOperationException(
                     $"Existing fixture item '{identity}' was not found; recreate the preview fixture.");
             }
 
-            foreach (var value in selectValues)
+            if (itemReference.IsArchived)
             {
-                if (!project.FieldIds.TryGetValue(value.FieldName, out var fieldId)
-                    || !project.OptionIds.TryGetValue(value.FieldName, out var options)
-                    || !options.TryGetValue(value.SingleSelectOptionName!, out var optionId))
-                {
-                    throw new InvalidOperationException(
-                        $"Fixture select value '{value.FieldName}={value.SingleSelectOptionName}' was not mapped.");
-                }
+                await SetFixtureItemArchivedAsync(
+                    project.ProjectId,
+                    itemReference.Id,
+                    archived: false,
+                    cancellationToken).ConfigureAwait(false);
+            }
 
-                await _graphQl.MutationAsync(
-                    "updateProjectV2ItemFieldValue",
-                    """
-                    mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $value: ProjectV2FieldValue!, $clientMutationId: String!) {
-                      updateProjectV2ItemFieldValue(input: { projectId: $projectId, itemId: $itemId, fieldId: $fieldId, value: $value, clientMutationId: $clientMutationId }) {
-                        projectV2Item { id }
-                      }
-                    }
-                    """,
-                    new
+            try
+            {
+                foreach (var value in selectValues)
+                {
+                    if (!project.FieldIds.TryGetValue(value.FieldName, out var fieldId)
+                        || !project.OptionIds.TryGetValue(value.FieldName, out var options)
+                        || !options.TryGetValue(value.SingleSelectOptionName!, out var optionId))
                     {
-                        projectId = project.ProjectId,
-                        itemId,
-                        fieldId,
-                        value = new { singleSelectOptionId = optionId },
-                    },
-                    MutationRetryPolicy.Idempotent,
-                    target: itemId,
-                    requiredResultPath: "projectV2Item.id",
-                    cancellationToken: cancellationToken).ConfigureAwait(false);
+                        throw new InvalidOperationException(
+                            $"Fixture select value '{value.FieldName}={value.SingleSelectOptionName}' was not mapped.");
+                    }
+
+                    await _graphQl.MutationAsync(
+                        "updateProjectV2ItemFieldValue",
+                        """
+                        mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $value: ProjectV2FieldValue!, $clientMutationId: String!) {
+                          updateProjectV2ItemFieldValue(input: { projectId: $projectId, itemId: $itemId, fieldId: $fieldId, value: $value, clientMutationId: $clientMutationId }) {
+                            projectV2Item { id }
+                          }
+                        }
+                        """,
+                        new
+                        {
+                            projectId = project.ProjectId,
+                            itemId = itemReference.Id,
+                            fieldId,
+                            value = new { singleSelectOptionId = optionId },
+                        },
+                        MutationRetryPolicy.Idempotent,
+                        target: itemReference.Id,
+                        requiredResultPath: "projectV2Item.id",
+                        cancellationToken: cancellationToken).ConfigureAwait(false);
+                }
+            }
+            finally
+            {
+                if (itemReference.IsArchived)
+                {
+                    await SetFixtureItemArchivedAsync(
+                        project.ProjectId,
+                        itemReference.Id,
+                        archived: true,
+                        CancellationToken.None).ConfigureAwait(false);
+                }
             }
         }
+    }
+
+    private async Task SetFixtureItemArchivedAsync(
+        string projectId,
+        string itemId,
+        bool archived,
+        CancellationToken cancellationToken)
+    {
+        var operationName = archived ? "archiveProjectV2Item" : "unarchiveProjectV2Item";
+        var mutation = archived
+            ? """
+              mutation($projectId: ID!, $itemId: ID!, $clientMutationId: String!) {
+                archiveProjectV2Item(input: { projectId: $projectId, itemId: $itemId, clientMutationId: $clientMutationId }) {
+                  item { id }
+                }
+              }
+              """
+            : """
+              mutation($projectId: ID!, $itemId: ID!, $clientMutationId: String!) {
+                unarchiveProjectV2Item(input: { projectId: $projectId, itemId: $itemId, clientMutationId: $clientMutationId }) {
+                  item { id }
+                }
+              }
+              """;
+        await _graphQl.MutationAsync(
+            operationName,
+            mutation,
+            new { projectId, itemId },
+            MutationRetryPolicy.Idempotent,
+            target: itemId,
+            requiredResultPath: "item.id",
+            cancellationToken: cancellationToken).ConfigureAwait(false);
     }
 
     private static string GetFixtureItemIdentity(ItemSnapshot item) =>

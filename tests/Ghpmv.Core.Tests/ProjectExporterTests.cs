@@ -34,6 +34,10 @@ public class ProjectExporterTests
                     "__typename":"ProjectV2ItemIssueFieldValue",
                     "field":{"name":"Notes"},
                     "issueFieldValue":{"__typename":"IssueFieldTextValue","value":"Needs review"}
+                  },{
+                     "__typename":"ProjectV2ItemIssueFieldValue",
+                     "field":{"name":"Priority"},
+                     "issueFieldValue":{"__typename":"IssueFieldSingleSelectValue","option":{"name":"High"}}
                   }
                 ]}
               }],
@@ -115,6 +119,7 @@ public class ProjectExporterTests
             ["Platform", "SDK"],
             item.FieldValues.Single(value => value.FieldName == "Teams").MultiSelectOptionNames);
         Assert.Equal("Needs review", item.FieldValues.Single(value => value.FieldName == "Notes").Text);
+        Assert.Equal("High", item.FieldValues.Single(value => value.FieldName == "Priority").SingleSelectOptionName);
         Assert.Equal(7, handler.RequestBodies.Count);
         Assert.DoesNotContain("dataType", handler.RequestBodies[0], StringComparison.Ordinal);
     }

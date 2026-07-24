@@ -777,7 +777,10 @@ public sealed class ProjectExporter
                     "IssueFieldSingleSelectValue" => new FieldValueSnapshot
                     {
                         FieldName = fieldName,
-                        SingleSelectOptionName = GetOptionalString(issueFieldValue, "name"),
+                        SingleSelectOptionName = issueFieldValue.TryGetProperty("option", out var option)
+                            && option.ValueKind == JsonValueKind.Object
+                            ? GetOptionalString(option, "name")
+                            : null,
                     },
                     "IssueFieldMultiSelectValue" => new FieldValueSnapshot
                     {
@@ -989,7 +992,7 @@ public sealed class ProjectExporter
                           ... on IssueFieldTextValue { value }
                           ... on IssueFieldNumberValue { value }
                           ... on IssueFieldDateValue { value }
-                          ... on IssueFieldSingleSelectValue { name }
+                          ... on IssueFieldSingleSelectValue { option { name } }
                           ... on IssueFieldMultiSelectValue { options { name } }
                         }
                       }
