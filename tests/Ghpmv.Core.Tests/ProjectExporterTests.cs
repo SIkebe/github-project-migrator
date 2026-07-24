@@ -15,7 +15,9 @@ public class ProjectExporterTests
             {"data":{"organization":{"projectV2":{
               "title":"Roadmap","shortDescription":null,"readme":null,"public":false,"closed":false,
               "fields":{"nodes":[
-                {"__typename":"ProjectV2Field","id":"PVTF_title","name":"Title"}
+                {"__typename":"ProjectV2Field","id":"PVTF_title","name":"Title"},
+                {"__typename":"ProjectV2Field","id":"PVTF_unrelated","name":"Unrelated"},
+                {"__typename":"ProjectV2Field","id":"PVTF_teams","name":"Teams"}
               ]},
               "views":{"nodes":[]},"workflows":{"nodes":[]},"repositories":{"nodes":[]}
             }}}}
@@ -60,6 +62,16 @@ public class ProjectExporterTests
             {"data":{"nodes":[
               {"id":"PVTF_title","dataType":"TITLE"}
             ]}}
+            """,
+            """
+            {"data":{"nodes":[
+              {"id":"PVTF_unrelated","dataType":"TEXT"}
+            ]}}
+            """,
+            """
+            {"data":{"nodes":[null]},"errors":[
+              {"message":"Something went wrong while executing your query on the preview API."}
+            ]}
             """);
         using var client = new GitHubGraphQLClient(
             "dummy-token",
@@ -77,13 +89,15 @@ public class ProjectExporterTests
         Assert.Equal(["Platform", "SDK"], field.Options!.Select(option => option.Name));
         Assert.Equal("Teams involved", field.IssueField!.Description);
         Assert.Equal("ALL", field.IssueField.Visibility);
-        Assert.DoesNotContain(snapshot.Fields, candidate => candidate.Name == "Unrelated");
+        var unrelated = snapshot.Fields.Single(candidate => candidate.Name == "Unrelated");
+        Assert.Equal("TEXT", unrelated.DataType);
+        Assert.Null(unrelated.IssueField);
 
         var item = Assert.Single(snapshot.Items);
         Assert.Equal(
             ["Platform", "SDK"],
             Assert.Single(item.FieldValues).MultiSelectOptionNames);
-        Assert.Equal(4, handler.RequestBodies.Count);
+        Assert.Equal(6, handler.RequestBodies.Count);
         Assert.DoesNotContain("dataType", handler.RequestBodies[0], StringComparison.Ordinal);
     }
 

@@ -43,13 +43,6 @@ public sealed class FixtureProjectBuilder
         var existing = await FindProjectByTitleAsync(organization, title, cancellationToken).ConfigureAwait(false);
         var projectLog = await ProjectImportLog.LoadAsync(operationDirectory, cancellationToken).ConfigureAwait(false);
         var itemLog = await ImportLog.LoadAsync(operationDirectory, cancellationToken).ConfigureAwait(false);
-        var hasPendingOperations = projectLog.PendingProject is not null
-            || projectLog.PendingFields.Count > 0
-            || projectLog.PendingIssueFields.Count > 0
-            || projectLog.PendingIssueFieldLinks.Count > 0
-            || itemLog is { PendingDrafts.Count: > 0 }
-            || itemLog is { PendingContents.Count: > 0 }
-            || itemLog is { HasIncompleteItems: true };
 
         if (itemLog is not null
             && (existing is null || !string.Equals(existing.Id, itemLog.ProjectId, StringComparison.Ordinal)))
@@ -97,7 +90,7 @@ public sealed class FixtureProjectBuilder
             project,
             cancellationToken).ConfigureAwait(false);
 
-        if (existing is null || hasPendingOperations || itemLog is not null)
+        if (existing is null || itemLog is not null)
         {
             var itemImporter = new ItemImporter(_graphQl)
             {

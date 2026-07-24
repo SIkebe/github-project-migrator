@@ -177,25 +177,58 @@ public sealed class ProjectExporter
         HashSet<string> multiSelectIssueFieldNames,
         CancellationToken cancellationToken)
     {
-        var ids = connection.GetProperty("nodes").EnumerateArray()
+        var candidates = connection.GetProperty("nodes").EnumerateArray()
             .Where(node => node.GetProperty("__typename").GetString() == "ProjectV2Field"
-                && !node.TryGetProperty("dataType", out _)
-                && !multiSelectIssueFieldNames.Contains(node.GetProperty("name").GetString() ?? string.Empty))
-            .Select(node => node.GetProperty("id").GetString())
-            .OfType<string>()
+                && !node.TryGetProperty("dataType", out _))
+            .Select(node => (
+                Id: node.GetProperty("id").GetString() ?? string.Empty,
+                Name: node.GetProperty("name").GetString() ?? string.Empty))
             .ToArray();
-        if (ids.Length == 0)
+        var result = new Dictionary<string, string>(StringComparer.Ordinal);
+        var unambiguousIds = candidates
+            .Where(candidate => !multiSelectIssueFieldNames.Contains(candidate.Name))
+            .Select(candidate => candidate.Id)
+            .ToArray();
+        if (unambiguousIds.Length > 0)
         {
-            return [];
+            AddFieldDataTypes(
+                result,
+                await _client.QueryAsync(
+                    FieldDataTypesQuery,
+                    new { ids = unambiguousIds },
+                    cancellationToken).ConfigureAwait(false));
         }
 
-        var data = await _client.QueryAsync(FieldDataTypesQuery, new { ids }, cancellationToken).ConfigureAwait(false);
-        return data.GetProperty("nodes").EnumerateArray()
-            .Where(node => node.ValueKind == JsonValueKind.Object)
-            .ToDictionary(
-                node => node.GetProperty("id").GetString() ?? string.Empty,
-                node => node.GetProperty("dataType").GetString() ?? string.Empty,
-                StringComparer.Ordinal);
+        foreach (var candidate in candidates.Where(candidate => multiSelectIssueFieldNames.Contains(candidate.Name)))
+        {
+            try
+            {
+                AddFieldDataTypes(
+                    result,
+                    await _client.QueryWithoutInternalErrorRetryAsync(
+                        FieldDataTypesQuery,
+                        new { ids = new[] { candidate.Id } },
+                        cancellationToken).ConfigureAwait(false));
+            }
+            catch (GitHubGraphQLException exception) when (
+                exception.ErrorsJson?.Contains(
+                    "Something went wrong while executing your query",
+                    StringComparison.OrdinalIgnoreCase) == true)
+            {
+                // GitHub's preview schema cannot resolve dataType for a linked multi-select Issue Field.
+            }
+        }
+
+        return result;
+    }
+
+    private static void AddFieldDataTypes(Dictionary<string, string> result, JsonElement data)
+    {
+        foreach (var node in data.GetProperty("nodes").EnumerateArray().Where(node => node.ValueKind == JsonValueKind.Object))
+        {
+            result[node.GetProperty("id").GetString() ?? string.Empty] =
+                node.GetProperty("dataType").GetString() ?? string.Empty;
+        }
     }
 
     private static ProjectInfoSnapshot ParseProjectInfo(JsonElement project) => new()
@@ -218,9 +251,12 @@ public sealed class ProjectExporter
         foreach (var node in connection.GetProperty("nodes").EnumerateArray())
         {
             var name = node.GetProperty("name").GetString() ?? string.Empty;
+            var id = node.GetProperty("id").GetString() ?? string.Empty;
             IssueFieldDefinition? issueField = null;
             if (node.TryGetProperty("__typename", out var typeName)
                 && typeName.GetString() == "ProjectV2Field"
+                && !node.TryGetProperty("dataType", out _)
+                && !fieldDataTypes.ContainsKey(id)
                 && issueFieldsByName.TryGetValue(name, out var matchedIssueField))
             {
                 issueField = matchedIssueField;
@@ -232,9 +268,7 @@ public sealed class ProjectExporter
                 fields.Add(BuildIssueFieldSnapshot(issueField));
                 continue;
             }
-
             var nodeType = node.GetProperty("__typename").GetString();
-            var id = node.GetProperty("id").GetString() ?? string.Empty;
             var dataType = node.TryGetProperty("dataType", out var dataTypeElement)
                 ? dataTypeElement.GetString()
                 : nodeType switch
