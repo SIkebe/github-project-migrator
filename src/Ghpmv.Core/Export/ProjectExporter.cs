@@ -328,7 +328,7 @@ public sealed class ProjectExporter
         {
             try
             {
-                var data = await _client.QueryWithoutInternalErrorRetryAsync(
+                var data = await _client.QueryAsync(
                     FieldByNameQuery,
                     new { login = ownerLogin, number = projectNumber, name = fieldName },
                     cancellationToken).ConfigureAwait(false);

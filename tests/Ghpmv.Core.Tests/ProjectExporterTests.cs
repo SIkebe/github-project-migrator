@@ -294,6 +294,21 @@ public class ProjectExporterTests
             ]}
             """,
             """
+            {"data":{"organization":{"projectV2":{"field":null}}},"errors":[
+              {"message":"Something went wrong while executing your query on the preview API."}
+            ]}
+            """,
+            """
+            {"data":{"organization":{"projectV2":{"field":null}}},"errors":[
+              {"message":"Something went wrong while executing your query on the preview API."}
+            ]}
+            """,
+            """
+            {"data":{"organization":{"projectV2":{"field":null}}},"errors":[
+              {"message":"Something went wrong while executing your query on the preview API."}
+            ]}
+            """,
+            """
             {"data":{"organization":{"projectV2":{"field":{
               "__typename":"ProjectV2Field","id":"PVTF_notes","name":"Notes"
             }}}}}
@@ -321,11 +336,13 @@ public class ProjectExporterTests
         Assert.Equal("NUMBER", snapshot.Fields.Single(field => field.Name == "Unobserved").DataType);
         Assert.Equal("TEXT", snapshot.Fields.Single(field => field.Name == "Notes").DataType);
         Assert.Equal("MULTI_SELECT", snapshot.Fields.Single(field => field.Name == "Teams").DataType);
-        Assert.Equal(12, handler.RequestBodies.Count);
+        Assert.Equal(15, handler.RequestBodies.Count);
         Assert.Contains(handler.RequestBodies, body => body.Contains("\"name\":\"Unobserved\"", StringComparison.Ordinal));
         Assert.DoesNotContain(snapshot.Fields, field => field.Name == "Missing");
         Assert.Contains(handler.RequestBodies, body => body.Contains("\"name\":\"Notes\"", StringComparison.Ordinal));
-        Assert.Contains(handler.RequestBodies, body => body.Contains("\"name\":\"Teams\"", StringComparison.Ordinal));
+        Assert.Equal(
+            4,
+            handler.RequestBodies.Count(body => body.Contains("\"name\":\"Teams\"", StringComparison.Ordinal)));
     }
 
     private sealed class StubHandler(params string[] responses) : HttpMessageHandler
