@@ -102,9 +102,6 @@ public sealed class ProjectExporter
                 || issueFieldNames.Count > 0))
         {
             organizationIssueFields ??= await FetchIssueFieldsAsync(ownerLogin, cancellationToken).ConfigureAwait(false);
-            issueFields = organizationIssueFields
-                .Where(field => issueFieldNames.Contains(field.Name))
-                .ToList();
             multiSelectIssueFieldNames = organizationIssueFields
                 .Where(field => field.DataType == "MULTI_SELECT")
                 .Select(field => field.Name)
@@ -125,9 +122,6 @@ public sealed class ProjectExporter
             && IsPreviewFieldResolutionError(exception))
         {
             organizationIssueFields = await FetchIssueFieldsAsync(ownerLogin, cancellationToken).ConfigureAwait(false);
-            issueFields = organizationIssueFields
-                .Where(field => issueFieldNames.Contains(field.Name))
-                .ToList();
             multiSelectIssueFieldNames = organizationIssueFields
                 .Where(field => field.DataType == "MULTI_SELECT")
                 .Select(field => field.Name)
@@ -137,6 +131,33 @@ public sealed class ProjectExporter
                 multiSelectIssueFieldNames,
                 cancellationToken).ConfigureAwait(false);
         }
+
+        var unresolvedFieldNames = GetUnresolvedFieldNames(fieldNodes, fieldDataTypes);
+        if (OwnerType == ProjectOwnerType.Organization
+            && organizationIssueFields is null
+            && unresolvedFieldNames.Count > 0)
+        {
+            organizationIssueFields = await FetchIssueFieldsAsync(ownerLogin, cancellationToken).ConfigureAwait(false);
+            multiSelectIssueFieldNames = organizationIssueFields
+                .Where(field => field.DataType == "MULTI_SELECT")
+                .Select(field => field.Name)
+                .ToHashSet(StringComparer.Ordinal);
+            fieldDataTypes = await FetchFieldDataTypesAsync(
+                fieldNodes,
+                multiSelectIssueFieldNames,
+                cancellationToken).ConfigureAwait(false);
+            unresolvedFieldNames = GetUnresolvedFieldNames(fieldNodes, fieldDataTypes);
+        }
+
+        if (organizationIssueFields is not null)
+        {
+            issueFields = organizationIssueFields
+                .Where(field =>
+                    issueFieldNames.Contains(field.Name)
+                    || unresolvedFieldNames.Contains(field.Name))
+                .ToList();
+        }
+
         var fields = ParseFields(fieldNodes, issueFields, fieldDataTypes);
         OnProgress?.Invoke(string.Create(
             CultureInfo.InvariantCulture,
@@ -373,6 +394,17 @@ public sealed class ProjectExporter
                 node.GetProperty("dataType").GetString() ?? string.Empty;
         }
     }
+
+    private static HashSet<string> GetUnresolvedFieldNames(
+        IEnumerable<JsonElement> fieldNodes,
+        Dictionary<string, string> fieldDataTypes) =>
+        fieldNodes
+            .Where(node =>
+                node.GetProperty("__typename").GetString() == "ProjectV2Field"
+                && !node.TryGetProperty("dataType", out _)
+                && !fieldDataTypes.ContainsKey(node.GetProperty("id").GetString() ?? string.Empty))
+            .Select(node => node.GetProperty("name").GetString() ?? string.Empty)
+            .ToHashSet(StringComparer.Ordinal);
 
     private static ProjectInfoSnapshot ParseProjectInfo(JsonElement project) => new()
     {

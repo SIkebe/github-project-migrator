@@ -160,6 +160,64 @@ public class ProjectExporterTests
     }
 
     [Fact]
+    public async Task Export_resolves_untyped_linked_issue_field_without_an_item_value()
+    {
+        using var handler = new StubHandler(
+            """
+            {"data":{"organization":{"projectV2":{
+              "title":"Roadmap","shortDescription":null,"readme":null,"public":false,"closed":false,
+              "views":{"nodes":[]},"workflows":{"nodes":[]},"repositories":{"nodes":[]}
+            }}}}
+            """,
+            """
+            {"data":{"organization":{"projectV2":{"items":{
+              "nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}
+            }}}}}
+            """,
+            """
+            {"data":{"organization":{"projectV2":{"fields":{"nodes":[
+              {"__typename":"ProjectV2Field","id":"PVTF_title","name":"Title"},
+              {"__typename":"ProjectV2Field","id":"PVTF_teams","name":"Teams"}
+            ]}}}}}
+            """,
+            """
+            {"data":{"nodes":[{"id":"PVTF_title","dataType":"TITLE"},null]}}
+            """,
+            """
+            {"data":{"organization":{"issueFields":{
+              "nodes":[{
+                "__typename":"IssueFieldMultiSelect","id":"IFM_teams","name":"Teams",
+                "dataType":"MULTI_SELECT","description":"Teams involved","visibility":"ALL",
+                "options":[{"id":"IFO_sdk","name":"SDK","color":"GREEN","description":null}]
+              }],
+              "pageInfo":{"hasNextPage":false,"endCursor":null}
+            }}}}
+            """,
+            """
+            {"data":{"nodes":[{"id":"PVTF_title","dataType":"TITLE"}]}}
+            """,
+            """
+            {"data":{"nodes":[null]},"errors":[
+              {"message":"Something went wrong while executing your query on the preview API."}
+            ]}
+            """);
+        using var client = new GitHubGraphQLClient(
+            "dummy-token",
+            new Uri("https://example.test/graphql"),
+            handler,
+            delayAsync: null);
+
+        var snapshot = await new ProjectExporter(client).ExportAsync(
+            "source",
+            1,
+            TestContext.Current.CancellationToken);
+
+        var teams = snapshot.Fields.Single(field => field.Name == "Teams");
+        Assert.Equal("MULTI_SELECT", teams.DataType);
+        Assert.Equal(["SDK"], teams.Options!.Select(option => option.Name));
+    }
+
+    [Fact]
     public async Task Export_falls_back_to_observed_field_names_when_preview_connection_fails()
     {
         using var handler = new StubHandler(

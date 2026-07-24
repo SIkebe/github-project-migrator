@@ -85,6 +85,11 @@ public sealed class FixtureProjectBuilder
             },
         };
         var project = await projectImporter.ImportAsync(snapshot, organization, cancellationToken).ConfigureAwait(false);
+        if (existing is not null)
+        {
+            await EnsureExistingSelectValuesAsync(snapshot, project, cancellationToken).ConfigureAwait(false);
+        }
+
         await EnsureMultiSelectIssueFieldValueAsync(
             repositoryFullName,
             project,
@@ -443,6 +448,117 @@ public sealed class FixtureProjectBuilder
             target: issueId,
             requiredResultPath: "issue.id",
             cancellationToken: cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task EnsureExistingSelectValuesAsync(
+        ProjectSnapshot snapshot,
+        ImportResult project,
+        CancellationToken cancellationToken)
+    {
+        var data = await _graphQl.QueryAsync(
+            """
+            query($projectId: ID!) {
+              node(id: $projectId) {
+                ... on ProjectV2 {
+                  items(first: 100, archivedStates: [ARCHIVED, NOT_ARCHIVED]) {
+                    nodes {
+                      id
+                      content {
+                        __typename
+                        ... on DraftIssue { title }
+                        ... on Issue { number repository { nameWithOwner } }
+                        ... on PullRequest { number repository { nameWithOwner } }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+            """,
+            new { projectId = project.ProjectId },
+            cancellationToken).ConfigureAwait(false);
+        var itemIds = data.GetProperty("node").GetProperty("items").GetProperty("nodes")
+            .EnumerateArray()
+            .Where(node => node.GetProperty("content").ValueKind == JsonValueKind.Object)
+            .ToDictionary(
+                node => GetFixtureItemIdentity(node.GetProperty("content")),
+                node => node.GetProperty("id").GetString()
+                    ?? throw new GitHubGraphQLException("Fixture Project item id was null."),
+                StringComparer.Ordinal);
+
+        foreach (var item in snapshot.Items)
+        {
+            var selectValues = item.FieldValues
+                .Where(value => value.SingleSelectOptionName is not null)
+                .ToArray();
+            if (selectValues.Length == 0)
+            {
+                continue;
+            }
+
+            var identity = GetFixtureItemIdentity(item);
+            if (!itemIds.TryGetValue(identity, out var itemId))
+            {
+                throw new InvalidOperationException(
+                    $"Existing fixture item '{identity}' was not found; recreate the preview fixture.");
+            }
+
+            foreach (var value in selectValues)
+            {
+                if (!project.FieldIds.TryGetValue(value.FieldName, out var fieldId)
+                    || !project.OptionIds.TryGetValue(value.FieldName, out var options)
+                    || !options.TryGetValue(value.SingleSelectOptionName!, out var optionId))
+                {
+                    throw new InvalidOperationException(
+                        $"Fixture select value '{value.FieldName}={value.SingleSelectOptionName}' was not mapped.");
+                }
+
+                await _graphQl.MutationAsync(
+                    "updateProjectV2ItemFieldValue",
+                    """
+                    mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $value: ProjectV2FieldValue!, $clientMutationId: String!) {
+                      updateProjectV2ItemFieldValue(input: { projectId: $projectId, itemId: $itemId, fieldId: $fieldId, value: $value, clientMutationId: $clientMutationId }) {
+                        projectV2Item { id }
+                      }
+                    }
+                    """,
+                    new
+                    {
+                        projectId = project.ProjectId,
+                        itemId,
+                        fieldId,
+                        value = new { singleSelectOptionId = optionId },
+                    },
+                    MutationRetryPolicy.Idempotent,
+                    target: itemId,
+                    requiredResultPath: "projectV2Item.id",
+                    cancellationToken: cancellationToken).ConfigureAwait(false);
+            }
+        }
+    }
+
+    private static string GetFixtureItemIdentity(ItemSnapshot item) =>
+        item.Type switch
+        {
+            "DRAFT_ISSUE" when item.Draft is not null => $"DRAFT_ISSUE:{item.Draft.Title}",
+            "ISSUE" or "PULL_REQUEST" when item.Repository is not null && item.Number is not null =>
+                string.Create(
+                    CultureInfo.InvariantCulture,
+                    $"{item.Type}:{item.Repository.ToLowerInvariant()}:{item.Number.Value}"),
+            _ => throw new InvalidOperationException($"Unsupported fixture item type '{item.Type}'."),
+        };
+
+    private static string GetFixtureItemIdentity(JsonElement content)
+    {
+        var type = content.GetProperty("__typename").GetString();
+        return type switch
+        {
+            "DraftIssue" => $"DRAFT_ISSUE:{content.GetProperty("title").GetString()}",
+            "Issue" or "PullRequest" => string.Create(
+                CultureInfo.InvariantCulture,
+                $"{(type == "Issue" ? "ISSUE" : "PULL_REQUEST")}:{content.GetProperty("repository").GetProperty("nameWithOwner").GetString()?.ToLowerInvariant()}:{content.GetProperty("number").GetInt32()}"),
+            _ => throw new InvalidOperationException($"Unsupported existing fixture item type '{type}'."),
+        };
     }
 
 
