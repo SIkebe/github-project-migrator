@@ -68,7 +68,7 @@ public class ProjectImporterTests
             Assert.Equal(snapshot.Project.Closed, imported.Project.Closed);
 
             string[] creatable = ["TEXT", "NUMBER", "DATE", "SINGLE_SELECT", "ITERATION"];
-            foreach (var sourceField in snapshot.Fields.Where(f => creatable.Contains(f.DataType) || f.IssueField is not null))
+            foreach (var sourceField in snapshot.Fields.Where(f => creatable.Contains(f.DataType)))
             {
                 var importedField = Assert.Single(imported.Fields, f => f.Name == sourceField.Name);
                 Assert.Equal(sourceField.DataType, importedField.DataType);
@@ -83,11 +83,10 @@ public class ProjectImporterTests
                         importedField.Options.Select(o => o.Description ?? string.Empty));
 
                     // Fresh option ids must have been issued and mapped.
-                    var optionIds = sourceField.IssueField is null ? result.OptionIds : result.IssueFieldOptionIds;
-                    Assert.True(optionIds.ContainsKey(sourceField.Name));
+                    Assert.True(result.OptionIds.ContainsKey(sourceField.Name));
                     Assert.Equal(
                         sourceField.Options.Select(o => o.Name).Order(StringComparer.Ordinal),
-                        optionIds[sourceField.Name].Keys.Order(StringComparer.Ordinal));
+                        result.OptionIds[sourceField.Name].Keys.Order(StringComparer.Ordinal));
                 }
 
                 if (sourceField.IterationConfiguration is { } sourceConfig)
@@ -111,8 +110,16 @@ public class ProjectImporterTests
                 }
 
                 // All created fields must be present in the id map for M4.
-                var fieldIds = sourceField.IssueField is null ? result.FieldIds : result.IssueFieldIds;
-                Assert.True(fieldIds.ContainsKey(sourceField.Name));
+                Assert.True(result.FieldIds.ContainsKey(sourceField.Name));
+            }
+
+            foreach (var sourceField in snapshot.Fields.Where(field => field.IssueField is not null))
+            {
+                Assert.True(result.IssueFieldIds.ContainsKey(sourceField.Name));
+                Assert.True(result.FieldIds.ContainsKey(sourceField.Name));
+                Assert.Equal(
+                    (sourceField.Options ?? []).Select(option => option.Name).Order(StringComparer.Ordinal),
+                    result.IssueFieldOptionIds[sourceField.Name].Keys.Order(StringComparer.Ordinal));
             }
         }
         finally
