@@ -1602,7 +1602,9 @@ public sealed class ProjectImporter
               fields(first: 50) {
                 nodes {
                   __typename
-                  ... on ProjectV2FieldCommon { id name }
+                  ... on ProjectV2Field { id name }
+                  ... on ProjectV2SingleSelectField { id name }
+                  ... on ProjectV2IterationField { id name }
                 }
               }
             }

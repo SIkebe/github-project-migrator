@@ -219,6 +219,7 @@ public class ProjectImporterLogicTests
                 body => body.Contains("fields(first:", StringComparison.Ordinal));
             Assert.DoesNotContain("id name dataType", fieldsQuery, StringComparison.Ordinal);
             Assert.DoesNotContain("options", fieldsQuery, StringComparison.Ordinal);
+            Assert.DoesNotContain("ProjectV2FieldCommon", fieldsQuery, StringComparison.Ordinal);
         }
         finally
         {
