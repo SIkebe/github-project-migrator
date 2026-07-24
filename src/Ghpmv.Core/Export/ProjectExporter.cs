@@ -8,7 +8,7 @@ namespace Ghpmv.Core.Export;
 /// <summary>
 /// Exports an organization project (Projects V2) into a <see cref="ProjectSnapshot"/> (M2).
 /// Reads everything the GraphQL API exposes: project metadata, fields
-/// (including single-select options and iteration configuration), views,
+/// (including select options, Issue Field metadata and iteration configuration), views,
 /// workflows and all items (archived included) with their field values.
 /// UI-only settings (view slice-by/field-sum/roadmap, workflow details) are
 /// left null and filled in by the browser module (M6/M7).
@@ -53,7 +53,8 @@ public sealed class ProjectExporter
         }
 
         var projectInfo = ParseProjectInfo(project);
-        var fields = ParseFields(project.GetProperty("fields"));
+        var fieldConnection = project.GetProperty("fields");
+        var fields = ParseFields(fieldConnection, []);
         var views = ParseViews(project.GetProperty("views"));
         var workflows = ParseWorkflows(project.GetProperty("workflows"));
         var linkedRepositories = ParseLinkedRepositories(project.GetProperty("repositories"));
@@ -61,7 +62,16 @@ public sealed class ProjectExporter
             CultureInfo.InvariantCulture,
             $"Fetched {fields.Count} fields, {views.Count} views, {workflows.Count} workflows. Fetching items..."));
 
-        var items = await FetchItemsAsync(ownerLogin, projectNumber, cancellationToken).ConfigureAwait(false);
+        var issueFieldNames = new HashSet<string>(StringComparer.Ordinal);
+        var items = await FetchItemsAsync(ownerLogin, projectNumber, issueFieldNames, cancellationToken).ConfigureAwait(false);
+        if (OwnerType == ProjectOwnerType.Organization && issueFieldNames.Count > 0)
+        {
+            var issueFields = await FetchIssueFieldsAsync(ownerLogin, cancellationToken).ConfigureAwait(false);
+            fields = ParseFields(fieldConnection, issueFields
+                .Where(field => issueFieldNames.Contains(field.Name))
+                .ToList());
+        }
+
         OnProgress?.Invoke(string.Create(CultureInfo.InvariantCulture, $"Fetched {items.Count} items."));
 
         var snapshot = new ProjectSnapshot
@@ -118,7 +128,11 @@ public sealed class ProjectExporter
 
     private string OwnerDescription => OwnerType == ProjectOwnerType.User ? "user" : "organization";
 
-    private async Task<List<ItemSnapshot>> FetchItemsAsync(string ownerLogin, int projectNumber, CancellationToken cancellationToken)
+    private async Task<List<ItemSnapshot>> FetchItemsAsync(
+        string ownerLogin,
+        int projectNumber,
+        HashSet<string> issueFieldNames,
+        CancellationToken cancellationToken)
     {
         var items = new List<ItemSnapshot>();
         await foreach (var node in _client.QueryPaginatedAsync(
@@ -127,10 +141,25 @@ public sealed class ProjectExporter
             OwnerField + ".projectV2.items",
             cancellationToken: cancellationToken).ConfigureAwait(false))
         {
-            items.Add(ParseItem(node, position: items.Count));
+            items.Add(ParseItem(node, position: items.Count, issueFieldNames));
         }
 
         return items;
+    }
+
+    private async Task<List<IssueFieldDefinition>> FetchIssueFieldsAsync(string ownerLogin, CancellationToken cancellationToken)
+    {
+        var fields = new List<IssueFieldDefinition>();
+        await foreach (var node in _client.QueryPaginatedAsync(
+            IssueFieldsQuery,
+            new { login = ownerLogin, first = 100 },
+            "organization.issueFields",
+            cancellationToken: cancellationToken).ConfigureAwait(false))
+        {
+            fields.Add(ParseIssueField(node));
+        }
+
+        return fields;
     }
 
     private static ProjectInfoSnapshot ParseProjectInfo(JsonElement project) => new()
@@ -142,25 +171,73 @@ public sealed class ProjectExporter
         Closed = project.GetProperty("closed").GetBoolean(),
     };
 
-    private static List<FieldSnapshot> ParseFields(JsonElement connection)
+    private static List<FieldSnapshot> ParseFields(
+        JsonElement connection,
+        IReadOnlyList<IssueFieldDefinition> issueFields)
     {
+        var issueFieldsByName = issueFields.ToDictionary(field => field.Name, StringComparer.Ordinal);
+        var capturedIssueFieldNames = new HashSet<string>(StringComparer.Ordinal);
         var fields = new List<FieldSnapshot>();
         foreach (var node in connection.GetProperty("nodes").EnumerateArray())
         {
-            fields.Add(new FieldSnapshot
+            var name = node.GetProperty("name").GetString() ?? string.Empty;
+            IssueFieldDefinition? issueField = null;
+            if (node.TryGetProperty("__typename", out var typeName)
+                && typeName.GetString() == "ProjectV2Field"
+                && issueFieldsByName.TryGetValue(name, out var matchedIssueField))
             {
-                Name = node.GetProperty("name").GetString() ?? string.Empty,
-                DataType = node.GetProperty("dataType").GetString() ?? string.Empty,
-                Options = node.TryGetProperty("options", out var options) && options.ValueKind == JsonValueKind.Array
+                issueField = matchedIssueField;
+                capturedIssueFieldNames.Add(name);
+            }
+
+            fields.Add(issueField is not null
+                ? BuildIssueFieldSnapshot(issueField)
+                : new FieldSnapshot
+                {
+                    Name = name,
+                    DataType = node.GetProperty("dataType").GetString() ?? string.Empty,
+                    Options = node.TryGetProperty("options", out var options) && options.ValueKind == JsonValueKind.Array
                     ? ParseSingleSelectOptions(options)
                     : null,
-                IterationConfiguration = node.TryGetProperty("configuration", out var configuration) && configuration.ValueKind == JsonValueKind.Object
-                    ? ParseIterationConfiguration(configuration)
-                    : null,
-            });
+                    IterationConfiguration = node.TryGetProperty("configuration", out var configuration) && configuration.ValueKind == JsonValueKind.Object
+                        ? ParseIterationConfiguration(configuration)
+                        : null,
+                });
+        }
+
+        foreach (var issueField in issueFields.Where(field => !capturedIssueFieldNames.Contains(field.Name)))
+        {
+            fields.Add(BuildIssueFieldSnapshot(issueField));
         }
 
         return fields;
+    }
+
+    private static FieldSnapshot BuildIssueFieldSnapshot(IssueFieldDefinition issueField) => new()
+    {
+        Name = issueField.Name,
+        DataType = issueField.DataType,
+        Options = issueField.Options,
+        IssueField = new IssueFieldConfigurationSnapshot
+        {
+            Description = issueField.Description,
+            Visibility = issueField.Visibility,
+        },
+    };
+
+    private static IssueFieldDefinition ParseIssueField(JsonElement node)
+    {
+        var options = node.TryGetProperty("options", out var optionNodes)
+            && optionNodes.ValueKind == JsonValueKind.Array
+            ? ParseSingleSelectOptions(optionNodes)
+            : null;
+        return new IssueFieldDefinition(
+            node.GetProperty("id").GetString() ?? throw new GitHubGraphQLException("Issue Field id was null."),
+            node.GetProperty("name").GetString() ?? string.Empty,
+            node.GetProperty("dataType").GetString() ?? string.Empty,
+            GetOptionalString(node, "description"),
+            node.GetProperty("visibility").GetString() ?? string.Empty,
+            options);
     }
 
     private static List<SingleSelectOptionSnapshot> ParseSingleSelectOptions(JsonElement options)
@@ -295,7 +372,7 @@ public sealed class ProjectExporter
         return workflows;
     }
 
-    private static ItemSnapshot ParseItem(JsonElement node, int position)
+    private static ItemSnapshot ParseItem(JsonElement node, int position, HashSet<string> issueFieldNames)
     {
         var type = node.GetProperty("type").GetString() ?? string.Empty;
         var content = node.GetProperty("content");
@@ -334,7 +411,7 @@ public sealed class ProjectExporter
             Repository = repository,
             Number = number,
             Draft = draft,
-            FieldValues = ParseFieldValues(node.GetProperty("fieldValues")),
+            FieldValues = ParseFieldValues(node.GetProperty("fieldValues"), issueFieldNames),
         };
     }
 
@@ -357,7 +434,9 @@ public sealed class ProjectExporter
         return assignees;
     }
 
-    private static List<FieldValueSnapshot> ParseFieldValues(JsonElement connection)
+    private static List<FieldValueSnapshot> ParseFieldValues(
+        JsonElement connection,
+        HashSet<string> issueFieldNames)
     {
         var values = new List<FieldValueSnapshot>();
         foreach (var node in connection.GetProperty("nodes").EnumerateArray())
@@ -367,12 +446,65 @@ public sealed class ProjectExporter
                 or "ProjectV2ItemFieldNumberValue"
                 or "ProjectV2ItemFieldDateValue"
                 or "ProjectV2ItemFieldSingleSelectValue"
-                or "ProjectV2ItemFieldIterationValue"))
+                or "ProjectV2ItemFieldIterationValue"
+                or "ProjectV2ItemIssueFieldValue"))
             {
                 continue;
             }
 
             var fieldName = node.GetProperty("field").GetProperty("name").GetString() ?? string.Empty;
+            if (typeName == "ProjectV2ItemIssueFieldValue")
+            {
+                issueFieldNames.Add(fieldName);
+                if (node.GetProperty("issueFieldValue") is not { ValueKind: JsonValueKind.Object } issueFieldValue)
+                {
+                    continue;
+                }
+
+                var issueValueType = issueFieldValue.GetProperty("__typename").GetString();
+                var issueValue = issueValueType switch
+                {
+                    "IssueFieldTextValue" => new FieldValueSnapshot
+                    {
+                        FieldName = fieldName,
+                        Text = GetOptionalString(issueFieldValue, "value"),
+                    },
+                    "IssueFieldNumberValue" => new FieldValueSnapshot
+                    {
+                        FieldName = fieldName,
+                        Number = issueFieldValue.GetProperty("value").ValueKind == JsonValueKind.Number
+                            ? issueFieldValue.GetProperty("value").GetDouble()
+                            : null,
+                    },
+                    "IssueFieldDateValue" => new FieldValueSnapshot
+                    {
+                        FieldName = fieldName,
+                        Date = GetOptionalString(issueFieldValue, "value"),
+                    },
+                    "IssueFieldSingleSelectValue" => new FieldValueSnapshot
+                    {
+                        FieldName = fieldName,
+                        SingleSelectOptionName = GetOptionalString(issueFieldValue, "name"),
+                    },
+                    "IssueFieldMultiSelectValue" => new FieldValueSnapshot
+                    {
+                        FieldName = fieldName,
+                        MultiSelectOptionNames =
+                        [
+                            .. issueFieldValue.GetProperty("options").EnumerateArray()
+                                .Select(option => option.GetProperty("name").GetString() ?? string.Empty),
+                        ],
+                    },
+                    _ => null,
+                };
+                if (issueValue is not null)
+                {
+                    values.Add(issueValue);
+                }
+
+                continue;
+            }
+
             values.Add(typeName switch
             {
                 "ProjectV2ItemFieldTextValue" => new FieldValueSnapshot
@@ -405,6 +537,14 @@ public sealed class ProjectExporter
 
         return values;
     }
+
+    private sealed record IssueFieldDefinition(
+        string Id,
+        string Name,
+        string DataType,
+        string? Description,
+        string Visibility,
+        IReadOnlyList<SingleSelectOptionSnapshot>? Options);
 
     private static string? GetOptionalString(JsonElement element, string propertyName)
         => element.TryGetProperty(propertyName, out var value) && value.ValueKind == JsonValueKind.String
@@ -441,6 +581,7 @@ public sealed class ProjectExporter
               closed
               fields(first: 50) {
                 nodes {
+                  __typename
                   ... on ProjectV2FieldCommon { name dataType }
                   ... on ProjectV2SingleSelectField {
                     options { id name color description }
@@ -500,11 +641,48 @@ public sealed class ProjectExporter
                       ... on ProjectV2ItemFieldDateValue { date field { ... on ProjectV2FieldCommon { name } } }
                       ... on ProjectV2ItemFieldSingleSelectValue { name field { ... on ProjectV2FieldCommon { name } } }
                       ... on ProjectV2ItemFieldIterationValue { title field { ... on ProjectV2FieldCommon { name } } }
+                      ... on ProjectV2ItemIssueFieldValue {
+                        field { ... on ProjectV2FieldCommon { name } }
+                        issueFieldValue {
+                          __typename
+                          ... on IssueFieldTextValue { value }
+                          ... on IssueFieldNumberValue { value }
+                          ... on IssueFieldDateValue { value }
+                          ... on IssueFieldSingleSelectValue { name }
+                          ... on IssueFieldMultiSelectValue { options { name } }
+                        }
+                      }
                     }
                   }
                 }
                 pageInfo { hasNextPage endCursor }
               }
+            }
+          }
+        }
+        """;
+
+    private const string IssueFieldsQuery =
+        """
+        query($login: String!, $first: Int!, $after: String) {
+          organization(login: $login) {
+            issueFields(first: $first, after: $after, orderBy: { field: NAME, direction: ASC }) {
+              nodes {
+                __typename
+                ... on IssueFieldCommon { name dataType description visibility }
+                ... on IssueFieldText { id }
+                ... on IssueFieldNumber { id }
+                ... on IssueFieldDate { id }
+                ... on IssueFieldSingleSelect {
+                  id
+                  options { id name color description }
+                }
+                ... on IssueFieldMultiSelect {
+                  id
+                  options { id name color description }
+                }
+              }
+              pageInfo { hasNextPage endCursor }
             }
           }
         }

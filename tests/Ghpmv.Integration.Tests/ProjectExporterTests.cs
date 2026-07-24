@@ -113,7 +113,7 @@ public class ProjectExporterTests
         var snapshot = await ExportFixtureAsync();
 
         var fieldNames = snapshot.Fields.Select(f => f.Name).ToList();
-        foreach (var name in (string[])["Fixture Text", "Fixture Number", "Fixture Date", "Fixture Select", "Fixture Sprint"])
+        foreach (var name in (string[])["Fixture Text", "Fixture Number", "Fixture Date", "Fixture Select", "Fixture Sprint", "Fixture Teams"])
         {
             Assert.Contains(name, fieldNames);
         }
@@ -127,6 +127,12 @@ public class ProjectExporterTests
         Assert.NotNull(select.Options);
         Assert.Equal(["Alpha", "Beta", "Gamma"], select.Options.Select(o => o.Name));
         Assert.Equal(["RED", "BLUE", "GREEN"], select.Options.Select(o => o.Color));
+
+        var teams = snapshot.Fields.Single(f => f.Name == "Fixture Teams");
+        Assert.Equal("MULTI_SELECT", teams.DataType);
+        Assert.NotNull(teams.IssueField);
+        Assert.Equal("ALL", teams.IssueField.Visibility);
+        Assert.Equal(["Platform", "SDK", "Docs"], teams.Options!.Select(o => o.Name));
 
         var sprint = snapshot.Fields.Single(f => f.Name == "Fixture Sprint");
         Assert.Equal("ITERATION", sprint.DataType);
@@ -283,6 +289,9 @@ public class ProjectExporterTests
         Assert.Equal("Sprint 0", ValueOf(draft1, "Fixture Sprint")?.IterationTitle);
         Assert.Equal("Sprint 1", ValueOf(draft2, "Fixture Sprint")?.IterationTitle);
         Assert.Equal("Sprint 2", ValueOf(draft3, "Fixture Sprint")?.IterationTitle);
+
+        var issue = Assert.Single(snapshot.Items, item => item.Type == "ISSUE");
+        Assert.Equal(["Platform", "SDK"], ValueOf(issue, "Fixture Teams")?.MultiSelectOptionNames);
     }
 
     private static FieldValueSnapshot? ValueOf(ItemSnapshot item, string fieldName)

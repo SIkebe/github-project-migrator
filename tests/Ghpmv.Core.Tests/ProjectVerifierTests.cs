@@ -115,6 +115,36 @@ public class ProjectVerifierTests
     private static ProjectSnapshot WithItems(ProjectSnapshot snapshot, Func<ItemSnapshot, ItemSnapshot> transform)
         => snapshot with { Items = snapshot.Items.Select(transform).ToList() };
 
+    private static ProjectSnapshot WithMultiSelectIssueField(ProjectSnapshot snapshot, IReadOnlyList<string> values)
+        => snapshot with
+        {
+            Fields =
+            [
+                .. snapshot.Fields,
+                new FieldSnapshot
+                {
+                    Name = "Teams",
+                    DataType = "MULTI_SELECT",
+                    Options = [Option("m1", "Platform", "PURPLE"), Option("m2", "SDK", "GREEN")],
+                    IssueField = new IssueFieldConfigurationSnapshot
+                    {
+                        Description = "Teams involved",
+                        Visibility = "ALL",
+                    },
+                },
+            ],
+            Items = snapshot.Items.Select(item => item.Type == "ISSUE"
+                ? item with
+                {
+                    FieldValues =
+                    [
+                        .. item.FieldValues,
+                        new FieldValueSnapshot { FieldName = "Teams", MultiSelectOptionNames = values },
+                    ],
+                }
+                : item).ToList(),
+        };
+
     private sealed class StubHandler(params string[] responses) : HttpMessageHandler
     {
         private readonly Queue<string> _responses = new(responses);
@@ -268,6 +298,25 @@ public class ProjectVerifierTests
 
         Assert.Contains(report.Differences, d =>
             d.Severity == VerifySeverity.Error && d.Category == "Field" && d.Message.Contains("name mismatch", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Issue_field_visibility_difference_is_an_error()
+    {
+        var source = WithMultiSelectIssueField(BuildSnapshot(), ["Platform"]);
+        var target = WithFields(source, field => field.Name == "Teams"
+            ? field with
+            {
+                IssueField = field.IssueField! with { Visibility = "ORG_ONLY" },
+            }
+            : field);
+
+        var report = ProjectVerifier.Compare(source, target);
+
+        Assert.Contains(report.Differences, difference =>
+            difference.Severity == VerifySeverity.Error
+            && difference.Category == "Field"
+            && difference.Message.Contains("Issue Field visibility mismatch", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -609,6 +658,45 @@ public class ProjectVerifierTests
             && d.Category == "Item"
             && d.Message.Contains("draft 'Draft A'", StringComparison.Ordinal)
             && d.Message.Contains("'Status' value mismatch", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Multi_select_values_are_order_independent()
+    {
+        var source = WithMultiSelectIssueField(BuildSnapshot(), ["Platform", "SDK"]);
+        var target = WithMultiSelectIssueField(BuildSnapshot(), ["SDK", "Platform"]);
+
+        var report = ProjectVerifier.Compare(source, target);
+
+        Assert.True(report.IsMatch);
+    }
+
+    [Fact]
+    public void Multi_select_value_difference_is_an_error()
+    {
+        var source = WithMultiSelectIssueField(BuildSnapshot(), ["Platform", "SDK"]);
+        var target = WithMultiSelectIssueField(BuildSnapshot(), ["Platform"]);
+
+        var report = ProjectVerifier.Compare(source, target);
+
+        Assert.Contains(report.Differences, difference =>
+            difference.Severity == VerifySeverity.Error
+            && difference.Category == "Item"
+            && difference.Message.Contains("field 'Teams' value mismatch", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Multi_select_values_with_delimiters_are_compared_structurally()
+    {
+        var source = WithMultiSelectIssueField(BuildSnapshot(), ["A, B", "C"]);
+        var target = WithMultiSelectIssueField(BuildSnapshot(), ["A", "B, C"]);
+
+        var report = ProjectVerifier.Compare(source, target);
+
+        Assert.Contains(report.Differences, difference =>
+            difference.Severity == VerifySeverity.Error
+            && difference.Category == "Item"
+            && difference.Message.Contains("field 'Teams' value mismatch", StringComparison.Ordinal));
     }
 
     [Fact]

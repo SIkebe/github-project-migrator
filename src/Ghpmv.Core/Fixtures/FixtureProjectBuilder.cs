@@ -45,6 +45,8 @@ public sealed class FixtureProjectBuilder
         var itemLog = await ImportLog.LoadAsync(operationDirectory, cancellationToken).ConfigureAwait(false);
         var hasPendingOperations = projectLog.PendingProject is not null
             || projectLog.PendingFields.Count > 0
+            || projectLog.PendingIssueFields.Count > 0
+            || projectLog.PendingIssueFieldLinks.Count > 0
             || itemLog is { PendingDrafts.Count: > 0 }
             || itemLog is { PendingContents.Count: > 0 }
             || itemLog is { HasIncompleteItems: true };
@@ -54,13 +56,6 @@ public sealed class FixtureProjectBuilder
         {
             throw new InvalidOperationException(
                 $"{ImportLog.FileName} targets project '{itemLog.ProjectId}', but that fixture project was not found.");
-        }
-
-        if (existing is not null && !hasPendingOperations && itemLog is null)
-        {
-            OnProgress?.Invoke(string.Create(CultureInfo.InvariantCulture,
-                $"Fixture project already exists: {existing.Url}"));
-            return new FixtureProjectSetupResult(existing.Number, existing.Url, Created: false);
         }
 
         var viewerLogin = await _graphQl.GetViewerLoginAsync(cancellationToken).ConfigureAwait(false);
@@ -74,21 +69,25 @@ public sealed class FixtureProjectBuilder
         var snapshot = CreateSnapshot(title, repositoryFullName, viewerLogin, pullRequestNumber);
         if (itemLog is not null)
         {
+            var snapshotFingerprint = ImportLog.ComputeSnapshotFingerprint(snapshot);
             if (!string.Equals(
                     itemLog.SourceSnapshotFingerprint,
-                    ImportLog.ComputeSnapshotFingerprint(snapshot),
+                    snapshotFingerprint,
                     StringComparison.Ordinal))
             {
-                throw new InvalidOperationException(
-                    $"{ImportLog.FileName} in '{operationDirectory}' belongs to a different fixture snapshot.");
-            }
-        }
+                if (hasPendingOperations)
+                {
+                    throw new InvalidOperationException(
+                        $"{ImportLog.FileName} in '{operationDirectory}' belongs to an older fixture snapshot with incomplete operations. Resume or recreate that fixture before upgrading it.");
+                }
 
-        if (existing is not null && !hasPendingOperations)
-        {
-            OnProgress?.Invoke(string.Create(CultureInfo.InvariantCulture,
-                $"Fixture project already exists: {existing.Url}"));
-            return new FixtureProjectSetupResult(existing.Number, existing.Url, Created: false);
+                itemLog = await UpgradeCompletedItemLogAsync(
+                    itemLog,
+                    snapshot,
+                    snapshotFingerprint,
+                    operationDirectory,
+                    cancellationToken).ConfigureAwait(false);
+            }
         }
 
         var projectImporter = new ProjectImporter(_graphQl)
@@ -103,23 +102,35 @@ public sealed class FixtureProjectBuilder
             },
         };
         var project = await projectImporter.ImportAsync(snapshot, organization, cancellationToken).ConfigureAwait(false);
+        await EnsureMultiSelectIssueFieldValueAsync(
+            repositoryFullName,
+            project,
+            cancellationToken).ConfigureAwait(false);
 
-        var itemImporter = new ItemImporter(_graphQl)
+        if (existing is null || hasPendingOperations || itemLog is not null)
         {
-            OnProgress = OnProgress,
-            RepositoryMapping = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            var itemImporter = new ItemImporter(_graphQl)
             {
-                [repositoryFullName] = repositoryFullName,
-            },
-            UserMapping = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+                OnProgress = OnProgress,
+                RepositoryMapping = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+                {
+                    [repositoryFullName] = repositoryFullName,
+                },
+                UserMapping = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+                {
+                    [viewerLogin] = viewerLogin,
+                },
+            };
+            var itemResult = await itemImporter.ImportAsync(snapshot, project, operationDirectory, cancellationToken).ConfigureAwait(false);
+            foreach (var warning in itemResult.Warnings)
             {
-                [viewerLogin] = viewerLogin,
-            },
-        };
-        var itemResult = await itemImporter.ImportAsync(snapshot, project, operationDirectory, cancellationToken).ConfigureAwait(false);
-        foreach (var warning in itemResult.Warnings)
+                OnProgress?.Invoke("warning: " + warning);
+            }
+        }
+        else
         {
-            OnProgress?.Invoke("warning: " + warning);
+            OnProgress?.Invoke(string.Create(CultureInfo.InvariantCulture,
+                $"Fixture project already existed; synchronized fields without duplicating items: {project.Url}"));
         }
 
         return new FixtureProjectSetupResult(project.ProjectNumber, project.Url, Created: existing is null);
@@ -269,7 +280,7 @@ public sealed class FixtureProjectBuilder
             : null;
     }
 
-    private static ProjectSnapshot CreateSnapshot(string title, string repositoryFullName, string viewerLogin, int pullRequestNumber)
+    public static ProjectSnapshot CreateSnapshot(string title, string repositoryFullName, string viewerLogin, int pullRequestNumber)
     {
         var today = new DateTime(2026, 1, 1);
         var sprint0Start = today.AddDays(-28).ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
@@ -284,7 +295,7 @@ public sealed class FixtureProjectBuilder
             {
                 Title = title,
                 ShortDescription = "gpm fixture project",
-                Readme = "# ghpmv fixture 📦\n\nPermanent fixture project for ghpmv integration tests.\n\n- All custom field types (Text / Number / Date / Single-select / Iteration)\n- Drafts with 日本語 values, an Issue, a PR, an archived item and an assigned item\n- Views and workflows can be created by running `ghpmv setup --fixture-ui` (C# browser module) 🚀",
+                Readme = "# ghpmv fixture 📦\n\nPermanent fixture project for ghpmv integration tests.\n\n- All custom field types (Text / Number / Date / Single-select / Iteration)\n- An organization multi-select Issue Field with multiple selected values\n- Drafts with 日本語 values, an Issue, a PR, an archived item and an assigned item\n- Views and workflows can be created by running `ghpmv setup --fixture-ui` (C# browser module) 🚀",
                 Public = false,
                 Closed = false,
             },
@@ -332,6 +343,22 @@ public sealed class FixtureProjectBuilder
                         ],
                     },
                 },
+                new FieldSnapshot
+                {
+                    Name = "Fixture Teams",
+                    DataType = "MULTI_SELECT",
+                    Options =
+                    [
+                        new SingleSelectOptionSnapshot { Id = "platform", Name = "Platform", Color = "PURPLE", Description = "Platform work" },
+                        new SingleSelectOptionSnapshot { Id = "sdk", Name = "SDK", Color = "GREEN", Description = "SDK work" },
+                        new SingleSelectOptionSnapshot { Id = "docs", Name = "Docs", Color = "BLUE", Description = "Documentation work" },
+                    ],
+                    IssueField = new IssueFieldConfigurationSnapshot
+                    {
+                        Description = "Teams involved in the issue",
+                        Visibility = "ALL",
+                    },
+                },
             ],
             Views = [],
             Workflows = [],
@@ -343,7 +370,15 @@ public sealed class FixtureProjectBuilder
                     Text("Café emoji 🚀 – em dash"), Number(-42), Date(today.AddDays(4)), Select("Beta"), Sprint("Sprint 1"), Status("In Progress")),
                 Draft(2, "Fixture draft 3", false, [],
                     Text("plain ascii text"), Number(0), Date(today.AddDays(26)), Select("Gamma"), Sprint("Sprint 2"), Status("Done")),
-                new ItemSnapshot { Type = "ISSUE", Position = 3, IsArchived = false, Repository = repositoryFullName, Number = 1, FieldValues = [Status("Todo")] },
+                new ItemSnapshot
+                {
+                    Type = "ISSUE",
+                    Position = 3,
+                    IsArchived = false,
+                    Repository = repositoryFullName,
+                    Number = 1,
+                    FieldValues = [Status("Todo"), MultiSelect("Platform", "SDK")],
+                },
                 new ItemSnapshot { Type = "PULL_REQUEST", Position = 4, IsArchived = false, Repository = repositoryFullName, Number = pullRequestNumber, FieldValues = [Status("In Progress")] },
                 Draft(5, "Fixture archived draft", true, [], Status("Done")),
                 Draft(6, "Fixture assigned draft", false, [viewerLogin], Status("Todo")),
@@ -364,8 +399,109 @@ public sealed class FixtureProjectBuilder
         static FieldValueSnapshot Number(double value) => new() { FieldName = "Fixture Number", Number = value };
         static FieldValueSnapshot Date(DateTime value) => new() { FieldName = "Fixture Date", Date = value.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) };
         static FieldValueSnapshot Select(string value) => new() { FieldName = "Fixture Select", SingleSelectOptionName = value };
+        static FieldValueSnapshot MultiSelect(params string[] values) => new() { FieldName = "Fixture Teams", MultiSelectOptionNames = values };
         static FieldValueSnapshot Sprint(string value) => new() { FieldName = "Fixture Sprint", IterationTitle = value };
         static FieldValueSnapshot Status(string value) => new() { FieldName = "Status", SingleSelectOptionName = value };
+    }
+
+    private async Task EnsureMultiSelectIssueFieldValueAsync(
+        string repositoryFullName,
+        ImportResult project,
+        CancellationToken cancellationToken)
+    {
+        const string fieldName = "Fixture Teams";
+        if (!project.IssueFieldIds.TryGetValue(fieldName, out var fieldId)
+            || !project.IssueFieldOptionIds.TryGetValue(fieldName, out var options)
+            || !options.TryGetValue("Platform", out var platformId)
+            || !options.TryGetValue("SDK", out var sdkId))
+        {
+            throw new InvalidOperationException(
+                $"Fixture Issue Field '{fieldName}' or its expected options were not mapped.");
+        }
+
+        var separator = repositoryFullName.IndexOf('/', StringComparison.Ordinal);
+        var owner = repositoryFullName[..separator];
+        var name = repositoryFullName[(separator + 1)..];
+        var data = await _graphQl.QueryAsync(
+            """
+            query($owner: String!, $name: String!) {
+              repository(owner: $owner, name: $name) {
+                issue(number: 1) { id }
+              }
+            }
+            """,
+            new { owner, name },
+            cancellationToken).ConfigureAwait(false);
+        var issueId = data.GetProperty("repository").GetProperty("issue").GetProperty("id").GetString()
+            ?? throw new GitHubGraphQLException($"Fixture issue '{repositoryFullName}#1' returned no id.");
+
+        await _graphQl.MutationAsync(
+            "setIssueFieldValue",
+            """
+            mutation($issueId: ID!, $issueFields: [IssueFieldCreateOrUpdateInput!]!, $clientMutationId: String!) {
+              setIssueFieldValue(input: { issueId: $issueId, issueFields: $issueFields, clientMutationId: $clientMutationId }) {
+                issue { id }
+              }
+            }
+            """,
+            new
+            {
+                issueId,
+                issueFields = new[]
+                {
+                    new
+                    {
+                        fieldId,
+                        multiSelectOptionIds = new[] { platformId, sdkId },
+                    },
+                },
+            },
+            MutationRetryPolicy.Idempotent,
+            target: issueId,
+            requiredResultPath: "issue.id",
+            cancellationToken: cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task<ImportLog> UpgradeCompletedItemLogAsync(
+        ImportLog itemLog,
+        ProjectSnapshot snapshot,
+        string snapshotFingerprint,
+        string operationDirectory,
+        CancellationToken cancellationToken)
+    {
+        var desiredItems = snapshot.Items.ToDictionary(
+            ItemImporter.BuildItemStateKey,
+            StringComparer.Ordinal);
+        var removedItemKeys = itemLog.ItemStates.Keys
+            .Where(key => !desiredItems.ContainsKey(key))
+            .ToList();
+        if (removedItemKeys.Count > 0)
+        {
+            throw new InvalidOperationException(
+                "The fixture snapshot removed or reordered existing items. Recreate the fixture project so obsolete items are not left behind.");
+        }
+
+        foreach (var item in snapshot.Items)
+        {
+            var stateKey = ItemImporter.BuildItemStateKey(item);
+            var positionKey = item.Position.ToString(CultureInfo.InvariantCulture);
+            if (!itemLog.ItemStates.ContainsKey(stateKey) && itemLog.Items.ContainsKey(positionKey))
+            {
+                throw new InvalidOperationException(
+                    $"The new fixture item at position {item.Position} conflicts with an existing item. Recreate the fixture project.");
+            }
+        }
+
+        foreach (var state in itemLog.ItemStates.Values)
+        {
+            state.FieldValuesApplied = false;
+            state.FieldValuesError = null;
+        }
+
+        var upgraded = itemLog with { SourceSnapshotFingerprint = snapshotFingerprint };
+        await upgraded.SaveAsync(operationDirectory, cancellationToken).ConfigureAwait(false);
+        OnProgress?.Invoke("Upgraded the fixture import log; existing item field values will be synchronized.");
+        return upgraded;
     }
 
     private async Task<ProjectRef?> FindProjectByTitleAsync(string organization, string title, CancellationToken cancellationToken)

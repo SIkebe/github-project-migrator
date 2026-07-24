@@ -1,3 +1,6 @@
+using System.Net;
+using System.Text;
+using System.Text.Json;
 using Ghpmv.Core.GitHub;
 using Ghpmv.Core.Import;
 using Ghpmv.Core.Snapshot;
@@ -53,6 +56,109 @@ public class ItemImporterLogicTests
         var body = ItemImporter.BuildDraftBody(Draft(creator: "octocat", createdAt: "2026-07-01T00:00:00Z"));
 
         Assert.Equal("> _Originally created by @octocat on 2026-07-01T00:00:00Z._", body);
+    }
+
+    [Fact]
+    public async Task Import_sets_multi_select_value_on_target_issue()
+    {
+        var directory = Directory.CreateTempSubdirectory("ghpmv-multi-select-").FullName;
+        try
+        {
+            using var handler = new StubHandler(
+                """{"data":{"repository":{"issueOrPullRequest":{"id":"I_target"}}}}""",
+                """{"data":{"node":{"items":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}""",
+                """{"data":{"addProjectV2ItemById":{"item":{"id":"PVTI_target"}}}}""",
+                """{"data":{"repository":{"issueOrPullRequest":{"id":"I_target"}}}}""",
+                """{"data":{"setIssueFieldValue":{"issue":{"id":"I_target"}}}}""",
+                """{"data":{"updateProjectV2ItemPosition":{"clientMutationId":"positioned"}}}""");
+            using var client = new GitHubGraphQLClient(
+                "dummy-token",
+                new Uri("https://example.test/graphql"),
+                handler,
+                delayAsync: null);
+            var snapshot = new ProjectSnapshot
+            {
+                SchemaVersion = ProjectSnapshot.CurrentSchemaVersion,
+                Project = new ProjectInfoSnapshot { Title = "Roadmap", Public = false, Closed = false },
+                Fields =
+                [
+                    new FieldSnapshot
+                    {
+                        Name = "Teams",
+                        DataType = "MULTI_SELECT",
+                        IssueField = new IssueFieldConfigurationSnapshot { Visibility = "ALL" },
+                    },
+                ],
+                Views = [],
+                Workflows = [],
+                Items =
+                [
+                    new ItemSnapshot
+                    {
+                        Type = "ISSUE",
+                        Position = 0,
+                        IsArchived = false,
+                        Repository = "source/repo",
+                        Number = 7,
+                        FieldValues =
+                        [
+                            new FieldValueSnapshot
+                            {
+                                FieldName = "Teams",
+                                MultiSelectOptionNames = ["Platform", "SDK"],
+                            },
+                        ],
+                    },
+                ],
+            };
+            var target = new ImportResult
+            {
+                ProjectId = "PVT_target",
+                ProjectNumber = 7,
+                Url = "https://github.com/orgs/target/projects/7",
+                Outcome = ProjectImportOutcome.Created,
+                FieldIds = new Dictionary<string, string> { ["Teams"] = "PVTF_teams" },
+                OptionIds = new Dictionary<string, IReadOnlyDictionary<string, string>>(),
+                IterationIds = new Dictionary<string, IReadOnlyDictionary<string, string>>(),
+                IssueFieldIds = new Dictionary<string, string> { ["Teams"] = "IFM_teams" },
+                IssueFieldOptionIds = new Dictionary<string, IReadOnlyDictionary<string, string>>
+                {
+                    ["Teams"] = new Dictionary<string, string>
+                    {
+                        ["Platform"] = "IFO_platform",
+                        ["SDK"] = "IFO_sdk",
+                    },
+                },
+            };
+            var importer = new ItemImporter(client)
+            {
+                RepositoryMapping = new Dictionary<string, string>
+                {
+                    ["source/repo"] = "target/repo",
+                },
+            };
+
+            var result = await importer.ImportAsync(
+                snapshot,
+                target,
+                directory,
+                TestContext.Current.CancellationToken);
+
+            Assert.Empty(result.Warnings);
+            var request = handler.RequestBodies.Single(body => body.Contains("setIssueFieldValue", StringComparison.Ordinal));
+            using var document = JsonDocument.Parse(request);
+            var issueField = document.RootElement
+                .GetProperty("variables")
+                .GetProperty("issueFields")[0];
+            Assert.Equal("IFM_teams", issueField.GetProperty("fieldId").GetString());
+            Assert.Equal(
+                ["IFO_platform", "IFO_sdk"],
+                issueField.GetProperty("multiSelectOptionIds").EnumerateArray().Select(id => id.GetString()));
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
     }
 
     [Fact]
@@ -363,6 +469,24 @@ public class ItemImporterLogicTests
         finally
         {
             Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    private sealed class StubHandler(params string[] responses) : HttpMessageHandler
+    {
+        private readonly Queue<string> _responses = new(responses);
+
+        public List<string> RequestBodies { get; } = [];
+
+        protected override async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            RequestBodies.Add(await request.Content!.ReadAsStringAsync(cancellationToken));
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(_responses.Dequeue(), Encoding.UTF8, "application/json"),
+            };
         }
     }
 }

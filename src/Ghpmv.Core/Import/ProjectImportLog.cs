@@ -11,6 +11,10 @@ public sealed record ProjectImportLog
 
     public Dictionary<string, PendingFieldOperation> PendingFields { get; init; } = new(StringComparer.Ordinal);
 
+    public Dictionary<string, PendingIssueFieldOperation> PendingIssueFields { get; init; } = new(StringComparer.Ordinal);
+
+    public Dictionary<string, PendingIssueFieldLinkOperation> PendingIssueFieldLinks { get; init; } = new(StringComparer.Ordinal);
+
     public static async Task<ProjectImportLog> LoadAsync(string directory, CancellationToken cancellationToken)
     {
         var path = Path.Combine(directory, FileName);
@@ -79,6 +83,34 @@ public sealed record PendingFieldOperation
     public required string Name { get; init; }
 
     public required string DataType { get; init; }
+
+    public required string[] ExistingFieldIds { get; init; }
+}
+
+public sealed record PendingIssueFieldOperation
+{
+    public required string OperationId { get; init; }
+
+    public required string ProjectId { get; init; }
+
+    public required string OwnerLogin { get; init; }
+
+    public required string Name { get; init; }
+
+    public required string DataType { get; init; }
+
+    public required string[] ExistingIssueFieldIds { get; init; }
+}
+
+public sealed record PendingIssueFieldLinkOperation
+{
+    public required string OperationId { get; init; }
+
+    public required string ProjectId { get; init; }
+
+    public required string IssueFieldId { get; init; }
+
+    public required string Name { get; init; }
 
     public required string[] ExistingFieldIds { get; init; }
 }

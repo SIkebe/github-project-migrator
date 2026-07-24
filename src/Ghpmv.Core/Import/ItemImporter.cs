@@ -66,6 +66,10 @@ public sealed class ItemImporter
 
         var warnings = new List<string>();
         var items = snapshot.Items.OrderBy(i => i.Position).ToList();
+        var issueFieldNames = snapshot.Fields
+            .Where(field => field.IssueField is not null)
+            .Select(field => field.Name)
+            .ToHashSet(StringComparer.Ordinal);
         var total = items.Count;
         var created = 0;
         var resumed = 0;
@@ -208,6 +212,7 @@ public sealed class ItemImporter
                     target,
                     label,
                     warnings,
+                    issueFieldNames,
                     cancellationToken).ConfigureAwait(false);
                 itemState.FieldValuesError = itemState.FieldValuesApplied
                     ? null
@@ -652,14 +657,76 @@ public sealed class ItemImporter
         return [.. ids];
     }
 
-    private async Task<bool> ApplyFieldValuesAsync(ItemSnapshot item, string itemId, ImportResult target, string label, List<string> warnings, CancellationToken cancellationToken)
+    private async Task<bool> ApplyFieldValuesAsync(
+        ItemSnapshot item,
+        string itemId,
+        ImportResult target,
+        string label,
+        List<string> warnings,
+        HashSet<string> issueFieldNames,
+        CancellationToken cancellationToken)
     {
         var allApplied = true;
+        string? targetIssueId = null;
+        var targetIssueIdResolved = false;
         foreach (var value in item.FieldValues)
         {
             if (string.Equals(value.FieldName, TitleFieldName, StringComparison.Ordinal))
             {
                 continue; // Set through item content.
+            }
+
+            if (issueFieldNames.Contains(value.FieldName))
+            {
+                if (!target.IssueFieldIds.TryGetValue(value.FieldName, out var issueFieldId))
+                {
+                    Warn(warnings, $"{label}: Issue Field '{value.FieldName}' was not created or mapped in the target organization; skipping the value.");
+                    allApplied = false;
+                    continue;
+                }
+
+                if (item.Type != "ISSUE")
+                {
+                    Warn(warnings, $"{label}: Issue Field '{value.FieldName}' can only be applied to issues; skipping the value.");
+                    allApplied = false;
+                    continue;
+                }
+
+                if (!targetIssueIdResolved)
+                {
+                    targetIssueId = await ResolveTargetIssueIdAsync(item, cancellationToken).ConfigureAwait(false);
+                    targetIssueIdResolved = true;
+                }
+
+                if (targetIssueId is null)
+                {
+                    Warn(warnings, $"{label}: target issue could not be resolved for Issue Field '{value.FieldName}'; skipping the value.");
+                    allApplied = false;
+                    continue;
+                }
+
+                var issueValueInput = BuildIssueFieldValueInput(value, issueFieldId, target, label, warnings);
+                if (issueValueInput is null)
+                {
+                    allApplied = false;
+                    continue;
+                }
+
+                await _client.MutationAsync(
+                    "setIssueFieldValue",
+                    """
+                    mutation($issueId: ID!, $issueFields: [IssueFieldCreateOrUpdateInput!]!, $clientMutationId: String!) {
+                      setIssueFieldValue(input: { issueId: $issueId, issueFields: $issueFields, clientMutationId: $clientMutationId }) {
+                        issue { id }
+                      }
+                    }
+                    """,
+                    new { issueId = targetIssueId, issueFields = new[] { issueValueInput } },
+                    MutationRetryPolicy.Idempotent,
+                    target: targetIssueId,
+                    requiredResultPath: "issue.id",
+                    cancellationToken: cancellationToken).ConfigureAwait(false);
+                continue;
             }
 
             if (!target.FieldIds.TryGetValue(value.FieldName, out var fieldId))
@@ -728,6 +795,119 @@ public sealed class ItemImporter
         }
 
         return allApplied;
+    }
+
+    private object? BuildIssueFieldValueInput(
+        FieldValueSnapshot value,
+        string issueFieldId,
+        ImportResult target,
+        string label,
+        List<string> warnings)
+    {
+        if (value.Text is not null)
+        {
+            return new { fieldId = issueFieldId, textValue = value.Text };
+        }
+
+        if (value.Number is { } number)
+        {
+            return new { fieldId = issueFieldId, numberValue = number };
+        }
+
+        if (value.Date is not null)
+        {
+            return new { fieldId = issueFieldId, dateValue = value.Date };
+        }
+
+        if (value.SingleSelectOptionName is not null)
+        {
+            if (!TryResolveIssueFieldOptionIds(
+                    value.FieldName,
+                    [value.SingleSelectOptionName],
+                    target,
+                    out var optionIds,
+                    out var missing))
+            {
+                Warn(warnings, $"{label}: option '{missing[0]}' of Issue Field '{value.FieldName}' has no target id; skipping the value.");
+                return null;
+            }
+
+            return new { fieldId = issueFieldId, singleSelectOptionId = optionIds[0] };
+        }
+
+        if (value.MultiSelectOptionNames is not null)
+        {
+            if (!TryResolveIssueFieldOptionIds(
+                    value.FieldName,
+                    value.MultiSelectOptionNames,
+                    target,
+                    out var optionIds,
+                    out var missing))
+            {
+                Warn(warnings, $"{label}: options '{string.Join("', '", missing)}' of Issue Field '{value.FieldName}' have no target ids; skipping the value.");
+                return null;
+            }
+
+            return new { fieldId = issueFieldId, multiSelectOptionIds = optionIds };
+        }
+
+        Warn(warnings, $"{label}: Issue Field '{value.FieldName}' has no supported value; skipping.");
+        return null;
+    }
+
+    private static bool TryResolveIssueFieldOptionIds(
+        string fieldName,
+        IReadOnlyList<string> optionNames,
+        ImportResult target,
+        out string[] optionIds,
+        out string[] missing)
+    {
+        var ids = new List<string>(optionNames.Count);
+        var missingNames = new List<string>();
+        if (!target.IssueFieldOptionIds.TryGetValue(fieldName, out var targetOptions))
+        {
+            missingNames.AddRange(optionNames);
+        }
+        else
+        {
+            foreach (var optionName in optionNames)
+            {
+                if (targetOptions.TryGetValue(optionName, out var optionId))
+                {
+                    ids.Add(optionId);
+                }
+                else
+                {
+                    missingNames.Add(optionName);
+                }
+            }
+        }
+
+        optionIds = [.. ids];
+        missing = [.. missingNames];
+        return missing.Length == 0;
+    }
+
+    private async Task<string?> ResolveTargetIssueIdAsync(ItemSnapshot item, CancellationToken cancellationToken)
+    {
+        if (item.Repository is null
+            || item.Number is null
+            || !RepositoryMapping.TryGetValue(item.Repository, out var targetRepository))
+        {
+            return null;
+        }
+
+        var separator = targetRepository.IndexOf('/', StringComparison.Ordinal);
+        if (separator <= 0 || separator == targetRepository.Length - 1)
+        {
+            return null;
+        }
+
+        return await ResolveIssueOrPullRequestIdAsync(
+            targetRepository[..separator],
+            targetRepository[(separator + 1)..],
+            item.Number.Value,
+            cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>Restores snapshot order by chaining updateProjectV2ItemPosition (afterId = previous item's new id). Archived items are excluded.</summary>
@@ -873,7 +1053,7 @@ public sealed class ItemImporter
             && archived.GetBoolean();
     }
 
-    private static string BuildItemStateKey(ItemSnapshot item)
+    internal static string BuildItemStateKey(ItemSnapshot item)
     {
         var identity = item.Type switch
         {

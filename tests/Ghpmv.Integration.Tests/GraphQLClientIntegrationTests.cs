@@ -53,7 +53,7 @@ public class GraphQLClientIntegrationTests
             .Select(n => n.GetProperty("name").GetString())
             .ToList();
 
-        string[] expected = ["Fixture Text", "Fixture Number", "Fixture Date", "Fixture Select", "Fixture Sprint"];
+        string[] expected = ["Fixture Text", "Fixture Number", "Fixture Date", "Fixture Select", "Fixture Sprint", "Fixture Teams"];
         foreach (var name in expected)
         {
             Assert.Contains(name, fieldNames);

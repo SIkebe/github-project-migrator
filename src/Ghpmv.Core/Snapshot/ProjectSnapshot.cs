@@ -68,7 +68,9 @@ public sealed record ProjectInfoSnapshot
 
 /// <summary>
 /// A project field (built-in or custom). <see cref="Options"/> is set for
-/// SINGLE_SELECT fields and <see cref="IterationConfiguration"/> for ITERATION fields.
+/// SINGLE_SELECT and MULTI_SELECT fields, <see cref="IterationConfiguration"/> for
+/// ITERATION fields, and <see cref="IssueField"/> when an organization Issue Field
+/// is linked into the project.
 /// </summary>
 public sealed record FieldSnapshot
 {
@@ -80,6 +82,8 @@ public sealed record FieldSnapshot
     public IReadOnlyList<SingleSelectOptionSnapshot>? Options { get; init; }
 
     public IterationConfigurationSnapshot? IterationConfiguration { get; init; }
+
+    public IssueFieldConfigurationSnapshot? IssueField { get; init; }
 }
 
 public sealed record SingleSelectOptionSnapshot
@@ -92,6 +96,15 @@ public sealed record SingleSelectOptionSnapshot
     public required string Color { get; init; }
 
     public string? Description { get; init; }
+}
+
+/// <summary>Organization Issue Field metadata needed to recreate and relink the field.</summary>
+public sealed record IssueFieldConfigurationSnapshot
+{
+    public string? Description { get; init; }
+
+    /// <summary>GraphQL <c>IssueFieldVisibility</c> (ALL or ORG_ONLY).</summary>
+    public required string Visibility { get; init; }
 }
 
 /// <summary>
@@ -284,6 +297,8 @@ public sealed record FieldValueSnapshot
     public string? Date { get; init; }
 
     public string? SingleSelectOptionName { get; init; }
+
+    public IReadOnlyList<string>? MultiSelectOptionNames { get; init; }
 
     public string? IterationTitle { get; init; }
 }

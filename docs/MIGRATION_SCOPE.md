@@ -27,6 +27,7 @@ Issue and pull request content and metadata, including labels, milestones, assig
 | Number fields and values | ✅ | Includes decimals, negative values and zero. |
 | Date fields and values | ✅ | |
 | Single-select fields and values | ✅ | Option name, color and description are migrated. |
+| Organization Issue Fields, including multi-select | ✅ | Issue Field description, visibility, options, Project linkage, and values on issues are migrated. Existing same-name target Issue Fields are updated to match the snapshot because they are organization-wide. User-owned Projects cannot host organization Issue Fields. |
 | Iteration fields and values | ✅ | Active and completed iterations are migrated. Completed iterations are recreated by using past dates. |
 | Built-in fields such as Title / Assignees / Repository / Labels / Milestone | ✅ for project/view configuration | Built-in fields are not recreated as custom fields. `ghpmv` preserves their use in project views where GitHub exposes them, but Issue/PR metadata values come from the target issues and pull requests, usually migrated by GEI. Draft issue title and draft assignees are handled separately. |
 | Field value history | ❌ | GitHub has no API to write historical field changes. Only current values are migrated. |
@@ -39,7 +40,7 @@ Issue and pull request content and metadata, including labels, milestones, assig
 | Draft issue assignees | ✅ | Use `--user-mapping` when logins differ, especially for EMU targets. Unmapped users are dropped with a warning. |
 | Issues | ✅ | Re-linked through `--repo-mapping`. The target account must be able to see the target repository and item. The target repository is expected to contain the same issue number as the source, which is the normal GEI outcome. |
 | Pull requests | ✅ | Same repository mapping, visibility and same-number requirements as issues. |
-| Item field values | ✅ | Text, number, date, single-select, iteration and Status values are restored. |
+| Item field values | ✅ | Text, number, date, single-select, multi-select Issue Field, iteration and Status values are restored. |
 | Item order | ✅ | Restored for non-archived items in the project-level order exposed by GitHub. |
 | Archived items | ✅ | Archived state is restored after values are applied. Archived item position is not restored because GitHub does not allow moving archived items. |
 | Redacted / inaccessible items | ❌ | If GitHub hides an item from the exporting user, `ghpmv` cannot migrate it. |
