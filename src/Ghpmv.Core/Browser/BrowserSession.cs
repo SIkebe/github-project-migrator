@@ -90,7 +90,7 @@ public sealed class BrowserSession : IAsyncDisposable
         var statePath = StatePath;
         _context = await _browser.NewContextAsync(new()
         {
-            StorageStatePath = File.Exists(statePath) ? statePath : null,
+            StorageStatePath = ResolveStorageStatePath(_options.LoadStoredState, statePath),
             // A narrow viewport collapses the column menus (BROWSER_AUTOMATION_PLAN §1.4).
             ViewportSize = new() { Width = 1600, Height = 1000 },
         }).ConfigureAwait(false);
@@ -179,9 +179,16 @@ public sealed class BrowserSession : IAsyncDisposable
     /// Interactive sign-in (headful): navigates to <c>{base}/login</c>, waits for the user
     /// to complete the sign-in manually (2FA/SSO/passkey included) until the logged-in
     /// avatar button / <c>user-login</c> meta appears, then saves the storage state.
-    /// Returns the signed-in login name.
+    /// When <paramref name="expectedLogin"/> is set, a different account fails before the
+    /// storage state is saved. Returns the signed-in login name.
     /// </summary>
-    public async Task<string> LoginAsync(TimeSpan timeout, CancellationToken cancellationToken = default)
+    public Task<string> LoginAsync(TimeSpan timeout, CancellationToken cancellationToken = default)
+        => LoginAsync(timeout, expectedLogin: null, cancellationToken);
+
+    public async Task<string> LoginAsync(
+        TimeSpan timeout,
+        string? expectedLogin,
+        CancellationToken cancellationToken = default)
     {
         var page = await GetPageAsync(cancellationToken).ConfigureAwait(false);
         await page.GotoAsync(BaseUrl + "/login").ConfigureAwait(false);
@@ -197,6 +204,17 @@ public sealed class BrowserSession : IAsyncDisposable
                 var avatarVisible = await Sel.AvatarButton(page).CountAsync().ConfigureAwait(false) > 0;
                 if (!string.IsNullOrEmpty(login) || avatarVisible)
                 {
+                    if (!string.IsNullOrWhiteSpace(expectedLogin))
+                    {
+                        if (string.IsNullOrWhiteSpace(login))
+                        {
+                            await Task.Delay(TimeSpan.FromSeconds(2), cancellationToken).ConfigureAwait(false);
+                            continue;
+                        }
+
+                        EnsureExpectedLogin(login, expectedLogin);
+                    }
+
                     await SaveStateAsync(cancellationToken).ConfigureAwait(false);
                     return string.IsNullOrEmpty(login) ? "(unknown)" : login;
                 }
@@ -211,6 +229,18 @@ public sealed class BrowserSession : IAsyncDisposable
 
         throw new System.TimeoutException(string.Create(CultureInfo.InvariantCulture,
             $"Sign-in was not completed within {timeout.TotalMinutes:0} minutes."));
+    }
+
+    internal static string? ResolveStorageStatePath(bool loadStoredState, string statePath)
+        => loadStoredState && File.Exists(statePath) ? statePath : null;
+
+    internal static void EnsureExpectedLogin(string actualLogin, string expectedLogin)
+    {
+        if (!string.Equals(actualLogin, expectedLogin, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException(
+                $"Signed in as '{actualLogin}', but expected '{expectedLogin}'. The browser state was not saved. Retry and sign in with the expected account.");
+        }
     }
 
     /// <summary>

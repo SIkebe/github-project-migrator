@@ -683,18 +683,24 @@ var profileOption = new Option<string?>("--profile")
 {
     Description = "Named profile for the sign-in state (e.g. 'source', 'target'). Stored as %APPDATA%/ghpmv/browser-state.<profile>.json. Use with cross-account migrations.",
 };
+var expectedLoginOption = new Option<string?>("--expected-login")
+{
+    Description = "Expected GitHub login. Refuses to save the browser state when a different account signs in.",
+};
 
 var loginCommand = new Command("login", "Sign in interactively and store browser state for UI automation.")
 {
     baseUrlOption,
     statePathOption,
     profileOption,
+    expectedLoginOption,
 };
 
 loginCommand.SetAction(async (parseResult, cancellationToken) =>
 {
     var baseUrl = parseResult.GetValue(baseUrlOption)!;
     var statePath = parseResult.GetValue(statePathOption);
+    var expectedLogin = parseResult.GetValue(expectedLoginOption);
 
     await using var session = new BrowserSession(new BrowserSessionOptions
     {
@@ -702,12 +708,17 @@ loginCommand.SetAction(async (parseResult, cancellationToken) =>
         BaseUrl = BrowserBaseUrl.NormalizeStandalone(baseUrl),
         StatePath = statePath,
         Profile = parseResult.GetValue(profileOption),
+        LoadStoredState = false,
     });
 
     try
     {
-        Console.Error.WriteLine("Opening a browser window. Complete the GitHub sign-in there (2FA/SSO/passkey included)...");
-        var login = await session.LoginAsync(TimeSpan.FromMinutes(5), cancellationToken);
+        var accountPrompt = string.IsNullOrWhiteSpace(expectedLogin)
+            ? "Complete the GitHub sign-in there"
+            : $"Sign in as '{expectedLogin}'";
+        Console.Error.WriteLine(
+            $"Opening a fresh browser session. {accountPrompt} (2FA/SSO/passkey included)...");
+        var login = await session.LoginAsync(TimeSpan.FromMinutes(5), expectedLogin, cancellationToken);
         Console.Error.WriteLine($"Signed in as '{login}'. Browser state saved to {session.StatePath}");
         return 0;
     }
