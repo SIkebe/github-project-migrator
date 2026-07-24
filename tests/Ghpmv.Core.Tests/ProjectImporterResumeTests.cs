@@ -195,8 +195,23 @@ public class ProjectImporterResumeTests
             Assert.True(handler.PendingWasPresentAtMutation);
 
             handler.Resume = true;
+            var resumedSnapshot = IssueFieldSnapshot(includeSameNamedProjectField: true);
+            resumedSnapshot = resumedSnapshot with
+            {
+                Fields = resumedSnapshot.Fields.Select(field => field.IssueField is null
+                    ? field
+                    : field with
+                    {
+                        Options =
+                        [
+                            .. field.Options!,
+                            new SingleSelectOptionSnapshot { Id = "source-sdk", Name = "SDK", Color = "GREEN" },
+                        ],
+                        IssueField = field.IssueField with { Description = "Updated teams" },
+                    }).ToArray(),
+            };
             var result = await importer.ImportIntoAsync(
-                IssueFieldSnapshot(includeSameNamedProjectField: true),
+                resumedSnapshot,
                 "target",
                 7,
                 cancellationToken);
@@ -204,6 +219,8 @@ public class ProjectImporterResumeTests
             Assert.Equal("IFM_created", result.IssueFieldIds["Teams"]);
             Assert.Equal("PVTF_normal_teams", result.FieldIds["Teams"]);
             Assert.Equal(1, handler.IssueFieldCreateMutationCount);
+            Assert.Equal(1, handler.IssueFieldUpdateMutationCount);
+            Assert.Equal("IFO_sdk", result.IssueFieldOptionIds["Teams"]["SDK"]);
             Assert.Empty((await ProjectImportLog.LoadAsync(directory, cancellationToken)).PendingIssueFields);
         }
         finally
@@ -459,6 +476,8 @@ public class ProjectImporterResumeTests
 
         public int IssueFieldCreateMutationCount { get; private set; }
 
+        public int IssueFieldUpdateMutationCount { get; private set; }
+
         public int LinkCreateMutationCount { get; private set; }
 
         protected override async Task<HttpResponseMessage> SendAsync(
@@ -520,6 +539,22 @@ public class ProjectImporterResumeTests
                 var log = await ProjectImportLog.LoadAsync(Directory, cancellationToken);
                 PendingWasPresentAtMutation = log.PendingIssueFields.Count == 1;
                 throw new HttpRequestException("Response ended prematurely.");
+            }
+
+            if (query.Contains("updateIssueField(", StringComparison.Ordinal))
+            {
+                IssueFieldUpdateMutationCount++;
+                return Json(
+                    """
+                    {"data":{"updateIssueField":{"issueField":{
+                      "__typename":"IssueFieldMultiSelect","id":"IFM_created","name":"Teams",
+                      "dataType":"MULTI_SELECT","description":"Updated teams","visibility":"ALL",
+                      "options":[
+                        {"id":"IFO_platform","name":"Platform","color":"PURPLE","description":null},
+                        {"id":"IFO_sdk","name":"SDK","color":"GREEN","description":null}
+                      ]
+                    }}}}
+                    """);
             }
 
             if (query.Contains("createProjectV2IssueField(", StringComparison.Ordinal))

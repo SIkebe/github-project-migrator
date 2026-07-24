@@ -502,6 +502,14 @@ public sealed class ProjectImporter
                     issueFields,
                     pendingField,
                     cancellationToken).ConfigureAwait(false);
+                if (IssueFieldNeedsUpdate(field, targetIssueField))
+                {
+                    targetIssueField = await UpdateIssueFieldAsync(
+                        targetIssueField.Id,
+                        field,
+                        cancellationToken).ConfigureAwait(false);
+                }
+
                 issueFields.Add(targetIssueField);
                 issueFieldsByName[field.Name] = targetIssueField;
                 _operationLog.PendingIssueFields.Remove(field.Name);
