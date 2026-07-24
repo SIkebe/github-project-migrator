@@ -27,7 +27,6 @@ public sealed class ProjectImporter
     private readonly List<string> _warnings = [];
     private ProjectImportLog? _operationLog;
     private HashSet<string> _snapshotIssueFieldNames = [];
-    private HashSet<string> _targetMultiSelectIssueFieldNames = [];
 
     public ProjectImporter(GitHubGraphQLClient client)
     {
@@ -285,13 +284,9 @@ public sealed class ProjectImporter
         }
 
         List<TargetIssueField> targetIssueFields = [];
-        _targetMultiSelectIssueFieldNames = new HashSet<string>(_snapshotIssueFieldNames, StringComparer.Ordinal);
         if (OwnerType == ProjectOwnerType.Organization && _snapshotIssueFieldNames.Count > 0)
         {
             targetIssueFields = await FetchIssueFieldListAsync(ownerLogin, cancellationToken).ConfigureAwait(false);
-            _targetMultiSelectIssueFieldNames.UnionWith(targetIssueFields
-                .Where(field => field.DataType == "MULTI_SELECT")
-                .Select(field => field.Name));
         }
 
         OnProgress?.Invoke("Reading existing project fields...");
@@ -1073,7 +1068,7 @@ public sealed class ProjectImporter
 
     private async Task<List<TargetField>> FetchFieldListAsync(string projectId, FieldMaps maps, CancellationToken cancellationToken)
     {
-        if (_targetMultiSelectIssueFieldNames.Count == 0)
+        if (_snapshotIssueFieldNames.Count == 0)
         {
             var data = await _client.QueryAsync(FieldsQuery, new { id = projectId }, cancellationToken).ConfigureAwait(false);
             return [.. data.GetProperty("node").GetProperty("fields").GetProperty("nodes").EnumerateArray().Select(maps.Register)];
@@ -1081,30 +1076,14 @@ public sealed class ProjectImporter
 
         var safeData = await _client.QueryAsync(FieldsWithIssueFieldsQuery, new { id = projectId }, cancellationToken).ConfigureAwait(false);
         var nodes = safeData.GetProperty("node").GetProperty("fields").GetProperty("nodes");
-        var candidates = nodes.EnumerateArray()
+        var candidateIds = nodes.EnumerateArray()
             .Where(node => node.TryGetProperty("__typename", out var typeName)
                 && typeName.GetString() == "ProjectV2Field"
                 && !node.TryGetProperty("dataType", out _))
-            .Select(node => (
-                Id: node.GetProperty("id").GetString() ?? string.Empty,
-                Name: node.GetProperty("name").GetString() ?? string.Empty))
+            .Select(node => node.GetProperty("id").GetString() ?? string.Empty)
             .ToArray();
         Dictionary<string, string> dataTypes = [];
-        var unambiguousIds = candidates
-            .Where(candidate => !_targetMultiSelectIssueFieldNames.Contains(candidate.Name))
-            .Select(candidate => candidate.Id)
-            .ToArray();
-        if (unambiguousIds.Length > 0)
-        {
-            AddFieldDataTypes(
-                dataTypes,
-                await _client.QueryAsync(
-                    FieldDataTypesQuery,
-                    new { ids = unambiguousIds },
-                    cancellationToken).ConfigureAwait(false));
-        }
-
-        foreach (var candidate in candidates.Where(candidate => _targetMultiSelectIssueFieldNames.Contains(candidate.Name)))
+        foreach (var candidateId in candidateIds)
         {
             try
             {
@@ -1112,7 +1091,7 @@ public sealed class ProjectImporter
                     dataTypes,
                     await _client.QueryWithoutInternalErrorRetryAsync(
                         FieldDataTypesQuery,
-                        new { ids = new[] { candidate.Id } },
+                        new { ids = new[] { candidateId } },
                         cancellationToken).ConfigureAwait(false));
             }
             catch (GitHubGraphQLException exception) when (
