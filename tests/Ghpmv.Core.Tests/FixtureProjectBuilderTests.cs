@@ -47,4 +47,23 @@ public class FixtureProjectBuilderTests
         var value = Assert.Single(issue.FieldValues, value => value.FieldName == field.Name);
         Assert.Equal(["Platform", "SDK"], value.MultiSelectOptionNames);
     }
+
+    [Theory]
+    [InlineData(false, false, false, true)]
+    [InlineData(true, true, false, true)]
+    [InlineData(true, false, true, true)]
+    [InlineData(true, false, false, false)]
+    public void Item_stage_runs_only_for_new_or_resumable_fixture(
+        bool projectAlreadyExists,
+        bool hasItemLog,
+        bool projectImportWasPending,
+        bool expected)
+    {
+        Assert.Equal(
+            expected,
+            FixtureProjectBuilder.ShouldImportItems(
+                projectAlreadyExists,
+                hasItemLog,
+                projectImportWasPending));
+    }
 }

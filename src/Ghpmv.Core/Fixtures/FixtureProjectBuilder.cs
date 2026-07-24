@@ -43,6 +43,14 @@ public sealed class FixtureProjectBuilder
         var existing = await FindProjectByTitleAsync(organization, title, cancellationToken).ConfigureAwait(false);
         var projectLog = await ProjectImportLog.LoadAsync(operationDirectory, cancellationToken).ConfigureAwait(false);
         var itemLog = await ImportLog.LoadAsync(operationDirectory, cancellationToken).ConfigureAwait(false);
+        var projectImportWasPending = projectLog.PendingProject is not null
+            || projectLog.PendingFields.Count > 0
+            || projectLog.PendingIssueFields.Count > 0
+            || projectLog.PendingIssueFieldLinks.Count > 0;
+        var shouldImportItems = ShouldImportItems(
+            existing is not null,
+            itemLog is not null,
+            projectImportWasPending);
 
         if (itemLog is not null
             && (existing is null || !string.Equals(existing.Id, itemLog.ProjectId, StringComparison.Ordinal)))
@@ -85,17 +93,13 @@ public sealed class FixtureProjectBuilder
             },
         };
         var project = await projectImporter.ImportAsync(snapshot, organization, cancellationToken).ConfigureAwait(false);
-        if (existing is not null)
-        {
-            await EnsureExistingSelectValuesAsync(snapshot, project, cancellationToken).ConfigureAwait(false);
-        }
 
         await EnsureMultiSelectIssueFieldValueAsync(
             repositoryFullName,
             project,
             cancellationToken).ConfigureAwait(false);
 
-        if (existing is null || itemLog is not null)
+        if (shouldImportItems)
         {
             var itemImporter = new ItemImporter(_graphQl)
             {
@@ -117,12 +121,19 @@ public sealed class FixtureProjectBuilder
         }
         else
         {
+            await EnsureExistingSelectValuesAsync(snapshot, project, cancellationToken).ConfigureAwait(false);
             OnProgress?.Invoke(string.Create(CultureInfo.InvariantCulture,
                 $"Fixture project already existed; synchronized fields without duplicating items: {project.Url}"));
         }
 
         return new FixtureProjectSetupResult(project.ProjectNumber, project.Url, Created: existing is null);
     }
+
+    internal static bool ShouldImportItems(
+        bool projectAlreadyExists,
+        bool hasItemLog,
+        bool projectImportWasPending)
+        => !projectAlreadyExists || hasItemLog || projectImportWasPending;
 
     private async Task<int> EnsureRepositoryAsync(string organization, string repositoryName, CancellationToken cancellationToken)
     {

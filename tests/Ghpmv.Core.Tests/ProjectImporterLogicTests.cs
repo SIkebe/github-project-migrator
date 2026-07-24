@@ -293,6 +293,63 @@ public class ProjectImporterLogicTests
     }
 
     [Fact]
+    public async Task Import_batches_unambiguous_field_data_type_lookups()
+    {
+        var directory = Directory.CreateTempSubdirectory("ghpmv-project-import-").FullName;
+        try
+        {
+            using var handler = new IssueFieldStubHandler(existing: true, ordinaryFields: true);
+            using var client = new GitHubGraphQLClient(
+                "dummy-token",
+                new Uri("https://example.test/graphql"),
+                handler,
+                delayAsync: static (_, _) => Task.CompletedTask);
+            var snapshot = MinimalSnapshot("Roadmap") with
+            {
+                Fields =
+                [
+                    new FieldSnapshot { Name = "Notes", DataType = "TEXT" },
+                    new FieldSnapshot { Name = "Estimate", DataType = "NUMBER" },
+                    new FieldSnapshot
+                    {
+                        Name = "Teams",
+                        DataType = "MULTI_SELECT",
+                        Options =
+                        [
+                            new SingleSelectOptionSnapshot { Id = "source-platform", Name = "Platform", Color = "PURPLE" },
+                            new SingleSelectOptionSnapshot { Id = "source-sdk", Name = "SDK", Color = "GREEN" },
+                        ],
+                        IssueField = new IssueFieldConfigurationSnapshot
+                        {
+                            Description = "Teams involved",
+                            Visibility = "ALL",
+                        },
+                    },
+                ],
+            };
+            var importer = new ProjectImporter(client) { OperationLogDirectory = directory };
+
+            var result = await importer.ImportIntoAsync(
+                snapshot,
+                "target",
+                7,
+                TestContext.Current.CancellationToken);
+
+            Assert.Equal("PVTF_notes", result.FieldIds["Notes"]);
+            Assert.Equal("PVTF_estimate", result.FieldIds["Estimate"]);
+            Assert.Single(
+                handler.RequestBodies,
+                body => body.Contains("nodes(ids:", StringComparison.Ordinal)
+                    && body.Contains("PVTF_notes", StringComparison.Ordinal)
+                    && body.Contains("PVTF_estimate", StringComparison.Ordinal));
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task Import_retries_transient_field_lookup_before_linking_issue_field()
     {
         var directory = Directory.CreateTempSubdirectory("ghpmv-project-import-").FullName;
@@ -501,7 +558,8 @@ public class ProjectImporterLogicTests
         bool existingSameNamedLink = false,
         bool transientNormalDataTypeFailure = false,
         bool missingNormalField = false,
-        bool transientFieldByNameFailure = false) : HttpMessageHandler
+        bool transientFieldByNameFailure = false,
+        bool ordinaryFields = false) : HttpMessageHandler
     {
         public List<string> RequestBodies { get; } = [];
 
@@ -522,7 +580,9 @@ public class ProjectImporterLogicTests
                 _ when body.Contains("updateProjectV2(", StringComparison.Ordinal) =>
                     """{"data":{"updateProjectV2":{"projectV2":{"id":"PVT_target"}}}}""",
                 _ when body.Contains("fields(first:", StringComparison.Ordinal) =>
-                    existingSameNamedLink
+                    ordinaryFields
+                        ? """{"data":{"node":{"fields":{"nodes":[{"__typename":"ProjectV2Field","id":"PVTF_notes","name":"Notes"},{"__typename":"ProjectV2Field","id":"PVTF_estimate","name":"Estimate"},{"__typename":"ProjectV2Field","id":"PVTF_linked_teams","name":"Teams"}]}}}}"""
+                        : existingSameNamedLink
                         ? """{"data":{"node":{"fields":{"nodes":[{"__typename":"ProjectV2Field","id":"PVTF_teams","name":"Teams"},{"__typename":"ProjectV2Field","id":"PVTF_linked_teams","name":"Teams"}]}}}}"""
                         : existing
                         ? """{"data":{"node":null},"errors":[{"message":"Something went wrong while executing your query on the preview API."}]}"""
@@ -536,7 +596,11 @@ public class ProjectImporterLogicTests
                         ? FieldByNameResponse()
                         : """{"data":{"node":null},"errors":[{"message":"Something went wrong while executing your query on the preview API."}]}""",
                 _ when body.Contains("nodes(ids:", StringComparison.Ordinal) =>
-                    body.Contains("PVTF_title", StringComparison.Ordinal)
+                    ordinaryFields
+                        && body.Contains("PVTF_notes", StringComparison.Ordinal)
+                        && body.Contains("PVTF_estimate", StringComparison.Ordinal)
+                        ? """{"data":{"nodes":[{"id":"PVTF_notes","dataType":"TEXT"},{"id":"PVTF_estimate","dataType":"NUMBER"}]}}"""
+                        : body.Contains("PVTF_title", StringComparison.Ordinal)
                         ? """{"data":{"nodes":[{"id":"PVTF_title","dataType":"TITLE"}]}}"""
                         : normalSameName && body.Contains("PVTF_teams", StringComparison.Ordinal)
                             ? NormalDataTypeResponse()

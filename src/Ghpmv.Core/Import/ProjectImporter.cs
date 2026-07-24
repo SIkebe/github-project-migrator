@@ -31,6 +31,7 @@ public sealed class ProjectImporter
     private HashSet<string> _snapshotMultiSelectIssueFieldNames = [];
     private HashSet<string> _knownLinkedIssueFieldNames = [];
     private HashSet<string> _targetIssueFieldNames = [];
+    private HashSet<string> _targetMultiSelectIssueFieldNames = [];
 
     public ProjectImporter(GitHubGraphQLClient client)
     {
@@ -309,6 +310,10 @@ public sealed class ProjectImporter
         }
 
         _targetIssueFieldNames = targetIssueFields
+            .Select(field => field.Name)
+            .ToHashSet(StringComparer.Ordinal);
+        _targetMultiSelectIssueFieldNames = targetIssueFields
+            .Where(field => string.Equals(field.DataType, "MULTI_SELECT", StringComparison.Ordinal))
             .Select(field => field.Name)
             .ToHashSet(StringComparer.Ordinal);
 
@@ -1168,7 +1173,24 @@ public sealed class ProjectImporter
                 && !node.TryGetProperty("dataType", out _))
             .ToArray();
         Dictionary<string, string> dataTypes = [];
-        foreach (var candidate in candidates)
+        var unambiguousIds = candidates
+            .Where(candidate => !_targetMultiSelectIssueFieldNames.Contains(
+                candidate.GetProperty("name").GetString() ?? string.Empty))
+            .Select(candidate => candidate.GetProperty("id").GetString() ?? string.Empty)
+            .ToArray();
+        if (unambiguousIds.Length > 0)
+        {
+            AddFieldDataTypes(
+                dataTypes,
+                await _client.QueryAsync(
+                    FieldDataTypesQuery,
+                    new { ids = unambiguousIds },
+                    cancellationToken).ConfigureAwait(false));
+        }
+
+        foreach (var candidate in candidates.Where(candidate =>
+                     _targetMultiSelectIssueFieldNames.Contains(
+                         candidate.GetProperty("name").GetString() ?? string.Empty)))
         {
             var candidateId = candidate.GetProperty("id").GetString() ?? string.Empty;
             var candidateName = candidate.GetProperty("name").GetString() ?? string.Empty;
@@ -1182,7 +1204,7 @@ public sealed class ProjectImporter
                         cancellationToken).ConfigureAwait(false));
             }
             catch (GitHubGraphQLException exception) when (
-                _targetIssueFieldNames.Contains(candidateName)
+                _targetMultiSelectIssueFieldNames.Contains(candidateName)
                 && IsPreviewFieldInternalError(exception))
             {
                 // GitHub's preview schema cannot resolve dataType for a linked multi-select Issue Field.
